@@ -9,10 +9,13 @@ import { assertManagedAiProjectAuth } from "../services/ai-connection-runtime.js
 
 const execute = promisify(execFile);
 const conflictingConfig = 'model_provider = "host-only"\n';
+// The remote transport runs POSIX shell. Its real-shell tests need a POSIX
+// host; local policy tests also run on Windows.
+const targets = process.platform === "win32" ? ["local"] as const : ["local", "remote"] as const;
 
 // Run the actual remote shell check on a disposable filesystem. Only the
 // transport is replaced, so local and remote policy must agree.
-describe.each(["local", "remote"] as const)("managed Codex project authentication (%s)", (mode) => {
+describe.each(targets)("managed Codex project authentication (%s)", (mode) => {
   let root: string;
 
   beforeEach(async () => {
@@ -102,7 +105,7 @@ describe.each(["local", "remote"] as const)("managed Codex project authenticatio
     const physicalCwd = path.join(repository, "nested");
     await mkdir(physicalCwd);
     const cwd = path.join(root, "workspace-alias");
-    await symlink(physicalCwd, cwd, "dir");
+    await symlink(physicalCwd, cwd, process.platform === "win32" ? "junction" : "dir");
     await expect(check(cwd)).rejects.toMatchObject({
       details: { code: "ai_connection_incompatible" },
     });
