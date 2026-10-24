@@ -68,6 +68,35 @@ for rollback. Restore that configuration and restart the service if acceptance
 fails. A later upgrade with schema changes may require a compatible database
 restore; source rollback alone is not a general migration rollback.
 
+## Remote native Codex over SSH
+
+Remote Codex agents use the same `paperclip_runner` Codex app-server harness as
+local native Codex. The SSH environment owns the host and workspace selection.
+The Runner uses a separate authenticated WSS connection back to the controller;
+SSH reachability alone does not prove that this callback is reachable.
+
+For a private loopback installation, terminate TLS on a loopback-only bridge and
+forward only `/api/runner/v1/connect/:runnerId` WebSocket upgrades to the API.
+Keep ordinary API routes unavailable through this bridge. Use a dedicated CA and
+leaf certificate with the loopback IP in its SAN. Store private keys outside the
+checkout with mode `0600`. Set `PAPERCLIP_RUNNER_PUBLIC_URL` to the WSS endpoint
+and `PAPERCLIP_RUNNER_CA_BUNDLE_PATH` to that CA certificate in the controller's
+service environment. Each host reaches it through a loopback-bound SSH reverse
+tunnel. Keep host-key validation, authentication, and reconnect supervision on.
+
+Package the Runner binary for every target OS and architecture in
+`bin/<platform>-<arch>/paperclip-runnerd` under the Runner distribution and the
+server's vendored copy. Build Linux ARM64 on the intended Linux ARM64 host from
+the same Runner sources and lockfile, compare artifact hashes after transfer,
+and check `--build-metadata`. Do not set a global remote-binary override when
+macOS ARM64 and Linux ARM64 environments coexist.
+
+Verify a real native setup probe on each host, then a small task that checks the
+host and workspace with tools. Inspect its persisted result and terminal run
+state. A working legacy Codex CLI task does not qualify native app-server.
+Keep the preceding immutable release, service configuration, and database backup
+for rollback. Do not delete prior tasks or runs to hide failed acceptance.
+
 ## Acceptance before wider rollout
 
 1. Run `pnpm -r typecheck`, `pnpm test:run`, and `pnpm build`.

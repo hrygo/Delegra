@@ -8,7 +8,9 @@
     "tag": "deploy/v2026.1024.0-canary.7-r1",
     "commit": "a4976cdd788e5032c1470766181a89e500856b74",
     "base": "canary/v2026.1024.0-canary.7",
-    "patches": ["managed-codex-project-auth"]
+    "patches": [
+      "managed-codex-project-auth"
+    ]
   },
   "base": {
     "kind": "canary",
@@ -55,6 +57,25 @@
       "verifiedAt": "2026-10-24",
       "retireWhen": "The stable base contains all five commits or patch-equivalent changes.",
       "notes": "Scopes managed Codex project-auth checks to the task project and uses the Harness project-auth policy for routed accounts. The deploy commits were produced on canary.7; the upstream PR was rebased onto canary.8 on 2026-10-24. Both stacks have the same patch IDs."
+    },
+    {
+      "id": "native-ssh-macos-process-identity",
+      "kind": "upstream-pr",
+      "status": "active",
+      "upstreamPr": "paperclipai/paperclip#17459",
+      "upstreamBase": "410e5c6eedba98588a87e4104153898fb0437532",
+      "upstreamHead": "a2da41c76bbb0096baba3f6affe9b88d7257489e",
+      "upstreamCommits": [
+        "a2da41c76bbb0096baba3f6affe9b88d7257489e"
+      ],
+      "commits": [
+        "9ac8aa552f50f27cbc6091bd5a8e310cba4ac0ee"
+      ],
+      "owner": "hrygo",
+      "reviewBy": "2026-11-30",
+      "verifiedAt": "2026-10-25",
+      "retireWhen": "The accepted stable base contains the macOS remote process identity fix and signal ownership checks or patch-equivalent changes.",
+      "notes": "Adds Darwin boot/start process evidence and portable timestamps. Stop and failed-launch cleanup verify live ownership, including before KILL escalation. The upstream and deployment commits have matching patch IDs."
     }
   ]
 }
