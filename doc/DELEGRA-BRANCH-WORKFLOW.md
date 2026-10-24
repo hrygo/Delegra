@@ -291,6 +291,10 @@ Do not deploy a branch tip. Do not reuse or move a release tag. A source
 rollback is not a database rollback; follow the database guidance before any
 upgrade that changes schema.
 
+Record the active release in `currentDeployment` in `.delegra/patches.json`.
+The policy check verifies that the tag still points to the recorded commit,
+that the commit is contained in `deploy`, and that every listed patch exists.
+
 ## 7. Branch protection and repository settings
 
 Keep `master` as the GitHub default branch.
