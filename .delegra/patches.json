@@ -5,12 +5,13 @@
     "deploy": "deploy"
   },
   "currentDeployment": {
-    "tag": "deploy/v2026.1024.0-canary.7-r2",
-    "commit": "7366c137aa8ac4a85f8d49a498fa5ca0dd8a9a0f",
+    "tag": "deploy/v2026.1024.0-canary.7-r3",
+    "commit": "98306218220bdde987ec89743a6576f70b62b9b4",
     "base": "canary/v2026.1024.0-canary.7",
     "patches": [
       "managed-codex-project-auth",
-      "native-ssh-macos-process-identity"
+      "native-ssh-macos-process-identity",
+      "managed-claude-host-auth-boundary"
     ]
   },
   "base": {
