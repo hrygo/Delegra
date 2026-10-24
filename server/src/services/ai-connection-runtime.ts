@@ -3,7 +3,7 @@ import type { PluginTaskCredentialWritebackBinding } from "./plugin-task-credent
 import { OPENROUTER_ATTRIBUTION_HEADERS, openRouterClaudeHeaders } from "@paperclipai/shared/openrouter-attribution";
 import { createHash } from "node:crypto";
 import { HttpError, unprocessable } from "../errors.js";
-import { mkdtemp, mkdir, writeFile, readFile, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, readFile, realpath, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { and, eq } from "drizzle-orm";
@@ -80,6 +80,22 @@ export function stripAiAuthBindings(env: unknown): Record<string, unknown> {
       delete result[key];
   return result;
 }
+/** Managed Codex homes use the default .git project-root marker. */
+async function codexProjectAuthRoot(cwd: string): Promise<string> {
+  let directory = cwd;
+  for (;;) {
+    try {
+      await stat(path.join(directory, ".git"));
+      return directory;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    const parent = path.dirname(directory);
+    if (parent === directory) return cwd;
+    directory = parent;
+  }
+}
+
 export async function assertManagedAiProjectAuth(
   config: Record<string, unknown>,
   provider: AiConnectionBinding["provider"],
@@ -128,7 +144,18 @@ export async function assertManagedAiProjectAuth(
       [
         "-c",
         `
-directory=$1; pattern=$2; shift 2
+directory=$1; pattern=$2; provider=$3; shift 3
+if test "$provider" = openai; then
+  directory=$(CDPATH= cd "$directory" && pwd -P) || exit 43
+  root=$directory
+  candidate=$directory
+  while :; do
+    if test -e "$candidate/.git"; then root=$candidate; break; fi
+    parent=$(dirname "$candidate")
+    if test "$parent" = "$candidate"; then break; fi
+    candidate=$parent
+  done
+fi
 while :; do
   for relative in "$@"; do
     file="$directory/$relative"
@@ -139,6 +166,7 @@ while :; do
       if test "$result" -ne 1; then exit 43; fi
     fi
   done
+  if test "$provider" = openai && test "$directory" = "$root"; then break; fi
   parent=$(dirname "$directory")
   if test "$parent" = "$directory"; then break; fi
   directory=$parent
@@ -146,6 +174,7 @@ done`,
         "ai-auth-check",
         target.remoteCwd,
         pattern,
+        provider,
         ...files,
       ],
       {
@@ -163,8 +192,18 @@ done`,
       );
     return;
   }
+  // Credential preparation can precede workspace realization. The server's
+  // cwd is not the task's project; the run path checks the resolved cwd again.
+  if (provider === "openai" && (typeof config.cwd !== "string" || !config.cwd.trim())) return;
   let directory =
     typeof config.cwd === "string" ? path.resolve(config.cwd) : process.cwd();
+  // A private CODEX_HOME replaces the host's user configuration. Check only
+  // physical project layers, including Git worktrees (.git can be a file).
+  let projectRoot: string | undefined;
+  if (provider === "openai") {
+    directory = await realpath(directory);
+    projectRoot = await codexProjectAuthRoot(directory);
+  }
   for (;;) {
     for (const relative of files) {
       try {
@@ -183,6 +222,7 @@ done`,
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       }
     }
+    if (directory === projectRoot) break;
     const parent = path.dirname(directory);
     if (parent === directory) break;
     directory = parent;
