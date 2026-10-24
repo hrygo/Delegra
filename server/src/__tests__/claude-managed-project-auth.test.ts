@@ -8,7 +8,9 @@ import { assertManagedAiProjectAuth } from "../services/ai-connection-runtime.js
 
 describe.each(["local", "remote"] as const)("managed Claude project auth (%s)", (mode) => {
   let home: string;
+  let hostHome: string;
   let cwd: string;
+  let independentProject: string | undefined;
 
   async function settings(directory: string, file = "settings.json") {
     await mkdir(path.join(directory, ".claude"), { recursive: true });
@@ -23,15 +25,23 @@ describe.each(["local", "remote"] as const)("managed Claude project auth (%s)", 
       : undefined);
   }
 
+  async function useProjectWithoutHostHome() {
+    independentProject = await realpath(await mkdtemp(path.join(os.tmpdir(), "claude-auth-project-")));
+    cwd = independentProject;
+    hostHome = path.join(home, "missing-home");
+  }
+
   beforeEach(async () => {
     home = await realpath(await mkdtemp(path.join(os.tmpdir(), "claude-auth-home-")));
+    hostHome = home;
+    independentProject = undefined;
     cwd = path.join(home, "projects", "task");
     await mkdir(cwd, { recursive: true });
     await settings(home);
-    vi.spyOn(os, "homedir").mockReturnValue(home);
+    vi.spyOn(os, "homedir").mockImplementation(() => hostHome);
     // Exercise the generated remote shell against real files, with no SSH or provider calls.
     vi.spyOn(executionTarget, "runAdapterExecutionTargetProcess").mockImplementation(async (_id, _target, command, args) => {
-      const result = spawnSync(command, args, { cwd, env: { PATH: process.env.PATH, HOME: home }, encoding: "utf8" });
+      const result = spawnSync(command, args, { cwd, env: { PATH: process.env.PATH, HOME: hostHome }, encoding: "utf8" });
       if (result.error) throw result.error;
       return { exitCode: result.status, stdout: result.stdout, stderr: result.stderr, signal: result.signal, timedOut: false };
     });
@@ -40,10 +50,22 @@ describe.each(["local", "remote"] as const)("managed Claude project auth (%s)", 
   afterEach(async () => {
     vi.restoreAllMocks();
     await rm(home, { recursive: true, force: true });
+    if (independentProject) await rm(independentProject, { recursive: true, force: true });
   });
 
   it("does not treat the isolated host user's settings as project authentication", async () => {
     await expect(check()).resolves.toBeUndefined();
+  });
+
+  it("allows a valid project when the host home does not exist", async () => {
+    await useProjectWithoutHostHome();
+    await expect(check()).resolves.toBeUndefined();
+  });
+
+  it("still rejects project credentials when the host home does not exist", async () => {
+    await useProjectWithoutHostHome();
+    await settings(cwd);
+    await expect(check()).rejects.toMatchObject({ status: 422, details: { code: "ai_connection_incompatible" } });
   });
 
   it.each(["settings.json", "settings.local.json"])("still rejects project %s credentials", async (file) => {

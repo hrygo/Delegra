@@ -158,7 +158,10 @@ if test "$provider" = openai || test "$provider" = anthropic; then
   directory=$(CDPATH= cd "$directory" && pwd -P) || exit 43
 fi
 if test "$provider" = anthropic; then
-  user_home=$(CDPATH= cd "$HOME" && pwd -P) || exit 43
+  user_home=
+  if test -d "$HOME"; then
+    user_home=$(CDPATH= cd "$HOME" && pwd -P) || exit 43
+  fi
   initial_directory=$directory
 fi
 if test "$provider" = openai; then
@@ -223,7 +226,10 @@ done`,
     });
   }
   const initialDirectory = directory;
-  const userHome = provider === "anthropic" ? await realpath(os.homedir()) : undefined;
+  const userHome = provider === "anthropic" ? await realpath(os.homedir()).catch((error: NodeJS.ErrnoException) => {
+    if (error.code !== "ENOENT" && error.code !== "ENOTDIR") throw error;
+    return undefined;
+  }) : undefined;
   for (;;) {
     // The managed CLAUDE_CONFIG_DIR replaces user settings. A host home that is
     // an ancestor is not a project; an explicitly selected home still is.
