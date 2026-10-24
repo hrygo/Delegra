@@ -259,3 +259,20 @@ A change is done when all are true:
 ## Design system
 
 `DESIGN.md` at the repo root is the source of truth for UI design decisions. The token-only rule applies to all `ui/` changes: every color, spacing, radius, type, shadow, and motion value in `ui/src/components/**` and `ui/src/pages/**` comes from the token layer in `ui/src/index.css` — no hex, raw px, arbitrary Tailwind bracket values, or raw `font-size`/`fontSize` declarations in components, outside the documented allowlist in `ui/src/index.css`. Run `pnpm check:token-gates` (`scripts/check-token-gates.mjs`) before committing UI changes — it fails on any violation not covered by that allowlist.
+
+## Delegra fork workflow (fork-only)
+
+This section applies only to the `hrygo/Delegra` deployment fork. Read
+[`doc/DELEGRA-BRANCH-WORKFLOW.md`](doc/DELEGRA-BRANCH-WORKFLOW.md) before
+creating a branch, opening a PR, upgrading a stable tag, or creating a release.
+
+- `master` is an exact mirror of `upstream/master`. Never commit to it and
+  never deploy it.
+- `deploy` is the only deployment branch. It accepts upstream stable tags and
+  registered Delegra patches; never merge `upstream/master` into it.
+- Create upstream contribution branches from `master`. Create fork-only,
+  backport, upgrade, and hotfix branches from `deploy`.
+- Register every deploy-only code commit in `.delegra/patches.json`. Run
+  `node scripts/check-delegra-branch-policy.mjs` before an upgrade or release.
+- Merge to `deploy` only through a PR with the `Delegra branch policy` check.
+  Deploy only an immutable `deploy/*` tag.
