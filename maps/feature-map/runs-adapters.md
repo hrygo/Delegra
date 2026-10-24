@@ -93,6 +93,9 @@ For environment tests, also check a new working directory and an omitted
 directory. The probe must create the new directory on its selected target and
 reject authentication overrides in its actual fallback directory before
 starting the adapter. A remote-only path must not be checked on the server.
+Repeat these checks with a routed Codex account in both the legacy Codex
+adapter and native Runner. The account's provider name must not change the
+harness-specific project-file policy.
 
 For Legacy Codex, assign a service secret such as `SLACK_BOT_TOKEN` through agent
 configuration and run a task that checks its presence without printing its value.
