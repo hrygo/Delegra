@@ -89,6 +89,10 @@ rejected. Repeat with a nested directory, a Git worktree, and a non-Git
 workspace. File checks must use the resolved task directory, not the server's
 working directory. Local and shell-backed remote paths share this contract;
 task-only plugin environments retain their provider-owned check.
+For environment tests, also check a new working directory and an omitted
+directory. The probe must create the new directory on its selected target and
+reject authentication overrides in its actual fallback directory before
+starting the adapter. A remote-only path must not be checked on the server.
 
 For Legacy Codex, assign a service secret such as `SLACK_BOT_TOKEN` through agent
 configuration and run a task that checks its presence without printing its value.
