@@ -4,6 +4,12 @@
     "mirror": "master",
     "deploy": "deploy"
   },
+  "currentDeployment": {
+    "tag": "deploy/v2026.1024.0-canary.7-r1",
+    "commit": "a4976cdd788e5032c1470766181a89e500856b74",
+    "base": "canary/v2026.1024.0-canary.7",
+    "patches": ["managed-codex-project-auth"]
+  },
   "base": {
     "kind": "canary",
     "ref": "canary/v2026.1024.0-canary.7",

@@ -248,6 +248,30 @@ for (const patch of patches) {
   }
 }
 
+if (registry.currentDeployment) {
+  const deployment = registry.currentDeployment;
+  if (!deployment.tag || !deployment.commit || !Array.isArray(deployment.patches)) {
+    errors.push("currentDeployment must define tag, commit, and patches.");
+  } else {
+    const taggedCommit = resolveCommit(`refs/tags/${deployment.tag}`);
+    const deploymentCommit = resolveCommit(deployment.commit);
+    if (!taggedCommit) {
+      errors.push(`Current deployment tag does not resolve: ${deployment.tag}.`);
+    } else if (!deploymentCommit || taggedCommit !== deploymentCommit) {
+      errors.push(
+        `Current deployment tag ${deployment.tag} does not point to ${short(deployment.commit)}.`,
+      );
+    } else if (!isAncestor(deploymentCommit, head)) {
+      errors.push(`Current deployment ${short(deploymentCommit)} is not contained in deploy.`);
+    }
+    for (const patchIdValue of deployment.patches) {
+      if (!patchIds.has(patchIdValue)) {
+        errors.push(`Current deployment references an unknown patch: ${patchIdValue}.`);
+      }
+    }
+  }
+}
+
 if (base?.commit) {
   const baseCommit = resolveCommit(base.commit);
   if (baseCommit) {
