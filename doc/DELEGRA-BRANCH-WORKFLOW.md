@@ -305,13 +305,18 @@ Keep `master` as the GitHub default branch.
 | Reviews | Not applicable | At least one once the team has two maintainers |
 | Tag protection | None | Protect `deploy/*` from update and deletion |
 
-Use GitHub Rulesets for both branches. `master` needs a bypass for the mirror
-update actor, but no PR requirement; `deploy` should have no routine bypass.
-Admins may bypass `deploy` only for an incident, and the bypass must be recorded
-in the incident ticket.
+The current repository uses classic branch protection for `master` and a
+repository ruleset for `deploy`. `master` allows the owner to fast-forward the
+mirror but blocks force pushes and deletions. The `deploy` ruleset requires a
+Pull Request, the `Delegra branch policy` check, conversation resolution, and a
+merge commit; force pushes and deletions are blocked, and there are no bypass
+actors.
 
 Protect tags matching `deploy/*` separately. A release tag is immutable: never
 move it, delete it, or reuse it for a different commit.
+
+For an incident, temporarily disable the relevant rule and record the decision
+in the incident ticket. Restore the rule before the incident is closed.
 
 If the instance has only one maintainer, require the policy check and
 conversation resolution, and use the PR as the audit record. Do not disable
@@ -338,6 +343,13 @@ git config branch.deploy.rebase false
 `pull.ff only` makes an accidental `git pull` fail instead of creating an
 unreviewed merge. Stable upgrades must use the explicit `git merge --no-ff
 <stable-tag>` step in section 4.6.
+
+Verify the remote controls with read-only API calls:
+
+```sh
+gh api repos/hrygo/Delegra/branches/master/protection
+gh api repos/hrygo/Delegra/rulesets
+```
 
 ## 8. Cadence and ownership
 
