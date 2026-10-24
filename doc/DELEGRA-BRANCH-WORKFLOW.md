@@ -297,3 +297,6 @@ Therefore the initial `deploy` branch keeps this commit as a time-bounded
 transitional baseline. It must move to the first suitable stable tag before
 the waiver expires. The migration is complete when `.delegra/patches.json`
 declares `base.kind: "stable"` and the policy check passes without a warning.
+
+The legacy `fix/codex-managed-project-auth` branch is frozen and superseded by
+`deploy`. Do not add commits to it.
