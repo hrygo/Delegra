@@ -172,8 +172,9 @@ Before opening the upgrade PR:
 1. Update `base.kind`, `base.ref`, `base.commit`, and remove an obsolete
    waiver in `.delegra/patches.json`.
 2. For each active patch, check whether the stable base already contains it.
-   Mark absorbed patches `absorbed` and remove them from the deploy history at
-   the next safe rebuild; do not keep duplicate implementations.
+   Mark absorbed patches `absorbed`; do not keep maintaining a duplicate
+   implementation. Do not rewrite `deploy` merely to erase absorbed historical
+   commits.
 3. Run `node scripts/check-delegra-branch-policy.mjs`.
 4. Run the repository checks required by `AGENTS.md`:
    `pnpm -r typecheck`, `pnpm test:run`, and `pnpm build`.

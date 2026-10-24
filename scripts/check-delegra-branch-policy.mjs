@@ -69,7 +69,9 @@ if (!head) {
 
 const mirrorBranch = registry.branches?.mirror ?? "master";
 const deployBranch = registry.branches?.deploy ?? "deploy";
-const localMirror = resolveCommit(`refs/heads/${mirrorBranch}`);
+const localMirror =
+  resolveCommit(`refs/heads/${mirrorBranch}`) ??
+  resolveCommit(`refs/remotes/origin/${mirrorBranch}`);
 const upstreamMirror =
   resolveCommit("refs/remotes/upstream/master") ??
   resolveCommit("refs/remotes/origin/master");
@@ -78,7 +80,7 @@ if (!args.has("--skip-mirror-check")) {
   if (!upstreamMirror) {
     warnings.push("No upstream/master or origin/master ref is available; mirror identity was not checked.");
   } else if (!localMirror) {
-    warnings.push(`Local ${mirrorBranch} is not available; mirror identity was not checked.`);
+    warnings.push(`Neither local nor origin ${mirrorBranch} is available; mirror identity was not checked.`);
   } else if (localMirror !== upstreamMirror) {
     errors.push(
       `${mirrorBranch} must exactly match upstream/master: local ${short(localMirror)}, upstream ${short(upstreamMirror)}.`,
