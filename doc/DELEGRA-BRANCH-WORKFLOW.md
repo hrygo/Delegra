@@ -109,9 +109,37 @@ After the PR merges:
 1. Delete the contribution branch.
 2. If the change is already in the chosen stable base, do nothing.
 3. If the installation needs it before the next stable, use the backport flow
-   in section 4.3.
+   in section 4.4.
 
-### 4.3 Backport an upstream fix before stable
+### 4.3 Keep an open upstream PR current
+
+When `upstream/master` moves, rebase the PR branch and force-push with a lease:
+
+```sh
+git fetch upstream --prune --tags
+git switch fix/<topic>
+git rebase upstream/master
+node_modules/.bin/vitest run <changed-test-files>
+git push --force-with-lease origin HEAD:fix/<topic>
+```
+
+Force-push is allowed only on a short-lived contribution branch. It is never
+allowed on `deploy`.
+
+After the PR head changes, update the matching entry in
+`.delegra/patches.json`:
+
+- set `upstreamBase` to the new upstream base;
+- set `upstreamHead` to the new PR head;
+- list the rebased PR commits in `upstreamCommits`;
+- keep `commits` pointing at the deploy-side commits.
+
+The policy check compares each deploy commit with its upstream counterpart by
+patch ID. If the patch content is unchanged, no duplicate cherry-pick is
+needed. If a patch ID differs, the deploy-side patch is stale and must be
+updated.
+
+### 4.4 Backport an upstream fix before stable
 
 ```sh
 git switch deploy
@@ -131,7 +159,7 @@ Run the policy check and the narrow tests for the changed area, then open a PR
 to `deploy`. Merge it as a merge commit; do not squash, because the registry
 tracks the original commit identities.
 
-### 4.4 Add a fork-only change
+### 4.5 Add a fork-only change
 
 ```sh
 git switch deploy
@@ -149,7 +177,7 @@ Fork-only changes should stay small and isolated. If a change starts to affect
 shared upstream behavior, split it into an upstreamable part and a thin
 Delegra-specific adapter.
 
-### 4.5 Upgrade to a new upstream stable release
+### 4.6 Upgrade to a new upstream stable release
 
 This is the normal production path.
 
@@ -186,7 +214,7 @@ Open a PR from `upgrade/<stable-tag>` to `deploy`. After it passes, merge it
 with a merge commit. The merge commit is the auditable "we accepted this
 stable release" boundary.
 
-### 4.6 Hotfix a deployed release
+### 4.7 Hotfix a deployed release
 
 Create the hotfix from the exact deployed tag, not from an arbitrary local
 branch:
@@ -223,6 +251,12 @@ Patch status values:
 
 Every active patch needs an owner and a `reviewBy` date. Review the inventory
 at least monthly and before every stable upgrade.
+
+For an upstream PR, `commits` records the deploy-side patch stack and
+`upstreamCommits` records the current PR stack. The policy check requires
+the two stacks to have the same length and matching patch IDs. A rebase that
+only changes the upstream base is therefore visible and safe; a rebase that
+changes behavior fails the check until deploy is updated.
 
 ## 6. Release and deployment
 
@@ -269,10 +303,41 @@ Keep `master` as the GitHub default branch.
 | Merge method | Fast-forward mirror update | Merge commit only |
 | Required check | None or mirror provenance | `Delegra branch policy` |
 | Reviews | Not applicable | At least one once the team has two maintainers |
+| Tag protection | None | Protect `deploy/*` from update and deletion |
+
+Use GitHub Rulesets for both branches. `master` needs a bypass for the mirror
+update actor, but no PR requirement; `deploy` should have no routine bypass.
+Admins may bypass `deploy` only for an incident, and the bypass must be recorded
+in the incident ticket.
+
+Protect tags matching `deploy/*` separately. A release tag is immutable: never
+move it, delete it, or reuse it for a different commit.
 
 If the instance has only one maintainer, require the policy check and
 conversation resolution, and use the PR as the audit record. Do not disable
-the policy check to make an upgrade pass.
+the policy check to make an upgrade pass. Code owner review is configured in
+`.github/CODEOWNERS` for `.delegra/`, `doc/DELEGRA-*`, and the policy workflow;
+enable "Require review from Code Owners" on `deploy`.
+
+## 7.1 Local Git configuration
+
+Apply these settings once per clone:
+
+```sh
+git config fetch.prune true
+git config remote.origin.prune true
+git config remote.upstream.prune true
+git config pull.ff only
+git config push.default simple
+git config remote.pushDefault origin
+git config branch.master.pushRemote origin
+git config branch.master.mergeOptions --ff-only
+git config branch.deploy.rebase false
+```
+
+`pull.ff only` makes an accidental `git pull` fail instead of creating an
+unreviewed merge. Stable upgrades must use the explicit `git merge --no-ff
+<stable-tag>` step in section 4.6.
 
 ## 8. Cadence and ownership
 

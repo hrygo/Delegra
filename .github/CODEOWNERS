@@ -1,5 +1,11 @@
 # Replace @cryppadotta if a different maintainer or team should own release infrastructure.
 
+# Delegra fork-only branch, release, and patch-policy files
+/.delegra/ @hrygo
+/doc/DELEGRA-* @hrygo
+/scripts/check-delegra-branch-policy.mjs @hrygo
+/.github/workflows/delegra-branch-policy.yml @hrygo
+
 .github/** @cryppadotta @devinfoley @nickyleach @forgottendev
 scripts/ci-profile/** @cryppadotta @devinfoley @nickyleach @forgottendev
 scripts/release*.sh @cryppadotta @devinfoley @nickyleach @forgottendev

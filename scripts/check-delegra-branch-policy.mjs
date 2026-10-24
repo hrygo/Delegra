@@ -25,6 +25,21 @@ function git(gitArgs, { allowFailure = false } = {}) {
   }
 }
 
+function gitWithInput(gitArgs, input, { allowFailure = false } = {}) {
+  try {
+    return execFileSync("git", gitArgs, {
+      cwd: repoRoot,
+      encoding: "utf8",
+      input,
+      stdio: ["pipe", "pipe", "pipe"],
+    }).trim();
+  } catch (error) {
+    if (allowFailure) return null;
+    const detail = error.stderr?.toString().trim() || error.message;
+    throw new Error(`git ${gitArgs.join(" ")} failed: ${detail}`);
+  }
+}
+
 function resolveCommit(ref) {
   return git(["rev-parse", "--verify", `${ref}^{commit}`], { allowFailure: true });
 }
@@ -45,6 +60,12 @@ function isAncestor(ancestor, descendant) {
 function changedPaths(commit) {
   const output = git(["diff-tree", "--no-commit-id", "--name-only", "-r", commit]);
   return output ? output.split("\n").filter(Boolean) : [];
+}
+
+function patchId(commit) {
+  const diff = git(["show", "--format=", commit]);
+  const output = gitWithInput(["patch-id", "--stable"], diff);
+  return output.split(/\s+/)[0] || null;
 }
 
 function matchesInternalPath(file, prefixes) {
@@ -152,6 +173,17 @@ for (const patch of patches) {
     errors.push(`${patch.id}: upstream-pr patches must name upstreamPr.`);
   }
 
+  if (patch.upstreamHead || patch.upstreamBase || patch.upstreamCommits) {
+    if (!patch.upstreamHead || !patch.upstreamBase || !Array.isArray(patch.upstreamCommits)) {
+      errors.push(
+        `${patch.id}: upstreamHead, upstreamBase, and upstreamCommits must be provided together.`,
+      );
+    }
+  }
+  if (patch.kind === "upstream-pr" && patch.status === "active" && !patch.upstreamHead) {
+    errors.push(`${patch.id}: active upstream-pr patches must record the current upstreamHead.`);
+  }
+
   const resolvedCommits = [];
   for (const commit of patch.commits) {
     const resolved = resolveCommit(commit);
@@ -163,6 +195,42 @@ for (const patch of patches) {
     resolvedCommits.push(resolved);
     if (!isAncestor(resolved, head)) {
       errors.push(`${patch.id}: ${short(resolved)} is not contained in HEAD ${short(head)}.`);
+    }
+  }
+
+  if (patch.upstreamHead && patch.upstreamBase && Array.isArray(patch.upstreamCommits)) {
+    const resolvedUpstreamHead = resolveCommit(patch.upstreamHead);
+    const resolvedUpstreamBase = resolveCommit(patch.upstreamBase);
+    if (!resolvedUpstreamHead || !resolvedUpstreamBase) {
+      warnings.push(
+        `${patch.id}: upstream PR commits are not fetched; patch-equivalence was not checked.`,
+      );
+    } else {
+      if (patch.upstreamCommits.at(-1) !== resolvedUpstreamHead) {
+        errors.push(`${patch.id}: upstreamHead must be the last upstreamCommits entry.`);
+      }
+      if (!isAncestor(resolvedUpstreamBase, resolvedUpstreamHead)) {
+        errors.push(`${patch.id}: upstreamBase is not an ancestor of upstreamHead.`);
+      }
+      if (patch.upstreamCommits.length !== resolvedCommits.length) {
+        errors.push(`${patch.id}: deploy and upstream commit lists must have equal length.`);
+      } else {
+        for (let index = 0; index < resolvedCommits.length; index += 1) {
+          const deployCommit = resolvedCommits[index];
+          const upstreamCommit = resolveCommit(patch.upstreamCommits[index]);
+          if (!upstreamCommit) {
+            errors.push(`${patch.id}: upstream commit does not resolve: ${patch.upstreamCommits[index]}.`);
+            continue;
+          }
+          const deployPatchId = patchId(deployCommit);
+          const upstreamPatchId = patchId(upstreamCommit);
+          if (deployPatchId !== upstreamPatchId) {
+            errors.push(
+              `${patch.id}: patch mismatch at position ${index + 1}: deploy ${short(deployCommit)} (${deployPatchId}) vs upstream ${short(upstreamCommit)} (${upstreamPatchId}).`,
+            );
+          }
+        }
+      }
     }
   }
 
