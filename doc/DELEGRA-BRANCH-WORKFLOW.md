@@ -336,6 +336,7 @@ Apply these settings once per clone:
 git config fetch.prune true
 git config remote.origin.prune true
 git config remote.upstream.prune true
+git config remote.upstream.fetch '+refs/heads/master:refs/remotes/upstream/master'
 git config pull.ff only
 git config push.default simple
 git config remote.pushDefault origin
@@ -379,5 +380,6 @@ transitional baseline. It must move to the first suitable stable tag before
 the waiver expires. The migration is complete when `.delegra/patches.json`
 declares `base.kind: "stable"` and the policy check passes without a warning.
 
-The legacy `fix/codex-managed-project-auth` branch is frozen and superseded by
-`deploy`. Do not add commits to it.
+The legacy `fix/codex-managed-project-auth` branch was removed after the
+`deploy` migration. The deployed commit is preserved by the
+`deploy/v2026.1024.0-canary.7-r1` tag.
