@@ -18,7 +18,7 @@ import { instanceSettingsService } from "./instance-settings.js";
 import { environmentService } from "./environments.js";
 import { environmentRuntimeService } from "./environment-runtime.js";
 import { resolveEnvironmentExecutionTarget } from "./environment-execution-target.js";
-import { prepareManagedAiRuntime, assertManagedAiProjectAuth } from "./ai-connection-runtime.js";
+import { prepareManagedAiRuntime, assertManagedAiProjectAuth, managedAiProjectAuthProvider } from "./ai-connection-runtime.js";
 import { aiConnectionService } from "./ai-connections.js";
 import { validateAiApiKey } from "./ai-api-key-test.js";
 import { probeCopilotExecutionTarget } from "./copilot-connection-probe.js";
@@ -536,7 +536,8 @@ export function agentEnvironmentTestService(db: Db, pluginWorkerManager?: Plugin
     }
     const taskOnly = context.executionTarget?.kind === "remote"
       && context.executionTarget.transport === "sandbox" && context.executionTarget.runnerTask;
-    if (binding.provider === "openai" && !taskOnly) {
+    const projectAuthProvider = managedAiProjectAuthProvider(context.config, binding.provider, adapterType);
+    if (projectAuthProvider === "openai" && !taskOnly) {
       const cwd = resolveAdapterExecutionTargetCwd(context.executionTarget,
         typeof context.config.cwd === "string" ? context.config.cwd : undefined, process.cwd());
       await ensureAdapterExecutionTargetDirectory(`ai-auth-probe-${randomUUID()}`, context.executionTarget, cwd, {
@@ -548,7 +549,7 @@ export function agentEnvironmentTestService(db: Db, pluginWorkerManager?: Plugin
         executionTarget: overrideAdapterExecutionTargetRemoteCwd(context.executionTarget, cwd),
       };
     }
-    await assertManagedAiProjectAuth(context.config, binding.provider, context.executionTarget);
+    await assertManagedAiProjectAuth(context.config, projectAuthProvider, context.executionTarget);
     const target = context.executionTarget;
     const result = adapterType === "paperclip_runner" && target?.kind === "remote" && target.transport === "sandbox" && target.runnerTask
       ? await probePluginRunnerEnvironment(context, { identity: managed.identity, accountIdentity: managed.sessionIdentity,

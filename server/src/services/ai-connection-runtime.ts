@@ -96,6 +96,15 @@ async function codexProjectAuthRoot(cwd: string): Promise<string> {
   }
 }
 
+export function managedAiProjectAuthProvider(
+  config: Record<string, unknown>,
+  provider: AiConnectionBinding["provider"],
+  adapterType: string,
+): AiConnectionBinding["provider"] {
+  const harness = aiRoutingHarness(adapterType, config.provider, config.acpxAgent);
+  return harness === "claude_local" ? "anthropic" : harness === "codex_local" ? "openai" : provider;
+}
+
 export async function assertManagedAiProjectAuth(
   config: Record<string, unknown>,
   provider: AiConnectionBinding["provider"],
@@ -293,9 +302,10 @@ export async function prepareManagedAiRuntime(
       );
   }
   const harness = aiRoutingHarness(input.adapterType, input.config.provider, input.config.acpxAgent);
+  const projectAuthProvider = managedAiProjectAuthProvider(input.config, input.binding.provider, input.adapterType);
   await assertManagedAiProjectAuth(
-    input.binding.provider === "openai" ? { ...input.config, cwd: undefined } : input.config,
-    harness === "claude_local" ? "anthropic" : harness === "codex_local" ? "openai" : input.binding.provider,
+    projectAuthProvider === "openai" ? { ...input.config, cwd: undefined } : input.config,
+    projectAuthProvider,
   );
   const service = aiConnectionService(db);
   let selection = await service.select({
