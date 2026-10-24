@@ -314,6 +314,14 @@ grant's credentials. Inherited credential variables are cleared. Conflicting
 project authentication and provider-routing overrides are rejected. Managed
 failure cannot reactivate host or legacy credentials.
 
+Managed Claude checks the physical working directory and its project ancestors,
+stopping before the host user's home directory. The private `CLAUDE_CONFIG_DIR`
+replaces user settings, so the host's `~/.claude/settings.json` is not a project
+override. Project authentication below that boundary remains blocked. Selecting
+the home itself as the working directory still checks its project files. Local
+and shell-backed remote checks use the same boundary. If the host home does not
+exist, the check continues through project ancestors without a home boundary.
+
 Managed Codex checks project authentication only from the physical working
 directory to its nearest `.git` root, including the root. A Git worktree's
 `.git` file is also a root marker. Without a Git root, it checks only the
