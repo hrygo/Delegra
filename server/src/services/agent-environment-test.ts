@@ -4,6 +4,11 @@ import { registerPluginTaskCredentialHandoff } from "./plugin-task-credential-wr
 import { randomUUID } from "node:crypto";
 import type { Db } from "@paperclipai/db";
 import type { AdapterExecutionTarget } from "@paperclipai/adapter-utils/execution-target";
+import {
+  ensureAdapterExecutionTargetDirectory,
+  overrideAdapterExecutionTargetRemoteCwd,
+  resolveAdapterExecutionTargetCwd,
+} from "@paperclipai/adapter-utils/execution-target";
 import type { AdapterEnvironmentCheck } from "@paperclipai/adapter-utils";
 import { parseObject } from "@paperclipai/adapter-utils/server-utils";
 import { aiRoutingHarness, ADAPTER_AUTH_MISSING_CHECK_CODE, AI_CONNECTION_CAPABILITIES, type AiConnectionBinding } from "@paperclipai/shared";
@@ -528,6 +533,20 @@ export function agentEnvironmentTestService(db: Db, pluginWorkerManager?: Plugin
       } catch (error) {
         return { adapterType, status: "fail" as const, testedAt: new Date().toISOString(), checks: [{ code: error instanceof HttpError ? String(asRecord(error.details)?.code ?? "COPILOT_REQUEST_FAILED") : "COPILOT_REQUEST_FAILED", level: "error" as const, message: error instanceof HttpError ? error.message : "Copilot metadata verification failed." }] };
       }
+    }
+    const taskOnly = context.executionTarget?.kind === "remote"
+      && context.executionTarget.transport === "sandbox" && context.executionTarget.runnerTask;
+    if (binding.provider === "openai" && !taskOnly) {
+      const cwd = resolveAdapterExecutionTargetCwd(context.executionTarget,
+        typeof context.config.cwd === "string" ? context.config.cwd : undefined, process.cwd());
+      await ensureAdapterExecutionTargetDirectory(`ai-auth-probe-${randomUUID()}`, context.executionTarget, cwd, {
+        cwd, env: {}, createIfMissing: true,
+      });
+      context = {
+        ...context,
+        config: { ...context.config, cwd },
+        executionTarget: overrideAdapterExecutionTargetRemoteCwd(context.executionTarget, cwd),
+      };
     }
     await assertManagedAiProjectAuth(context.config, binding.provider, context.executionTarget);
     const target = context.executionTarget;

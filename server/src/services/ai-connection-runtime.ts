@@ -293,7 +293,10 @@ export async function prepareManagedAiRuntime(
       );
   }
   const harness = aiRoutingHarness(input.adapterType, input.config.provider, input.config.acpxAgent);
-  await assertManagedAiProjectAuth(input.config, harness === "claude_local" ? "anthropic" : harness === "codex_local" ? "openai" : input.binding.provider);
+  await assertManagedAiProjectAuth(
+    input.binding.provider === "openai" ? { ...input.config, cwd: undefined } : input.config,
+    harness === "claude_local" ? "anthropic" : harness === "codex_local" ? "openai" : input.binding.provider,
+  );
   const service = aiConnectionService(db);
   let selection = await service.select({
     ...input,
