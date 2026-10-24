@@ -80,7 +80,7 @@ export function stripAiAuthBindings(env: unknown): Record<string, unknown> {
       delete result[key];
   return result;
 }
-/** Managed Codex homes use the default .git project-root marker. */
+
 async function codexProjectAuthRoot(cwd: string): Promise<string> {
   let directory = cwd;
   for (;;) {
@@ -192,13 +192,9 @@ done`,
       );
     return;
   }
-  // Credential preparation can precede workspace realization. The server's
-  // cwd is not the task's project; the run path checks the resolved cwd again.
   if (provider === "openai" && (typeof config.cwd !== "string" || !config.cwd.trim())) return;
   let directory =
     typeof config.cwd === "string" ? path.resolve(config.cwd) : process.cwd();
-  // A private CODEX_HOME replaces the host's user configuration. Check only
-  // physical project layers, including Git worktrees (.git can be a file).
   let projectRoot: string | undefined;
   if (provider === "openai") {
     directory = await realpath(directory);
