@@ -7,13 +7,25 @@ upstream package names and data formats so upgrades remain reviewable.
 
 - `origin`: `https://github.com/hrygo/Delegra.git`
 - `upstream`: `https://github.com/paperclipai/paperclip.git`
-- Put each repair on a dedicated branch and submit it to Delegra's `master`.
-- Deploy an exact reviewed commit. Do not deploy a moving upstream branch.
-- Before an upgrade, check whether upstream has fixed the same defect. Drop an
-  obsolete local patch instead of maintaining two implementations.
+- `master` is a read-only mirror of `upstream/master`. Never edit it and never
+  deploy it. Upstream `master` is the canary line.
+- `deploy` is the only installation branch. It accepts upstream stable tags
+  and registered Delegra-only patches.
+- Put each upstream contribution on a dedicated `fix/*` or `codex/*` branch
+  based on `master` and open a PR against `paperclipai/paperclip`.
+- Put a fork-only fix on a dedicated `local/*` branch based on `deploy` and
+  open a PR against `deploy`.
+- Deploy an exact reviewed `deploy/*` tag. Do not deploy a moving branch tip.
+- Record every deploy-only code commit in
+  [`.delegra/patches.json`](../.delegra/patches.json). Before an upgrade, check
+  whether upstream has fixed the same defect. Drop an obsolete patch instead
+  of maintaining two implementations.
 - Review schema changes and take a database backup before changing the deployed
   revision. Follow [database guidance](DATABASE.md) and the existing deployment
   procedures. The managed Codex project-authentication patch has no migration.
+
+See [the branch and release workflow](DELEGRA-BRANCH-WORKFLOW.md) for the
+commands, branch protection, stable-upgrade process, and patch lifecycle.
 
 ## Codex account and workspace configuration
 

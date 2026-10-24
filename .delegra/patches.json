@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 1,
+  "branches": {
+    "mirror": "master",
+    "deploy": "deploy"
+  },
+  "base": {
+    "kind": "canary",
+    "ref": "canary/v2026.1024.0-canary.7",
+    "commit": "5e26b733b9668d24b005418704d43f66109a7dd8",
+    "transitionalWaiver": {
+      "reason": "v2026.1023.0 predates the managed Codex project-auth implementation. Porting the deployed patch stack to that tag would require a substantive rewrite with no operational benefit.",
+      "expiresOn": "2026-11-30",
+      "replaceWith": "The first stable tag that contains the managed Codex project-auth patch stack"
+    }
+  },
+  "internalPaths": [
+    ".delegra/",
+    "doc/DELEGRA-",
+    "scripts/check-delegra-branch-policy.mjs",
+    ".github/workflows/delegra-branch-policy.yml"
+  ],
+  "patches": [
+    {
+      "id": "managed-codex-project-auth",
+      "kind": "upstream-pr",
+      "status": "active",
+      "upstreamPr": "paperclipai/paperclip#17421",
+      "commits": [
+        "352885625517bade150153cedea697b40ac16719",
+        "c5cd6ad4ba9b627174ba37ec87030691096b1fc8",
+        "ab52794accb1e748e263964f5bd62c6559de3547",
+        "96463ff12db3c6c0e629f82977d65f3ca3222664",
+        "2c8f9069a1a98b3cd8f8d71c4f18c94c0d9f7408"
+      ],
+      "owner": "hrygo",
+      "reviewBy": "2026-11-30",
+      "retireWhen": "The stable base contains all five commits or patch-equivalent changes.",
+      "notes": "Scopes managed Codex project-auth checks to the task project and uses the Harness project-auth policy for routed accounts."
+    }
+  ]
+}

@@ -1,0 +1,30 @@
+name: Delegra branch policy
+
+on:
+  pull_request:
+    branches: [deploy]
+  push:
+    branches: [deploy]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: delegra-branch-policy-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  policy:
+    name: Delegra branch policy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+      - name: Fetch upstream mirror
+        run: |
+          git remote add upstream https://github.com/paperclipai/paperclip.git
+          git fetch --no-tags upstream master:refs/remotes/upstream/master
+          git fetch --no-tags origin master:refs/remotes/origin/master
+      - name: Check branch and patch policy
+        run: node scripts/check-delegra-branch-policy.mjs
