@@ -25,7 +25,8 @@
     "doc/DELEGRA-",
     "scripts/check-delegra-branch-policy.mjs",
     ".github/workflows/delegra-branch-policy.yml",
-    ".github/CODEOWNERS"
+    ".github/CODEOWNERS",
+    "AGENTS.md"
   ],
   "patches": [
     {
