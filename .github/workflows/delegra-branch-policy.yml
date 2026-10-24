@@ -24,7 +24,7 @@ jobs:
       - name: Fetch upstream mirror
         run: |
           git remote add upstream https://github.com/paperclipai/paperclip.git
-          git fetch --no-tags upstream master:refs/remotes/upstream/master
-          git fetch --no-tags origin master:refs/remotes/origin/master
+          git fetch --tags upstream master:refs/remotes/upstream/master
+          git fetch origin master:refs/remotes/origin/master
       - name: Check branch and patch policy
         run: node scripts/check-delegra-branch-policy.mjs
