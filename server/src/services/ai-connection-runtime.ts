@@ -154,8 +154,14 @@ export async function assertManagedAiProjectAuth(
         "-c",
         `
 directory=$1; pattern=$2; provider=$3; shift 3
-if test "$provider" = openai; then
+if test "$provider" = openai || test "$provider" = anthropic; then
   directory=$(CDPATH= cd "$directory" && pwd -P) || exit 43
+fi
+if test "$provider" = anthropic; then
+  user_home=$(CDPATH= cd "$HOME" && pwd -P) || exit 43
+  initial_directory=$directory
+fi
+if test "$provider" = openai; then
   root=$directory
   candidate=$directory
   while :; do
@@ -166,6 +172,7 @@ if test "$provider" = openai; then
   done
 fi
 while :; do
+  if test "$provider" = anthropic && test "$directory" != "$initial_directory" && test "$directory" = "$user_home"; then break; fi
   for relative in "$@"; do
     file="$directory/$relative"
     if test -f "$file"; then
@@ -209,7 +216,18 @@ done`,
     directory = await realpath(directory);
     projectRoot = await codexProjectAuthRoot(directory);
   }
+  if (provider === "anthropic") {
+    directory = await realpath(directory).catch((error: NodeJS.ErrnoException) => {
+      if (error.code !== "ENOENT") throw error;
+      return directory;
+    });
+  }
+  const initialDirectory = directory;
+  const userHome = provider === "anthropic" ? await realpath(os.homedir()) : undefined;
   for (;;) {
+    // The managed CLAUDE_CONFIG_DIR replaces user settings. A host home that is
+    // an ancestor is not a project; an explicitly selected home still is.
+    if (directory !== initialDirectory && directory === userHome) break;
     for (const relative of files) {
       try {
         const content = await readFile(path.join(directory, relative), "utf8");
