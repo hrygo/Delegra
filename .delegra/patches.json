@@ -92,6 +92,19 @@
       "verifiedAt": "2026-10-25",
       "retireWhen": "The accepted stable base distinguishes isolated Claude user settings from project authentication with equivalent local and shell-backed remote coverage.",
       "notes": "Deployment-specific conservative boundary: reject project authentication from the physical task directory through ancestors below the host home. Managed CLAUDE_CONFIG_DIR replaces the host user settings. Retain this small port while upstream Claude settings-source discovery evolves."
+    },
+    {
+      "id": "fork-review-workflow-token",
+      "kind": "fork-only",
+      "status": "active",
+      "commits": [
+        "a4c6fdae8d7a8505e0942694b8da33666b6b6019"
+      ],
+      "owner": "hrygo",
+      "reviewBy": "2026-11-30",
+      "verifiedAt": "2026-10-25",
+      "retireWhen": "The accepted upstream review workflow supports forks without an upstream private App key and reads review scripts from the trusted PR base commit.",
+      "notes": "Preserves Dependency Review, all quality gates, and the current permission set. Forks use the built-in workflow token; the upstream repository keeps its App token. Signed Actions comments are updated across retries."
     }
   ]
 }
