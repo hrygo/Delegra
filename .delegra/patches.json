@@ -92,6 +92,33 @@
       "verifiedAt": "2026-10-25",
       "retireWhen": "The accepted stable base distinguishes isolated Claude user settings from project authentication with equivalent local and shell-backed remote coverage.",
       "notes": "Deployment-specific conservative boundary: reject project authentication from the physical task directory through ancestors below the host home. Managed CLAUDE_CONFIG_DIR replaces the host user settings. Retain this small port while upstream Claude settings-source discovery evolves."
+    },
+    {
+      "id": "portable-test-baselines",
+      "kind": "upstream-pr",
+      "status": "active",
+      "upstreamPr": "paperclipai/paperclip#17536",
+      "upstreamBase": "64a8b927c1f199c612bcd36dccb6190e6e250eb3",
+      "upstreamHead": "826ae67070120cf78a0e14d6600b940d4201ca5b",
+      "upstreamCommits": [
+        "a90ee59041e7bdcbd5db273fdacc3cd7970260b7",
+        "fd0800262062d7abbf074dd3b6a39a8f28cba8ef",
+        "0350653397f1770456a0eec812a736659a5e1c77",
+        "1439f57222bf36257ef9d9955d3fbc2ddd42aeee",
+        "826ae67070120cf78a0e14d6600b940d4201ca5b"
+      ],
+      "commits": [
+        "4692793aa725a38a84cf9dade58a778fc4f00e73",
+        "302b6baf18b47a314b01b6c861e75db72b72cedf",
+        "9ffeb8b9330296994548e66d0c199a6204eb75ea",
+        "8863ae0b822ead737a38174bb111465e5531cbf9",
+        "306296295099d36283eb9ebe9201b146c4dbfbef"
+      ],
+      "owner": "hrygo",
+      "reviewBy": "2026-11-30",
+      "verifiedAt": "2026-10-25",
+      "retireWhen": "The accepted stable base contains the five portable test baseline commits or patch-equivalent changes.",
+      "notes": "Test-only portability fixes for native Git diagnostics, npm pack metadata, loaded fixture waits, uninstall host-home isolation, and macOS TCP admission. The deploy and upstream stacks have matching patch IDs. The full local baseline completed with 42662 tests passed, 158 existing conditional skips, and zero final failures after full-scope repairs. No new skip or waiver was added."
     }
   ]
 }
