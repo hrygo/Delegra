@@ -166,7 +166,7 @@ function renderAppAt(container: HTMLElement, path: string) {
  * loaded worker gets more turns rather than a failure.
  */
 async function waitForRoute(container: HTMLElement, text: string) {
-  await vi.waitFor(() => expect(container.textContent).toContain(text));
+  await vi.waitFor(() => expect(container.textContent).toContain(text), { timeout: 3_000 });
 }
 
 describe("App Activity routing (PAP-16302)", () => {
