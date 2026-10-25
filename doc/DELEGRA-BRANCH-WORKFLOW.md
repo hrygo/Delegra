@@ -50,14 +50,25 @@ Feature branches may be rebased before review; `deploy` itself may not.
 The fork keeps `master` byte-for-byte identical to `upstream/master` so that:
 
 - upstream comparisons show only real contribution branches;
-- "Sync fork" remains safe and meaningful;
+- explicit mirror updates remain safe and meaningful;
 - there is one unambiguous reference for the current upstream canary;
 - internal files never leak into an upstream PR.
 
-Keep `master` as the GitHub default branch. If `deploy` were the default,
-GitHub's "Sync fork" action would target the deployment branch and could merge
-the upstream canary into production. Contributors must explicitly switch to
-`deploy` when doing installation work.
+Use `deploy` as the GitHub default branch after the fork CI bootstrap is approved.
+GitHub loads `pull_request_target` workflows from the default branch, so the
+fork's trusted review workflow must live there. `master` remains an exact
+upstream mirror and never contains fork CI patches.
+
+Never use GitHub's "Sync fork" action against `deploy`. Update `master` through
+an explicit fast-forward push instead. The active deploy ruleset must continue
+to require pull requests, the `Delegra branch policy` check, and no force pushes
+or bypass actors. These controls prevent a direct canary merge into deploy.
+New upstream contributions must still branch from `master` and explicitly target
+upstream `master`; installation work targets `deploy`.
+
+The one-time default-branch change requires operator approval. It changes the
+trusted CI source and default PR target, not the running immutable release.
+See [GitHub's workflow source change](https://github.blog/changelog/2025-11-07-actions-pull_request_target-and-environment-branch-protections-changes/).
 
 ### `deploy` accepts only stable upstream releases
 
@@ -297,7 +308,9 @@ that the commit is contained in `deploy`, and that every listed patch exists.
 
 ## 7. Branch protection and repository settings
 
-Keep `master` as the GitHub default branch.
+Keep `master` as the GitHub default branch until the operator approves the CI
+bootstrap in section 3. After that approved transition, use `deploy` as the
+default branch and retain every deploy protection below.
 
 | Setting | `master` | `deploy` |
 | --- | --- | --- |
