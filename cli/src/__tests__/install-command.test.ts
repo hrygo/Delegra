@@ -26,7 +26,7 @@ import {
   writeInstallManifestAtomic,
 } from "../install-store.js";
 import { resolveCliVersion } from "../version.js";
-import { systemdServiceName } from "../services/service-manager.js";
+import { launchdServiceName, systemdServiceName } from "../services/service-manager.js";
 
 const ORIGINAL_ENV = { ...process.env };
 
@@ -265,6 +265,7 @@ describe("managed install commands", () => {
       expect(fs.existsSync(paths.shimPath)).toBe(true);
     });
     await uninstallCommand({
+      userHomeDir: process.env.HOME!,
       detectServiceManager: vi.fn(async () => ({
         supported: true as const,
         manager: {
@@ -280,9 +281,11 @@ describe("managed install commands", () => {
     expect(fs.readFileSync(userData, "utf8")).toBe("keep");
   });
 
-  it("refuses to remove the shared CLI while another instance service is installed", async () => {
+  it.each(["linux", "darwin"] as const)("refuses to remove the shared CLI while another %s instance service is installed", async (platform) => {
     const paths = resolveInstallStorePaths();
-    const otherUnitPath = path.join(process.env.HOME!, ".config", "systemd", "user", systemdServiceName("team-a"));
+    const otherUnitPath = platform === "linux"
+      ? path.join(process.env.HOME!, ".config", "systemd", "user", systemdServiceName("team-a"))
+      : path.join(process.env.HOME!, "Library", "LaunchAgents", `${launchdServiceName("team-a")}.plist`);
     fs.mkdirSync(path.dirname(otherUnitPath), { recursive: true });
     fs.writeFileSync(otherUnitPath, "unit");
 
@@ -291,7 +294,7 @@ describe("managed install commands", () => {
         supported: true as const,
         manager: { status: vi.fn(async () => ({ installed: false, active: false })) } as never,
       })),
-      platform: "linux",
+      platform,
       userHomeDir: process.env.HOME!,
     })).rejects.toThrow("other instance services are installed");
 
@@ -345,7 +348,10 @@ describe("managed install commands", () => {
     fs.mkdirSync(paths.cliRoot, { recursive: true });
     fs.writeFileSync(unrelatedFile, "keep");
 
-    await expect(uninstallCommand()).rejects.toThrow("unverified install store");
+    await expect(uninstallCommand({
+      userHomeDir: process.env.HOME!,
+      detectServiceManager: async () => ({ supported: false as const, reason: "Isolated test fixture" }),
+    })).rejects.toThrow("unverified install store");
     expect(fs.readFileSync(unrelatedFile, "utf8")).toBe("keep");
   });
 
@@ -367,7 +373,10 @@ describe("managed install commands", () => {
 
     await withInstallStoreLock(
       async () => {
-        await expect(uninstallCommand()).rejects.toThrow("already running");
+        await expect(uninstallCommand({
+          userHomeDir: process.env.HOME!,
+          detectServiceManager: async () => ({ supported: false as const, reason: "Isolated test fixture" }),
+        })).rejects.toThrow("already running");
       },
       paths,
     );
