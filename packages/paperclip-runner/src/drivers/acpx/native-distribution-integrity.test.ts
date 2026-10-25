@@ -298,7 +298,7 @@ describe("native ACPX execution closure", () => {
     await expect(stat(snapshotRoot)).rejects.toMatchObject({ code: "ENOENT" });
   });
   it("bounds retirement of a surviving native child and retains bytes for cleanup retry", async () => {
-    const declaration = await fixture({ script: '#!/bin/sh\nprintf ready\nexec sleep 1000\n' });
+    const declaration = await fixture({ script: '#!/bin/sh\nprintf ready\nIFS= read -r release || :\n' });
     const creatingStart = vi.mocked(mkdir).mock.calls.length;
     const lease = await (await verifyNativeAcpxInstallation(declaration)).openCommand();
     const snapshotRoot = dirname(String(vi.mocked(mkdir).mock.calls[creatingStart]![0]));
@@ -320,7 +320,7 @@ describe("native ACPX execution closure", () => {
       expect((await stat(snapshotRoot)).isDirectory()).toBe(true);
     } finally {
       vi.useRealTimers();
-      child.kill("SIGTERM");
+      child.stdin!.end();
       await exited;
       await closing?.catch(() => undefined);
       await lease.close();
