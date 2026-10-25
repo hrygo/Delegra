@@ -41,26 +41,28 @@
       "status": "active",
       "upstreamPr": "paperclipai/paperclip#17421",
       "upstreamBase": "515ff0f2842506fee5f43d53fba00c95e1ad25a6",
-      "upstreamHead": "747571a31c3acaf405b9ca31147db6eb6ddceec0",
+      "upstreamHead": "9a648312c59bb72f3e8a7d52559a8e550756263c",
       "upstreamCommits": [
         "29d862b988e439a9bcc2b8185de8d63cb575105d",
         "ea2a8bc63ad7ac908137b83c13834e357f9d9274",
         "67ed56f05cca5e0d725bb71a00abf417ad7b4985",
         "83e60c104c499e254bfbc0ff9ee9fa4afdf55698",
-        "747571a31c3acaf405b9ca31147db6eb6ddceec0"
+        "747571a31c3acaf405b9ca31147db6eb6ddceec0",
+        "9a648312c59bb72f3e8a7d52559a8e550756263c"
       ],
       "commits": [
         "352885625517bade150153cedea697b40ac16719",
         "c5cd6ad4ba9b627174ba37ec87030691096b1fc8",
         "ab52794accb1e748e263964f5bd62c6559de3547",
         "96463ff12db3c6c0e629f82977d65f3ca3222664",
-        "2c8f9069a1a98b3cd8f8d71c4f18c94c0d9f7408"
+        "2c8f9069a1a98b3cd8f8d71c4f18c94c0d9f7408",
+        "c140372799124c1533f4bfe7aeae1cc0ad7e5288"
       ],
       "owner": "hrygo",
       "reviewBy": "2026-11-30",
-      "verifiedAt": "2026-10-24",
-      "retireWhen": "The stable base contains all five commits or patch-equivalent changes.",
-      "notes": "Scopes managed Codex project-auth checks to the task project and uses the Harness project-auth policy for routed accounts. The deploy commits were produced on canary.7; the upstream PR was rebased onto canary.8 on 2026-10-24. Both stacks have the same patch IDs."
+      "verifiedAt": "2026-10-25",
+      "retireWhen": "The stable base contains all six commits or patch-equivalent changes.",
+      "notes": "Scopes managed Codex project-auth checks to the task project and uses the Harness project-auth policy for routed accounts. The deploy commits were produced on canary.7; the upstream PR was rebased onto canary.8 on 2026-10-24. Both stacks have the same patch IDs. Adds the upstream follow-up that preserves invalid probe-directory diagnostics without starting the adapter. Ten new regression cases cover direct and routed Codex plus the HTTP route. The sixth upstream/deploy commits have matching patch IDs."
     },
     {
       "id": "native-ssh-macos-process-identity",

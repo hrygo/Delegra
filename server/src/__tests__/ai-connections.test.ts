@@ -78,6 +78,77 @@ describe("managed AI connections", () => {
     { provider: "openai", adapterType: "codex_local" },
     { provider: "openrouter", adapterType: "codex_local" },
     { provider: "openrouter", adapterType: "paperclip_runner" },
+  ] as const).flatMap(variant => (["relative", "file", "remote-denied"] as const)
+    .map(failure => ({ ...variant, failure }))))(
+    "reports Codex probe directory failures without starting the adapter ($provider, $adapterType, $failure)",
+    async ({ provider, adapterType, failure }) => {
+      const { requireServerAdapter } = await import("../adapters/index.js");
+      const { agentEnvironmentTestService } = await import("../services/agent-environment-test.js");
+      const owner = `directory-failure-${provider}-${adapterType}-${failure}`;
+      await db.insert(companyMemberships).values({ companyId, principalId: owner, principalType: "user", status: "active", membershipRole: "member" });
+      const account = await service.save(companyId, owner, { provider, method: "api_key", ownership: "personal",
+        name: owner, apiKey: "fixture-directory-failure", allAgents: true, agentIds: [],
+        ...(provider === "openrouter" ? { routing: { kind: "openrouter", protocol: "responses", auth: "bearer", models: [] } as const } : {}),
+      }, "fixture-directory-failure");
+      const selected = { provider, method: "api_key", mode: "delegated", ...account } as const;
+      const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "paperclip-probe-directory-")));
+      const cwd = failure === "relative" ? "." : failure === "file" ? path.join(root, "file") : "/remote-denied";
+      if (failure === "file") await writeFile(cwd, "not a directory");
+      const target = failure === "remote-denied"
+        ? { kind: "remote", transport: "sandbox", remoteCwd: "/workspace",
+          runner: { execute: vi.fn(async () => ({ exitCode: 1, stdout: "", stderr: "Permission denied", timedOut: false })) } } as const : undefined;
+      const adapter = vi.spyOn(requireServerAdapter(adapterType), "testEnvironment").mockResolvedValue({
+        adapterType, status: "pass", testedAt: new Date().toISOString(), checks: [],
+      });
+      const config = { cwd, ...(adapterType === "paperclip_runner" ? { provider: "codex" } : {}) };
+      try {
+        const result = await withManagedAiProbe(db, { companyId, agentId, responsibleUserId: owner, adapterType,
+          binding: selected, config }, managed => agentEnvironmentTestService(db).testManagedEnvironment(
+          adapterType, { companyId, adapterType, config: managed.config, executionTarget: target }, selected, managed, agentId,
+        ));
+        expect(result).toMatchObject({ adapterType, status: "fail", checks: [{
+          code: "codex_cwd_invalid", level: "error", detail: cwd,
+          message: expect.stringContaining(failure === "relative" ? "absolute path" : failure === "file" ? "not a directory" : "Permission denied"),
+        }] });
+        expect(adapter).not.toHaveBeenCalled();
+      } finally {
+        adapter.mockRestore();
+        await rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("returns an environment diagnostic instead of HTTP 500 for a relative managed Codex directory", async () => {
+    const { requireServerAdapter } = await import("../adapters/index.js");
+    const owner = "directory-route-owner";
+    await db.insert(companyMemberships).values({ companyId, principalId: owner, principalType: "user", status: "active", membershipRole: "member" });
+    const account = await service.save(companyId, owner, { provider: "openai", method: "api_key", ownership: "personal",
+      name: "Invalid directory route", apiKey: "fixture-directory-route", allAgents: true, agentIds: [],
+    }, "fixture-directory-route");
+    const app = express();
+    app.use(express.json());
+    app.use((req, _res, next) => { req.actor = { type: "board", source: "local_implicit", userId: owner, companyIds: [companyId] }; next(); });
+    app.use("/api", agentRoutes(db));
+    app.use((error: { status?: number; message: string }, _req: express.Request, res: express.Response, _next: express.NextFunction) => { res.status(error.status ?? 500).json({ error: error.message }); });
+    const adapter = vi.spyOn(requireServerAdapter("codex_local"), "testEnvironment").mockResolvedValue({
+      adapterType: "codex_local", status: "pass", testedAt: new Date().toISOString(), checks: [],
+    });
+    try {
+      const response = await request(app).post(`/api/companies/${companyId}/adapters/codex_local/test-environment`).send({
+        adapterConfig: { cwd: "." }, aiConnection: { provider: "openai", method: "api_key", mode: "delegated", ...account },
+      });
+      expect(response.status).toBe(200);
+      expect(response.body).toMatchObject({ status: "fail", checks: expect.arrayContaining([{
+        code: "codex_cwd_invalid", level: "error", message: 'Working directory must be an absolute path: "."', detail: ".",
+      }]) });
+      expect(adapter).not.toHaveBeenCalled();
+    } finally { adapter.mockRestore(); }
+  });
+
+  it.each(([
+    { provider: "openai", adapterType: "codex_local" },
+    { provider: "openrouter", adapterType: "codex_local" },
+    { provider: "openrouter", adapterType: "paperclip_runner" },
   ] as const).flatMap(variant => (["local-new", "remote-new", "remote-host-conflict", "local-default-conflict"] as const)
     .map(mode => ({ ...variant, mode }))))(
     "checks the prepared Codex probe directory on the correct target ($provider, $adapterType, $mode)",
