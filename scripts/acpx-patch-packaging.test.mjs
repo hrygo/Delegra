@@ -252,10 +252,11 @@ test("Linux-produced Claude bundles retain the SDK and install native packages f
   assert.equal(readFileSync(join(bridge, "package.json"), "utf8"), bridgeBefore);
   assert.deepEqual(stageBundledProviderOptionalDependencies(directory, staged, profiles), staged);
   writeFileSync(join(directory, "package.json"), JSON.stringify(staged));
-  const packs = JSON.parse(execFileSync("npm", ["pack", "--ignore-scripts", "--offline", "--json"], {
+  const packs = Object.values(JSON.parse(execFileSync("npm", ["pack", "--ignore-scripts", "--offline", "--json"], {
     cwd: directory, encoding: "utf8", timeout: 30_000,
     env: { ...process.env, HOME: directory, npm_config_cache: join(directory, "cache"), npm_config_update_notifier: "false" },
-  }));
+  })));
+  assert.equal(packs.length, 1);
   const paths = packs[0].files.map(file => file.path);
   assert.ok(paths.some(path => path.endsWith("@anthropic-ai/claude-agent-sdk/sdk.mjs")));
   assert.equal(paths.some(path => /@anthropic-ai\/claude-agent-sdk-(?:linux|darwin|win32)-/.test(path)), false);
@@ -312,10 +313,11 @@ test("Codex bundles retain pinned JavaScript and delegate official consumer plat
   assert.equal(readFileSync(join(runtime, "bin/codex.js"), "utf8"), "// official JavaScript fixture, never executed\n");
   assert.deepEqual(stageBundledProviderOptionalDependencies(directory, staged, profiles), staged);
   writeFileSync(join(directory, "package.json"), JSON.stringify(staged));
-  const packs = JSON.parse(execFileSync("npm", ["pack", "--ignore-scripts", "--offline", "--json"], {
+  const packs = Object.values(JSON.parse(execFileSync("npm", ["pack", "--ignore-scripts", "--offline", "--json"], {
     cwd: directory, encoding: "utf8", timeout: 30_000,
     env: { ...process.env, HOME: directory, npm_config_cache: join(directory, "cache"), npm_config_update_notifier: "false" },
-  }));
+  })));
+  assert.equal(packs.length, 1);
   const paths = packs[0].files.map(file => file.path);
   assert.ok(paths.some(path => path.endsWith("@openai/codex/bin/codex.js")), "The actual npm tarball retains its pinned JS runtime");
   assert.equal(paths.some(path => /@openai\/codex-(?:linux|darwin|win32)-|@openai\/codex\/vendor\//.test(path)), false,

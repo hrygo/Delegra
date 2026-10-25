@@ -13,11 +13,11 @@ function readPackMetadata(packDestination: string) {
     cwd: packageRoot,
     encoding: "utf8",
   });
-  const metadata = JSON.parse(output);
-  if (!Array.isArray(metadata) || metadata.length === 0 || typeof metadata[0]?.filename !== "string") {
+  const metadata = Object.values(JSON.parse(output)) as Array<{ filename: string; files: Array<{ path: string }> }>;
+  if (metadata.length !== 1 || typeof metadata[0]?.filename !== "string" || !Array.isArray(metadata[0].files)) {
     throw new Error(`Unexpected npm pack output from ${packageRoot}: ${output}`);
   }
-  return metadata[0] as { filename: string; files: Array<{ path: string }> };
+  return metadata[0];
 }
 
 describe("skills catalog package artifacts", () => {
