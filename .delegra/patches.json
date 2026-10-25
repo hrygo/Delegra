@@ -123,6 +123,19 @@
       "verifiedAt": "2026-10-25",
       "retireWhen": "The accepted stable base contains the five portable test baseline commits or patch-equivalent changes.",
       "notes": "Test-only portability fixes for native Git diagnostics, npm pack metadata, loaded fixture waits, uninstall host-home isolation, and macOS TCP admission. The deploy and upstream stacks have matching patch IDs. The full local baseline completed with 42662 tests passed, 158 existing conditional skips, and zero final failures after full-scope repairs. No new skip or waiver was added. Adds a stdin-gated native lifetime fixture after CI exposed a bootstrap signal-registration race. Controlled normal, early-exit, and assertion-failure paths left no snapshots or processes."
+    },
+    {
+      "id": "fork-review-workflow-token",
+      "kind": "fork-only",
+      "status": "active",
+      "commits": [
+        "a4c6fdae8d7a8505e0942694b8da33666b6b6019"
+      ],
+      "owner": "hrygo",
+      "reviewBy": "2026-11-30",
+      "verifiedAt": "2026-10-25",
+      "retireWhen": "The accepted upstream review workflow supports forks without an upstream private App key and reads review scripts from the trusted PR base commit.",
+      "notes": "Preserves Dependency Review, all quality gates, and the current permission set. Forks use the built-in workflow token; the upstream repository keeps its App token. Signed Actions comments are updated across retries."
     }
   ]
 }

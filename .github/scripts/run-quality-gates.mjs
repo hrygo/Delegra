@@ -57,7 +57,7 @@ export async function findExistingComment(fetchFromGitHub, token, repo, prNumber
     );
 
     const existing = comments.find(
-      c => (c.user.login === 'commitperclip[bot]' || c.user.login === 'commitperclip') &&
+      c => (c.user.login === 'commitperclip[bot]' || c.user.login === 'commitperclip' || c.user.login === 'github-actions[bot]') &&
            c.body.includes(COMMENT_SIGNATURE)
     );
     if (existing) return existing;

@@ -41,3 +41,12 @@ test('findExistingComment: returns null when no signed comment exists', async ()
 
   assert.equal(comment, null);
 });
+
+for (const login of ['github-actions[bot]', 'someone-else']) {
+  test(`findExistingComment: checks the signed Actions comment author (${login})`, async () => {
+    const comment = await findExistingComment(async () => ([
+      { id: 3, user: { login }, body: 'Quality gate result.\n\n— commitperclip' },
+    ]), 'token', 'hrygo/Delegra', 10);
+    assert.equal(comment?.id ?? null, login === 'github-actions[bot]' ? 3 : null);
+  });
+}
