@@ -243,26 +243,36 @@ describe("native ACPX execution closure", () => {
     await expect(stat(snapshotRoot)).rejects.toMatchObject({ code: "ENOENT" });
   });
   it("retains spawned native bytes until the exact child exits", async () => {
-    const declaration = await fixture({ script: '#!/bin/sh\nprintf ready\nexec sleep 1000\n' });
+    const declaration = await fixture({ script: '#!/bin/sh\nprintf ready\nIFS= read -r release || :\n' });
     const creatingStart = vi.mocked(mkdir).mock.calls.length;
     const lease = await (await verifyNativeAcpxInstallation(declaration)).openCommand();
     const snapshotRoot = dirname(String(vi.mocked(mkdir).mock.calls[creatingStart]![0]));
     const child = lease.spawn();
     const exited = once(child, "close");
+    const readiness = new AbortController();
     child.stderr!.resume();
     let retired = false;
     let closing: Promise<void> | undefined;
+    let failure: unknown;
     try {
-      await once(child.stdout!, "data");
+      await Promise.race([
+        once(child.stdout!, "data", { signal: readiness.signal }),
+        exited.then(([code, signal]) => { throw new Error(`Native fixture exited before readiness: code=${code}, signal=${signal}`); }),
+      ]);
       closing = lease.close().then(() => { retired = true; });
+      void closing.catch(() => undefined);
       await new Promise<void>(resolve => setImmediate(resolve));
       expect(retired).toBe(false);
       expect((await stat(snapshotRoot)).isDirectory()).toBe(true);
+    } catch (error) {
+      failure = error;
     } finally {
-      child.kill("SIGTERM");
-      await exited;
-      await closing;
+      readiness.abort();
+      child.stdin!.end();
+      const cleanup = await Promise.allSettled([exited, closing ?? lease.close()]);
+      failure ??= cleanup.find(result => result.status === "rejected")?.reason;
     }
+    if (failure !== undefined) throw failure;
     await expect(stat(snapshotRoot)).rejects.toMatchObject({ code: "ENOENT" });
   });
   it("reports exit-triggered native deletion failure and retries only its retained cleanup", async () => {
@@ -288,7 +298,7 @@ describe("native ACPX execution closure", () => {
     await expect(stat(snapshotRoot)).rejects.toMatchObject({ code: "ENOENT" });
   });
   it("bounds retirement of a surviving native child and retains bytes for cleanup retry", async () => {
-    const declaration = await fixture({ script: '#!/bin/sh\nprintf ready\nexec sleep 1000\n' });
+    const declaration = await fixture({ script: '#!/bin/sh\nprintf ready\nIFS= read -r release || :\n' });
     const creatingStart = vi.mocked(mkdir).mock.calls.length;
     const lease = await (await verifyNativeAcpxInstallation(declaration)).openCommand();
     const snapshotRoot = dirname(String(vi.mocked(mkdir).mock.calls[creatingStart]![0]));
@@ -310,7 +320,7 @@ describe("native ACPX execution closure", () => {
       expect((await stat(snapshotRoot)).isDirectory()).toBe(true);
     } finally {
       vi.useRealTimers();
-      child.kill("SIGTERM");
+      child.stdin!.end();
       await exited;
       await closing?.catch(() => undefined);
       await lease.close();

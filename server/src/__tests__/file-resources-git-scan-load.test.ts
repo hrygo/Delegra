@@ -138,14 +138,23 @@ describe("workspace Git scan route load regression", () => {
     // accept/close races can reset clients before they reach the scheduler.
     const server = app.listen(0, "127.0.0.1");
     await new Promise<void>(resolve => server.once("listening", resolve));
-    const pendingResponses = Array.from({ length: 500 }, (_, index) => request(server)
-      .get(`/api/issues/issue-${index}/file-resources/list`)
-      .set("x-test-actor", `actor-${index % 73}`)
-      .query({ mode: "changed" })
-      .then((response) => response));
-    // Observe every client rejection immediately, including on assertion failure.
-    const settledResponses = Promise.allSettled(pendingResponses);
+    const pendingResponses: Array<Promise<PromiseSettledResult<request.Response>>> = [];
     try {
+      for (let index = 0; index < 500; index += 1) {
+        const response = request(server)
+          .get(`/api/issues/issue-${index}/file-resources/list`)
+          .set("x-test-actor", `actor-${index % 73}`)
+          .query({ mode: "changed" })
+          .timeout({ deadline: 30_000 })
+          .then((result) => result);
+        pendingResponses.push(Promise.allSettled([response]).then(([result]) => result!));
+        if ((index + 1) % 64 === 0) {
+          await vi.waitFor(() => {
+            const snapshot = scheduler.snapshot();
+            expect(snapshot.activeCount + snapshot.totals.singleFlightJoins).toBeGreaterThanOrEqual(index + 1);
+          }, { timeout: 15_000, interval: 20 });
+        }
+      }
       await vi.waitFor(
         () => expect(scheduler.snapshot().totals.singleFlightJoins).toBe(498),
         { timeout: 15_000, interval: 20 },
@@ -165,7 +174,7 @@ describe("workspace Git scan route load regression", () => {
       expect(healthP99Ms).toBeLessThan(250);
 
       releaseScans();
-      const responses = (await settledResponses).map(result => {
+      const responses = (await Promise.all(pendingResponses)).map(result => {
         if (result.status === "rejected") throw result.reason;
         return result.value;
       });
@@ -189,9 +198,10 @@ describe("workspace Git scan route load regression", () => {
       });
     } finally {
       releaseScans();
+      const serverClosed = new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
       server.closeAllConnections();
-      await settledResponses;
-      await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+      await Promise.all(pendingResponses);
+      await serverClosed;
     }
   }, 60_000);
 
