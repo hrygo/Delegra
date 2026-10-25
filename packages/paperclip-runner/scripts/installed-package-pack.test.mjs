@@ -112,8 +112,8 @@ for (const useFiles of [true, false]) {
       NPM_CONFIG_CACHE: join(home, "cache"), NPM_CONFIG_UPDATE_NOTIFIER: "false" };
     const pack = async (input, label) => {
       const output = join(root, label); await mkdir(output);
-      const rows = JSON.parse(execFileSync("npm", ["pack", input, "--ignore-scripts", "--json", "--pack-destination", output],
-        { cwd: output, env, encoding: "utf8", timeout: 60_000, maxBuffer: 1024 * 1024 }));
+      const rows = Object.values(JSON.parse(execFileSync("npm", ["pack", input, "--ignore-scripts", "--json", "--pack-destination", output],
+        { cwd: output, env, encoding: "utf8", timeout: 60_000, maxBuffer: 1024 * 1024 })));
       assert.equal(rows.length, 1);
       return { files: rows[0].files, archive: await readFile(join(output, rows[0].filename)) };
     };
