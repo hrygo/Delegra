@@ -540,9 +540,17 @@ export function agentEnvironmentTestService(db: Db, pluginWorkerManager?: Plugin
     if (projectAuthProvider === "openai" && !taskOnly) {
       const cwd = resolveAdapterExecutionTargetCwd(context.executionTarget,
         typeof context.config.cwd === "string" ? context.config.cwd : undefined, process.cwd());
-      await ensureAdapterExecutionTargetDirectory(`ai-auth-probe-${randomUUID()}`, context.executionTarget, cwd, {
-        cwd, env: {}, createIfMissing: true,
-      });
+      try {
+        await ensureAdapterExecutionTargetDirectory(`ai-auth-probe-${randomUUID()}`, context.executionTarget, cwd, {
+          cwd, env: {}, createIfMissing: true,
+        });
+      } catch (error) {
+        return {
+          adapterType, status: "fail" as const, testedAt: new Date().toISOString(),
+          checks: [{ code: "codex_cwd_invalid", level: "error" as const,
+            message: error instanceof Error ? error.message : "Invalid working directory", detail: cwd }],
+        };
+      }
       context = {
         ...context,
         config: { ...context.config, cwd },
