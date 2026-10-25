@@ -5,8 +5,8 @@
     "deploy": "deploy"
   },
   "currentDeployment": {
-    "tag": "deploy/v2026.1024.0-canary.7-r4",
-    "commit": "51af92f937dc927f98b6d045fe6450df5b4a8065",
+    "tag": "deploy/v2026.1024.0-canary.7-r5",
+    "commit": "96fc2f47df9419e87fc4e24347e3d5d9ba115641",
     "base": "canary/v2026.1024.0-canary.7",
     "patches": [
       "managed-codex-project-auth",
