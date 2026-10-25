@@ -829,9 +829,13 @@ describeEmbeddedPostgres("reconstructable Git expiration", () => {
   it("describes an unexpected inspection failure without the command or credentials", async () => {
     const f = await fixture();
     await fs.writeFile(path.join(f.cwd, ".git"), `gitdir: ${path.join(f.cwd, "missing-admin")}\n`);
+    const inspection = spawnSync("git", ["rev-parse", "--is-inside-work-tree"], { cwd: f.cwd, env: gitEnv, encoding: "utf8" });
+    expect(inspection.status).toBe(128);
+    expect(inspection.stderr.trim()).not.toBe("");
     const result = await f.expire();
     expect(result).toMatchObject({ expired: false, skipReason: "inspection_failed",
-      failure: { name: "Error", code: expect.any(String), at: expect.stringMatching(/^at /), stderr: expect.stringContaining("not a git repository") } });
+      failure: { name: "Error", code: String(inspection.status), at: expect.stringMatching(/^at /), stderr: inspection.stderr.trim().slice(0, 500) } });
+    expect(result.failure).not.toHaveProperty("message");
     expect(await exists(f.cwd)).toBe(true);
   });
 
