@@ -308,7 +308,9 @@ that the commit is contained in `deploy`, and that every listed patch exists.
 
 ## 7. Branch protection and repository settings
 
-Keep `master` as the GitHub default branch.
+Keep `master` as the GitHub default branch until the operator approves the CI
+bootstrap in section 3. After that approved transition, use `deploy` as the
+default branch and retain every deploy protection below.
 
 | Setting | `master` | `deploy` |
 | --- | --- | --- |
