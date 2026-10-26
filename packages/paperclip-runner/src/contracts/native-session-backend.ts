@@ -47,6 +47,7 @@ export interface NativeSessionRecoveryOptions {
 }
 
 export interface PersistedNativeSession {
+  codexLaunchContext?: import("./codex-launch-policy.js").FrozenCodexLaunchContext;
   backendKind: NativeSessionBackendDescriptor["kind"];
   driverKind?: string | null;
   sessionId: string;

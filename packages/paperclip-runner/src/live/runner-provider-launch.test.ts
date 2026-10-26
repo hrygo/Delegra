@@ -53,7 +53,10 @@ describe("built-in provider launch preparation", () => {
     const launch = createRunnerProviderLaunch(requirements, { ...environment,
       options: { environment: { HOME: "/execution/home" } } });
     expect(launch.args).toEqual(expect.arrayContaining(["app-server"]));
-    expect(JSON.stringify(launch.args)).toContain("paperclip-runner-workspace-read-only");
+    expect(launch.driver).toBe("codex_app_server_launch_policy_v1");
+    expect(launch).toHaveProperty("launchPolicy.planningFilesystem");
+    expect(JSON.stringify(launch.args)).not.toContain("filesystem");
+    expect(() => validatePreparedRunnerLaunch(requirements, { configurationId: "policy", requirementsDigest: runnerLaunchRequirementsDigest(requirements), provider: launch })).not.toThrow();
   });
 
   it("rejects missing managed profiles before provider launch", () => {

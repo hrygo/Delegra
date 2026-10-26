@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
 import { parseNativeRuntimeContext, retargetNativeSystemInstructions } from "../contracts/runtime-context.js";
 import { resolve } from "node:path";
-import { codexExecutableReadOnlyRoots } from "../drivers/codex/codex-security-config.js";
+import { codexExecutableReadOnlyRoots, createIsolatedCodexAppServerLaunch } from "../drivers/codex/codex-security-config.js";
+import { CODEX_POLICY_DRIVER, validateCodexLaunchPolicy } from "../drivers/codex/codex-launch-policy.js";
 import { createIsolatedCodexAppServerArgs } from "../drivers/codex/codex-app-server-driver.js";
 import { validatePreparedLaunchWorkingDirectory } from "../drivers/codex/codex-boundaries.js";
 import { usesPreconfiguredHome } from "../drivers/preconfigured-home.js";
@@ -105,6 +106,12 @@ export function validatePreparedRunnerLaunch(
     || prepared.requirementsDigest !== runnerLaunchRequirementsDigest(requirements)
     || !prepared.provider || typeof prepared.provider !== "object") reject();
   const descriptor = prepared.provider;
+  if (requirements.provider === "codex") {
+    if (descriptor.launchPolicy !== undefined) {
+      try { validateCodexLaunchPolicy(descriptor.launchPolicy); } catch { reject(); }
+      if (descriptor.driver !== CODEX_POLICY_DRIVER) reject();
+    } else if (descriptor.driver !== "codex_app_server") reject();
+  }
   if (!requirements.runtimeContext && descriptor.runtimeContext != null) reject();
   if (descriptor.kind !== requirements.provider || descriptor.model !== requirements.model) reject();
   if (requirements.provider === "codex" && (descriptor.approvalPolicy !== requirements.approvalPolicy
@@ -122,8 +129,9 @@ export function validatePreparedRunnerLaunch(
     providerNodeCommand: "", opencodeProxyPath: "", acpxSidecarPath: "", codexCommand: "",
   });
   const hostFields = new Set(["command", "args", "sidecarCommand", "sidecarArgs", "runtimeDirectory", "cwd",
-    "preconfiguredHome", "externallySandboxed", "runtimeContext", "instructions"]);
+    "preconfiguredHome", "externallySandboxed", "runtimeContext", "instructions", "launchPolicy"]);
   for (const [key, value] of Object.entries(expected)) {
+    if (key === "driver" && requirements.provider === "codex") continue;
     if (!hostFields.has(key) && JSON.stringify(value) !== JSON.stringify(descriptor[key])) reject();
   }
   if ("cwd" in expected) {
@@ -210,6 +218,14 @@ export function createRunnerProviderLaunch(
   }
   const selectedAcpxMode = provider === "acpx"
     ? resolveAcpxProviderMode(acpxProfile!.agent, settings.acpxMode) : undefined;
+  const codexLaunch = provider === "codex" && input.options.codexArgs === undefined
+    ? createRunnerdCodexAppServerLaunch({ environment: input.options.environment, codexHome, externallySandboxed: input.options.externallySandboxed === true, readOnly: requirements.readOnly,
+      workingDirectory: input.cwd, runtimeStateRoot: input.options.runnerFilesystemRoot ?? input.root,
+      codexCommand: effectiveCodexCommand, instructionWorkingCopyRoot: runtimeContext?.instructions.workingCopy?.rootPath,
+      disableProjectInstructions: input.options.disableCodexProjectInstructions,
+      readOnlyRoots: [...trustedRuntimeReadOnlyRoots(input.options.environment), ...(runtimeContext
+        ? [resolve(codexHome, "skills"), runtimeContext.instructions.bundle.rootPath, ...runtimeContext.skills.map(skill => skill.bundle.rootPath)] : [])] })
+    : undefined;
   return provider === "acpx"
           ? {
               kind: "acpx",
@@ -293,7 +309,8 @@ export function createRunnerProviderLaunch(
                   driver:
                     provider === "opencode"
                       ? "opencode_server"
-                      : "codex_app_server",
+                      : codexLaunch ? CODEX_POLICY_DRIVER : "codex_app_server",
+                  ...(codexLaunch ? { launchPolicy: codexLaunch.launchPolicy } : {}),
                   providerVersion:
                     provider === "opencode" ? "1.18.34" : "codex-app-server-v1",
                   command:
@@ -303,7 +320,7 @@ export function createRunnerProviderLaunch(
                   args:
                     provider === "opencode"
                       ? [opencodeProxyPath]
-                      : (input.options.codexArgs ??
+                      : (codexLaunch?.args ?? input.options.codexArgs ??
                         createRunnerdCodexAppServerArgs({
                           environment: input.options.environment,
                           codexHome,
@@ -333,7 +350,7 @@ export function createRunnerProviderLaunch(
                     requirements.approvalPolicy,
                   externallySandboxed:
                     provider === "codex" &&
-                    input.options.externallySandboxed === true,
+                    (codexLaunch?.launchPolicy.externallySandboxed ?? input.options.externallySandboxed === true),
                   ...(provider === "codex" && requirements.readOnly ? { readOnly: true } : {}),
                   instructions:
                     provider === "codex"
@@ -430,4 +447,19 @@ export function createRunnerdCodexAppServerArgs(input: {
     args.unshift("-c", `projects={${JSON.stringify(input.workingDirectory)}={trust_level="trusted"}}`);
   }
   return args;
+}
+
+export function createRunnerdCodexAppServerLaunch(input: Parameters<typeof createRunnerdCodexAppServerArgs>[0] & { externallySandboxed?: boolean; readOnly?: boolean }) {
+  const launch = createIsolatedCodexAppServerLaunch({ ...input.environment,
+    ...(input.externallySandboxed === undefined ? {} : { PAPERCLIP_RUNNER_EXTERNAL_SANDBOX: input.externallySandboxed ? "1" : "0" }),
+    HOME: usesPreconfiguredHome(input.environment) ? input.environment?.HOME : input.codexHome, CODEX_HOME: input.codexHome },
+    [...(input.readOnlyRoots ?? []), ...codexExecutableReadOnlyRoots(input.environment ?? {}, input.codexCommand)],
+    input.instructionWorkingCopyRoot,
+    usesPreconfiguredHome(input.environment) && input.runtimeStateRoot ? [input.runtimeStateRoot] : []);
+  if (input.readOnly) launch.args = launch.args.filter(arg => arg !== "--dangerously-bypass-approvals-and-sandbox");
+  if (input.disableProjectInstructions) launch.args.unshift("-c", "project_doc_max_bytes=0");
+  if (usesPreconfiguredHome(input.environment) && input.workingDirectory) {
+    launch.args.unshift("-c", `projects={${JSON.stringify(input.workingDirectory)}={trust_level="trusted"}}`);
+  }
+  return launch;
 }

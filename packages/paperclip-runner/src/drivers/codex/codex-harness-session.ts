@@ -54,7 +54,8 @@ import {
   mapTerminalTurn,
   terminalReplayConflict,
 } from "./codex-session-terminal.js";
-import { boundedText, record, text, userInput } from "./codex-driver-values.js";
+import { boundedText, record, text, userInput, parseProviderIdentity } from "./codex-driver-values.js";
+import { frozenCodexLookupToken } from "./codex-launch-policy.js";
 
 export class CodexHarnessSession
   extends CodexSessionState
@@ -113,13 +114,29 @@ export class CodexHarnessSession
       throw new Error("codex_run_attach_busy");
     }
     if (!input.runId) throw new Error("codex_run_attach_invalid");
-    await this.transport.attachRun?.({
-      runId: input.runId,
-      turnId: `turn_attachment_${randomUUID().replaceAll("-", "")}`,
-      itemId: `item_attachment_${randomUUID().replaceAll("-", "")}`,
-      ...(input.currentRunGrant ? { currentRunGrant: structuredClone(input.currentRunGrant) } : {}),
-    });
-    this.assertProtocolIntegrity();
+    try {
+      await this.transport.attachRun?.({
+        runId: input.runId,
+        turnId: `turn_attachment_${randomUUID().replaceAll("-", "")}`,
+        itemId: `item_attachment_${randomUUID().replaceAll("-", "")}`,
+        ...(input.currentRunGrant ? { currentRunGrant: structuredClone(input.currentRunGrant) } : {}),
+      });
+      this.assertProtocolIntegrity();
+      if (transportOwnsQuiescence && this.opened.providerIdentity?.kind === "codex_launch_policy_v1") {
+        // A settled new run may replace its run-scoped policy. Freeze the new
+        // authenticated identity before exposing a checkpoint for that run.
+        const current = record((await readCodexThreadState(this.transport, this.opened.threadId)).thread);
+        const identity = parseProviderIdentity(current.providerIdentity);
+        if (text(current.id) !== this.opened.threadId || (text(current.sessionId) || null) !== this.opened.providerSessionId
+          || identity?.kind !== "codex_launch_policy_v1") throw new Error("codex_run_attach_identity_unproven");
+        this.opened.providerIdentity = identity;
+      }
+    } catch (error) {
+      if (this.opened.providerIdentity?.kind === "codex_launch_policy_v1") {
+        this.failProtocol("codex_run_attach_unproven", "Structured policy attachment could not prove its new session identity");
+      }
+      throw error;
+    }
     if (transportOwnsQuiescence) {
       // Runnerd's attachment contract performs two durable readiness probes,
       // drains the settled provider tail, and rotates authority atomically.
@@ -808,8 +825,9 @@ export class CodexHarnessSession
     this.assertProtocolIntegrity();
     return {
       driverKind: this.driverKind,
+      ...(this.opened.frozenLaunchContext ? { codexLaunchContext: structuredClone(this.opened.frozenLaunchContext), providerRecoveryPolicy: "same_session_only" as const } : {}),
       workingDirectory: this.opened.context.workingDirectory,
-      driverSessionId: this.opened.threadId,
+      driverSessionId: this.opened.frozenLaunchContext ? frozenCodexLookupToken(this.opened.frozenLaunchContext) : this.opened.threadId,
       providerSessionId: this.opened.providerSessionId,
       ...(this.opened.providerIdentity === undefined
         ? {}

@@ -463,9 +463,10 @@ export interface AcpxSessionIdentity {
   providerLifetimeFenceCandidates: readonly [number, number, number];
 }
 
-export type PersistedHarnessProviderIdentity = AcpxSessionIdentity;
+export type PersistedHarnessProviderIdentity = AcpxSessionIdentity | import("./codex-launch-policy.js").CodexLaunchPolicyIdentity;
 
 export interface PersistedHarnessSession {
+  codexLaunchContext?: import("./codex-launch-policy.js").FrozenCodexLaunchContext;
   driverKind: string;
   /** Execution-host startup root, revalidated before a cold provider launch. */
   workingDirectory?: string;

@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { expect, it, vi } from "vitest";
 
+import type { CodexLaunchPolicy } from "../contracts/codex-launch-policy.js";
 import type { NativeExecutionInput } from "../contracts/native-execution.js";
 import type { CodexWorkingDirectoryAuthority } from "../drivers/codex/codex-boundaries.js";
 import { createNativeSessionBackend } from "../index.js";
@@ -33,20 +34,24 @@ function execution(): NativeExecutionInput {
 }
 
 /** Core's plugin-backed backend: no host environment, runnerd owns process launch. */
-async function pluginBackend(root: string, cwd: string, authority: CodexWorkingDirectoryAuthority) {
-  const binary = defaultCapabilityRunnerdBinary();
+async function pluginBackend(root: string, cwd: string, authority: CodexWorkingDirectoryAuthority, launchPolicy?: CodexLaunchPolicy | ((runId: string) => CodexLaunchPolicy), runnerBinary = defaultCapabilityRunnerdBinary(), sessionRunId = identity.runId, prpIdentity = { ...identity, runId: sessionRunId }) {
+  const binary = runnerBinary;
   const runnerArtifact = { version: "0.3.0", digest: `sha256:${createHash("sha256").update(await readFile(binary)).digest("hex")}` };
-  const prepareLaunch = vi.fn(async (requirements: RunnerProviderLaunchRequirements, recovery?: PreparedRunnerProviderLaunch) =>
-    recovery ?? { configurationId: `plugin-${requirements.identity.runId}`, requirementsDigest: runnerLaunchRequirementsDigest(requirements),
-      provider: createRunnerProviderLaunch(requirements, { options: { codexArgs: ["--state-file", join(root, "fake-codex-state.json"),
-        "--request-log", join(root, "codex-requests.jsonl")] }, root, cwd, codexHome: join(root, "guest-codex-home"),
-      codexCommand: fakeCodex, providerNodeCommand: process.execPath, opencodeProxyPath: "", acpxSidecarPath: "" }) });
+  const prepareLaunch = vi.fn(async (requirements: RunnerProviderLaunchRequirements, recovery?: PreparedRunnerProviderLaunch) => {
+    if (recovery) return recovery;
+    const provider = createRunnerProviderLaunch(requirements, { options: { codexArgs: ["--state-file", join(root, "fake-codex-state.json"),
+      "--request-log", join(root, "codex-requests.jsonl")] }, root, cwd, codexHome: join(root, "guest-codex-home"),
+      codexCommand: fakeCodex, providerNodeCommand: process.execPath, opencodeProxyPath: "", acpxSidecarPath: "" });
+    const policy = typeof launchPolicy === "function" ? launchPolicy(requirements.identity.runId) : launchPolicy;
+    return { configurationId: `plugin-${requirements.identity.runId}`, requirementsDigest: runnerLaunchRequirementsDigest(requirements),
+      provider: policy ? { ...provider, driver: "codex_app_server_launch_policy_v1", launchPolicy: policy, externallySandboxed: policy.externallySandboxed } : provider };
+  });
   const launches: Array<NodeJS.ProcessEnv> = [];
   const registered = new WeakSet<object>();
-  const backend = createNativeSessionBackend(execution(), {
+  const backend = createNativeSessionBackend({ ...execution(), binding: { ...execution().binding, runId: sessionRunId } }, {
     runnerInstanceId: identity.runnerInstanceId, environment: {}, workingDirectoryAuthority: authority,
     codexTransportFactory: recovery => createCapabilityRunnerdCodexTransport({
-      provider: "codex", stateDirectory: join(root, "state"), runnerArtifact, prepareLaunch, prpIdentity: identity,
+      runnerBinary: binary, provider: "codex", stateDirectory: join(root, "state"), runnerArtifact, prepareLaunch, prpIdentity,
       externallySandboxed: true, baseInstructions: recovery?.baseInstructions, resumeProviderSession: recovery?.persistedSession,
       resumeActiveTurnId: recovery?.persistedSession?.activeTurnId ?? null,
       controlPlaneRegistration: async controlPlane => {
@@ -104,8 +109,8 @@ it.each([
 
     const restarted = await pluginBackend(root, join(root, "unused"), "runner_prepared_launch");
     const recovered = await restarted.backend.recoverSession!(snapshot, { signal: new AbortController().signal });
-    expect(recovered).toMatchObject({ recovered: true });
     if (!recovered.recovered) throw new Error(recovered.reason);
+    expect(recovered).toMatchObject({ recovered: true });
     expect((await recovered.session.snapshot()).workingDirectory).toBe(cwd);
     // Recovery reuses the saved preparation instead of resolving a new directory.
     expect(restarted.prepareLaunch.mock.calls[0]![1]).toMatchObject({ configurationId: "plugin-run" });
@@ -157,3 +162,66 @@ it.each([
     expect(registration).not.toHaveBeenCalled(); expect(launch).not.toHaveBeenCalled();
   } finally { await rm(root, { recursive: true, force: true }); }
 });
+
+
+it("accepts a real warm attach receipt for the shared Unicode entry-array policy", async () => {
+  const root = await mkdtemp(join(tmpdir(), "runner-policy-warm-"));
+  const fixture = JSON.parse(await readFile(new URL("../../test/fixtures/codex-launch-policy-unicode.json", import.meta.url), "utf8"));
+  const changedPolicy = structuredClone(fixture.policy) as CodexLaunchPolicy;
+  changedPolicy.networkAccess = true;
+  for (const entries of [changedPolicy.defaultFilesystem, changedPolicy.planningFilesystem]) {
+    entries.push({ path: "/skills/new-warm-root", access: "read" });
+    entries.sort((a, b) => Buffer.compare(Buffer.from(a.path), Buffer.from(b.path)));
+  }
+  const policyForRun = (runId: string) => runId === "changed-policy-run" ? changedPolicy : fixture.policy;
+  let phase = "initial open";
+  try {
+    const { backend } = await pluginBackend(root, root, "runner_prepared_launch", policyForRun);
+    const session = await backend.openSession({ identity: sessionIdentity });
+    const before = await session.snapshot();
+    phase = "first warm";
+    await session.attachRun!({ identity: { ...sessionIdentity, runId: "unicode-warm-run" } });
+    const after = await session.snapshot();
+    expect(after.identity.runId).toBe("unicode-warm-run");
+    expect(after.providerSessionId).toBe(before.providerSessionId);
+    expect(after.providerIdentity).toMatchObject({ kind: "codex_launch_policy_v1" });
+    // run.attach is acknowledged by runnerd after both owners hash the durable
+    // payload. Dynamic paths stay array values throughout that receipt boundary.
+    await session.close({ reason: "Unicode receipt verified" });
+    const statePath = join(root, "state/control-plane/control-plane-state.json");
+    const stored = JSON.parse(await readFile(statePath, "utf8"));
+    // Rotation has already compacted the prior session.started identity out of
+    // the new run's journal. Assert that this is a real identity-free replay.
+    expect(stored.committedEvents.some((event: any) => event.envelope?.payload?.payload?.providerIdentity?.kind === "codex_launch_policy_v1")).toBe(false);
+    const cold = await pluginBackend(root, root, "runner_prepared_launch", policyForRun, undefined, "unicode-warm-run", stored.identity);
+    phase = "first cold";
+    const recovered = await cold.backend.recoverSession!(after, { signal: new AbortController().signal });
+    if (!recovered.recovered) throw new Error(recovered.reason);
+    expect(recovered).toMatchObject({ recovered: true });
+    expect((await recovered.session.snapshot()).providerIdentity).toEqual(after.providerIdentity);
+    phase = "changed warm";
+    await recovered.session.attachRun!({ identity: { ...sessionIdentity, runId: "changed-policy-run" } });
+    const changed = await recovered.session.snapshot();
+    expect(changed.providerIdentity).not.toEqual(after.providerIdentity);
+    expect(changed.providerSessionId).toBe(after.providerSessionId);
+    await recovered.session.close({ reason: "Changed policy checkpoint frozen" });
+    const finalState = JSON.parse(await readFile(statePath, "utf8"));
+    const finalOwner = await pluginBackend(root, root, "runner_prepared_launch", policyForRun, undefined, "changed-policy-run", finalState.identity);
+    phase = "changed cold";
+    const finalRecovery = await finalOwner.backend.recoverSession!(changed, { signal: new AbortController().signal });
+    if (!finalRecovery.recovered) throw new Error(finalRecovery.reason);
+    expect((await finalRecovery.session.snapshot()).providerIdentity).toEqual(changed.providerIdentity);
+    await finalRecovery.session.close({ reason: "Changed policy cold recovery verified" });
+  } catch (error) { throw new Error(`${phase}: ${String(error)}`); } finally { await rm(root, { recursive: true, force: true }); }
+}, 30_000);
+
+
+it.skipIf(!process.env.PAPERCLIP_LEGACY_RUNNER_BINARY)("the installed old runner rejects the policy driver before spawning Codex", async () => {
+  const root = await mkdtemp(join(tmpdir(), "runner-policy-old-owner-"));
+  const fixture = JSON.parse(await readFile(new URL("../../test/fixtures/codex-launch-policy-unicode.json", import.meta.url), "utf8"));
+  try {
+    const { backend } = await pluginBackend(root, root, "runner_prepared_launch", fixture.policy, process.env.PAPERCLIP_LEGACY_RUNNER_BINARY!);
+    await expect(backend.openSession({ identity: sessionIdentity })).rejects.toThrow("local runner provider must be");
+    await expect(readFile(join(root, "codex-requests.jsonl"))).rejects.toMatchObject({ code: "ENOENT" });
+  } finally { await rm(root, { recursive: true, force: true }); }
+}, 30_000);

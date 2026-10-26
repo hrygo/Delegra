@@ -69,9 +69,332 @@ fn provider_config(directory: &Path, switches: &[&str]) -> CodexProviderConfig {
         approval_policy: "never".to_owned(),
         externally_sandboxed: false,
         read_only: false,
+        launch_policy: None,
+        include_collaboration_mode_instructions: None,
         include_skill_instructions: None,
         conversation_mode: None,
     }
+}
+
+#[test]
+fn structured_policy_survives_json_and_reaches_start_resume_and_turn() {
+    for (read_only, external, network_access) in [
+        (false, false, false),
+        (false, false, true),
+        (true, false, false),
+        (true, false, true),
+        (false, true, false),
+        (false, true, true),
+        (true, true, false),
+        (true, true, true),
+    ] {
+        let directory = temporary_directory("structured-policy");
+        let log = directory.join("requests.jsonl");
+        let base = provider_config(&directory, &["--request-log", log.to_str().unwrap()]);
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../../test/fixtures/codex-launch-policy-unicode.json"
+        ))
+        .unwrap();
+        let mut value = serde_json::to_value(base).unwrap();
+        value["driver"] = json!(paperclip_runner_core::codex_launch_policy::POLICY_DRIVER);
+        value["launchPolicy"] = fixture["policy"].clone();
+        for key in ["defaultFilesystem", "planningFilesystem"] {
+            let entries = value["launchPolicy"][key].as_array_mut().unwrap();
+            for index in 0..20 {
+                entries.push(json!({"path": format!("/skills/{index}-{}-😀", "x".repeat(180)), "access": "read"}));
+            }
+            entries.sort_by(|a, b| a["path"].as_str().unwrap().cmp(b["path"].as_str().unwrap()));
+        }
+        assert!(serde_json::to_vec(&value["launchPolicy"]).unwrap().len() > 4096);
+        value["launchPolicy"]["externallySandboxed"] = json!(external);
+        value["launchPolicy"]["networkAccess"] = json!(network_access);
+        value["externallySandboxed"] = json!(external);
+        value["readOnly"] = json!(read_only);
+        value["includeSkillInstructions"] = json!(true);
+        value["includeCollaborationModeInstructions"] = json!(false);
+        let config: CodexProviderConfig = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(
+            serde_json::to_value(&config).unwrap()["launchPolicy"],
+            value["launchPolicy"]
+        );
+        let mut first = CodexProvider::start(&config, None).expect("structured policy starts");
+        let thread = first.thread_id().to_owned();
+        first.start_turn("Synthetic turn", &config.cwd).unwrap();
+        first.shutdown().unwrap();
+        let mut resumed =
+            CodexProvider::start(&config, Some(&thread)).expect("structured policy resumes");
+        resumed.shutdown().unwrap();
+        let calls: Vec<Value> = fs::read_to_string(&log)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        let opened: Vec<&Value> = calls
+            .iter()
+            .filter(|call| {
+                matches!(
+                    call["method"].as_str(),
+                    Some("thread/start" | "thread/resume")
+                )
+            })
+            .collect();
+        assert_eq!(opened.len(), 2);
+        for frame in &opened {
+            assert_eq!(
+                frame["params"]["permissions"],
+                config.launch_policy.as_ref().unwrap().permission(read_only)
+            );
+            assert!(frame["params"].get("sandbox").is_none());
+        }
+        assert_eq!(opened[0]["params"]["config"], opened[1]["params"]["config"]);
+        assert_eq!(
+            opened[0]["params"]["config"]["skills.include_instructions"],
+            true
+        );
+        assert_eq!(
+            opened[0]["params"]["config"]["include_collaboration_mode_instructions"],
+            false
+        );
+        let turn = calls
+            .iter()
+            .find(|call| call["method"] == "turn/start")
+            .unwrap();
+        if external && !read_only {
+            assert_eq!(turn["params"]["sandboxPolicy"]["type"], "externalSandbox");
+            assert_eq!(
+                turn["params"]["sandboxPolicy"]["networkAccess"],
+                if network_access {
+                    "enabled"
+                } else {
+                    "disabled"
+                }
+            );
+            assert!(turn["params"].get("permissions").is_none());
+        } else {
+            assert_eq!(
+                turn["params"]["permissions"],
+                config.launch_policy.as_ref().unwrap().permission(read_only)
+            );
+        }
+        fs::remove_dir_all(directory).unwrap();
+    }
+}
+
+#[test]
+fn private_config_responses_never_enter_native_trace_or_diagnostics() {
+    let directory = temporary_directory("private-config");
+    for mode in ["success", "error", "malformed", "unsupported"] {
+        let trace = directory.join(format!("{mode}.jsonl"));
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "private_config_trace_subprocess",
+                "--exact",
+                "--ignored",
+                "--nocapture",
+            ])
+            .env("PAPERCLIP_PRIVATE_CONFIG_FIXTURE", mode)
+            .env("PAPERCLIP_PRIVATE_CONFIG_DIRECTORY", &directory)
+            .env("PAPERCLIP_PROVIDER_TRACE_PATH", &trace)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "private config helper failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        for bytes in [output.stdout, output.stderr, fs::read(trace).unwrap()] {
+            assert!(!String::from_utf8_lossy(&bytes).contains("synthetic-config-private-value"));
+        }
+    }
+    fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+#[ignore = "subprocess helper isolates native trace environment"]
+fn private_config_trace_subprocess() {
+    let Some(mode) = std::env::var("PAPERCLIP_PRIVATE_CONFIG_FIXTURE").ok() else {
+        return;
+    };
+    let directory = PathBuf::from(std::env::var_os("PAPERCLIP_PRIVATE_CONFIG_DIRECTORY").unwrap());
+    let pid_path = directory.join("private-config.pid");
+    let mut config = provider_config(
+        &directory,
+        &[
+            "--private-config-fixture",
+            &mode,
+            "--process-id-file",
+            pid_path.to_str().unwrap(),
+        ],
+    );
+    if mode == "unsupported" {
+        config.args.push("--unavailable-policy-preflight".into());
+    }
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../../../../test/fixtures/codex-launch-policy-unicode.json"
+    ))
+    .unwrap();
+    let mut policy = fixture["policy"].clone();
+    policy["shellEnvironmentPolicy"]["includeOnly"] = json!(["GH_TOKEN"]);
+    config.driver = paperclip_runner_core::codex_launch_policy::POLICY_DRIVER.to_owned();
+    config.launch_policy = Some(serde_json::from_value(policy).unwrap());
+    let error = match CodexProvider::start(&config, None) {
+        Ok(_) => panic!("private config must fail closed"),
+        Err(error) => error.to_string(),
+    };
+    assert!(error.contains(if mode == "success" {
+        "codex_launch_policy_environment_conflict"
+    } else {
+        "codex_launch_policy_preflight_unavailable"
+    }));
+    assert!(!error.contains("synthetic-config-private-value"));
+    assert!(!fs::read_to_string(directory.join("calls.log"))
+        .unwrap()
+        .contains("thread/start"));
+    #[cfg(unix)]
+    {
+        let pid = fs::read_to_string(pid_path).unwrap();
+        assert!(
+            !std::process::Command::new("/bin/kill")
+                .args(["-0", &pid])
+                .output()
+                .unwrap()
+                .status
+                .success(),
+            "preflight rejection must reap its exact child"
+        );
+    }
+}
+
+#[test]
+fn structured_policy_rebind_is_paired_and_preserves_protected_identity() {
+    let directory = temporary_directory("policy-rebind");
+    let log = directory.join("requests.jsonl");
+    let mut config = provider_config(&directory, &["--request-log", log.to_str().unwrap()]);
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../../../../test/fixtures/codex-launch-policy-unicode.json"
+    ))
+    .unwrap();
+    config.driver = paperclip_runner_core::codex_launch_policy::POLICY_DRIVER.to_owned();
+    config.launch_policy = Some(serde_json::from_value(fixture["policy"].clone()).unwrap());
+    let runner = durable_config(&directory);
+    let mut executor = CodexCommandExecutor::with_runner_config(&directory, &runner);
+    executor
+        .execute(&command(
+            "prepare",
+            1,
+            "run.prepare",
+            json!({"provider": config}),
+        ))
+        .unwrap();
+    executor
+        .execute(&command("open", 2, "session.open", json!({})))
+        .unwrap();
+    for _ in 0..8 {
+        poll_and_ack(&mut executor).unwrap();
+    }
+    let snapshot = executor
+        .execute(&command("probe", 3, "session.snapshot", json!({})))
+        .unwrap();
+    assert_eq!(snapshot.result["driver"], "codex_app_server");
+    assert_eq!(
+        snapshot.result["providerIdentity"]["kind"],
+        "codex_launch_policy_v1"
+    );
+    let mut next = config.clone();
+    next.launch_policy.as_mut().unwrap().network_access = true;
+    for (label, payload) in [
+        (
+            "only-args",
+            json!({"provider": config, "runtimeLaunchArgs": config.args}),
+        ),
+        (
+            "only-policy",
+            json!({"provider": config, "runtimeLaunchPolicy": next.launch_policy}),
+        ),
+        ("changed-model", {
+            let mut changed = serde_json::to_value(&next).unwrap();
+            changed["model"] = json!("tampered");
+            json!({"provider": changed, "runtimeLaunchArgs": next.args, "runtimeLaunchPolicy": next.launch_policy})
+        }),
+    ] {
+        assert!(executor
+            .execute(&command(label, 4, "run.attach", payload))
+            .is_err());
+    }
+    executor.execute(&command("attach", 5, "run.attach", json!({"provider": next, "runtimeLaunchArgs": next.args, "runtimeLaunchPolicy": next.launch_policy}))).unwrap();
+    executor
+        .execute(&command(
+            "turn",
+            6,
+            "turn.start",
+            json!({"text": "Synthetic rebound turn"}),
+        ))
+        .unwrap();
+    executor.shutdown().unwrap();
+    let calls: Vec<Value> = fs::read_to_string(log)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let resume = calls
+        .iter()
+        .rev()
+        .find(|call| call["method"] == "thread/resume")
+        .unwrap();
+    assert_eq!(
+        resume["params"]["config"]["permissions"]
+            [next.launch_policy.as_ref().unwrap().permission(false)]["network"]["enabled"],
+        true
+    );
+    fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn structured_policy_requires_positive_active_profile_attestation() {
+    for switches in [
+        vec!["--omit-active-profile"],
+        vec!["--returned-active-profile", "wrong-profile"],
+    ] {
+        let directory = temporary_directory("policy-attestation");
+        let mut config = provider_config(&directory, &switches);
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../../test/fixtures/codex-launch-policy-unicode.json"
+        ))
+        .unwrap();
+        config.driver = paperclip_runner_core::codex_launch_policy::POLICY_DRIVER.to_owned();
+        config.launch_policy = Some(serde_json::from_value(fixture["policy"].clone()).unwrap());
+        let error = match CodexProvider::start(&config, None) {
+            Ok(_) => panic!("missing profile attestation must fail"),
+            Err(error) => error.to_string(),
+        };
+        assert!(error.contains("codex_launch_policy_active_profile_mismatch"));
+        assert!(!fs::read_to_string(directory.join("calls.log"))
+            .unwrap()
+            .contains("turn/start"));
+        fs::remove_dir_all(directory).unwrap();
+    }
+}
+
+#[test]
+fn argv_diagnostics_report_bounds_without_values() {
+    let directory = temporary_directory("argument-bounds");
+    let mut config = provider_config(&directory, &[]);
+    config.args = vec![
+        "-c".into(),
+        format!(
+            "permissions.fixture.filesystem={}",
+            "private-value".repeat(400)
+        ),
+    ];
+    let error = config.validate().unwrap_err().to_string();
+    assert!(error.contains("index=1 key=permissions.fixture.filesystem bytes="));
+    assert!(error.contains("limit=4096"));
+    assert!(!error.contains("private-value"));
+    config.args = vec!["arbitrary-secret-key=\0private-value".into()];
+    let error = config.validate().unwrap_err().to_string();
+    assert!(error.contains("key=<argument>"));
+    assert!(!error.contains("arbitrary-secret"));
+    fs::remove_dir_all(directory).unwrap();
 }
 
 #[test]

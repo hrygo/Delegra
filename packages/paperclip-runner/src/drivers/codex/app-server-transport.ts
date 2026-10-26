@@ -328,6 +328,7 @@ function rpcErrorCode(value: unknown): number | null {
 }
 
 interface PendingRequest {
+  privateConfiguration: boolean;
   resolve: (value: Record<string, unknown>) => void;
   reject: (error: Error) => void;
 }
@@ -386,6 +387,7 @@ export class ProcessCodexAppServerTransport implements CodexAppServerTransport {
   readonly #maxBufferedOutputBytes: number;
   readonly #stdoutDecoder: BoundedLineDecoder;
   readonly #stderrDecoder: BoundedLineDecoder;
+  #privateConfigurationObserved = false;
 
   constructor(options: ProcessCodexTransportOptions = {}) {
     this.#onDiagnostic = options.onDiagnostic;
@@ -440,7 +442,9 @@ export class ProcessCodexAppServerTransport implements CodexAppServerTransport {
     );
     this.#stderrDecoder = new BoundedLineDecoder(
       MAX_DIAGNOSTIC_LINE_BYTES,
-      (line) => this.#onDiagnostic?.(redactCodexDiagnostic(line)),
+      // config/read may contain credentials; suppress this channel permanently
+      // after the private RPC, including delayed writes after its response.
+      (line) => { if (!this.#privateConfigurationObserved) this.#onDiagnostic?.(redactCodexDiagnostic(line)); },
       () =>
         this.#onDiagnostic?.(
           "codex app-server diagnostic line exceeded retention limit",
@@ -499,7 +503,8 @@ export class ProcessCodexAppServerTransport implements CodexAppServerTransport {
     }
     const id = this.#nextId++;
     return new Promise((resolve, reject) => {
-      this.#pending.set(id, { resolve, reject });
+      if (method === "config/read") this.#privateConfigurationObserved = true;
+      this.#pending.set(id, { resolve, reject, privateConfiguration: method === "config/read" });
       try {
         this.#write({ method, id, params });
       } catch (error) {
@@ -651,7 +656,7 @@ export class ProcessCodexAppServerTransport implements CodexAppServerTransport {
       if (hasError) {
         pending.reject(
           new CodexRpcError(
-            redactCodexDiagnostic(boundedJson(message.error)),
+            pending.privateConfiguration ? "codex_launch_policy_preflight_unavailable" : redactCodexDiagnostic(boundedJson(message.error)),
             rpcErrorCode(message.error),
           ),
         );

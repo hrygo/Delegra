@@ -3,6 +3,10 @@ import { writeManagedCodexObservability, redactObservabilityDiagnostic } from ".
 import { trustCodexStartupRoot } from "./codex-startup-trust.js";
 import { readCodexThreadState, readCodexTurnMetadata } from "./codex-history.js";
 import { codexExecutableReadOnlyRoots } from "./codex-security-config.js";
+import { createIsolatedCodexAppServerLaunch } from "./codex-security-config.js";
+import { CODEX_LOOKUP_PREFIX, codexLaunchDigest, codexLaunchPolicyArgs, codexLaunchPolicyConfig, codexLaunchPermission,
+  codexLaunchPolicyProfiles, checkCodexLaunchConfiguration, restoreFrozenCodexLaunchContext } from "./codex-launch-policy.js";
+import type { CodexLaunchPolicy, FrozenCodexLaunchContext } from "../../contracts/codex-launch-policy.js";
 
 import type {
   HarnessDriver,
@@ -41,10 +45,8 @@ import {
 } from "./codex-boundaries.js";
 import {
   codexCommandEnvironment,
-  createIsolatedCodexAppServerArgs,
   codexNetworkAccess,
   createSecuredCodexThreadParams,
-  createSkilllessCodexThreadConfig,
 } from "./codex-security-config.js";
 import {
   codexThreadLineage as lineageFromThread,
@@ -135,6 +137,7 @@ export class CodexAppServerDriver implements HarnessDriver {
     CodexAppServerDriverOptions["goalCapability"]
   >;
   readonly #persistedProcessIdentities = new WeakMap<object, string>();
+  readonly #launchPolicies = new WeakMap<object, CodexLaunchPolicy>();
 
   constructor(options: CodexAppServerDriverOptions) {
     this.#options = options;
@@ -288,6 +291,8 @@ export class CodexAppServerDriver implements HarnessDriver {
       const initialize = await cancellation.wait(this.#initialize(transport));
       const requestedMode =
         this.#options.requestedCollaborationMode ?? "default";
+      const launchPolicy = this.#launchPolicies.get(transport);
+      if (launchPolicy) await cancellation.wait(checkCodexLaunchConfiguration((method, params) => transport.request(method, params), launchPolicy, workingDirectory!));
       const threadParams = createSecuredCodexThreadParams(
         workingDirectory ?? "",
         requestedMode,
@@ -295,6 +300,10 @@ export class CodexAppServerDriver implements HarnessDriver {
         this.#options.includeSkillInstructions ?? false,
         this.#options.environment,
       );
+      if (launchPolicy) {
+        threadParams.config = { ...record(threadParams.config), ...codexLaunchPolicyConfig(launchPolicy) };
+        threadParams.permissions = codexLaunchPermission(launchPolicy, requestedMode);
+      }
       if (workingDirectory === null) {
         delete threadParams.cwd;
         delete threadParams.runtimeWorkspaceRoots;
@@ -332,6 +341,9 @@ export class CodexAppServerDriver implements HarnessDriver {
         initialize,
         workingDirectory,
         collaborationMode,
+        launchPolicy ? { policy: launchPolicy, collaborationMode: requestedMode, homeMode: usesPreconfiguredHome(this.#options.environment) ? "preconfigured" : "managed",
+          includeSkillInstructions: record(threadParams.config)["skills.include_instructions"] === true,
+          includeCollaborationModeInstructions: this.#options.includeCollaborationModeInstructions ?? true } : undefined,
       );
       const goal = await cancellation.wait(
         this.#discoverGoal(transport, opened.threadId),
@@ -371,6 +383,22 @@ export class CodexAppServerDriver implements HarnessDriver {
     },
   ): Promise<HarnessSessionRecoveryResult> {
     options.signal.throwIfAborted();
+    let frozen: FrozenCodexLaunchContext | undefined;
+    if (!this.#options.transportFactory) {
+      try {
+        if (!snapshot.codexLaunchContext) return { recovered: false, reason: "codex_legacy_launch_context_unavailable: fresh session required" };
+        frozen = restoreFrozenCodexLaunchContext(snapshot.driverSessionId, snapshot.codexLaunchContext);
+        if (snapshot.workingDirectory !== frozen.workingDirectory) throw new Error("codex_frozen_launch_working_directory_changed");
+        if (frozen.homeMode !== (usesPreconfiguredHome(this.#options.environment) ? "preconfigured" : "managed")) throw new Error("codex_frozen_launch_home_mode_changed");
+        if (snapshot.providerRecoveryPolicy !== "same_session_only" || snapshot.providerIdentity?.kind !== "codex_launch_policy_v1"
+          || snapshot.providerIdentity.digest !== codexLaunchDigest(frozen)) throw new Error("codex_frozen_launch_invalid");
+        const current = createIsolatedCodexAppServerLaunch(this.#options.environment, codexExecutableReadOnlyRoots(this.#options.environment ?? process.env), this.#options.instructionWorkingCopyRoot).launchPolicy;
+        if (codexLaunchDigest(current) !== codexLaunchDigest(frozen.policy)) throw new Error("codex_frozen_launch_environment_changed");
+        snapshot = { ...snapshot, driverSessionId: frozen.threadId };
+      } catch { return { recovered: false, reason: "codex_frozen_launch_invalid_or_environment_changed" }; }
+    } else if (snapshot.codexLaunchContext || snapshot.driverSessionId.startsWith(CODEX_LOOKUP_PREFIX)) {
+      return { recovered: false, reason: "codex_frozen_launch_transport_mismatch" };
+    }
     if (!this.#caps.resume) {
       return { recovered: false, reason: "resume capability is unavailable" };
     }
@@ -401,11 +429,13 @@ export class CodexAppServerDriver implements HarnessDriver {
         providerIdentity: snapshot.providerIdentity,
         activeTurnId: snapshot.activeTurnId,
       },
+      frozenLaunchContext: frozen,
     });
     const cancellation = bootstrapCancellation(transport, options.signal);
     try {
       await cancellation.wait(this.#persistProcessOwnership(transport));
       const initialize = await cancellation.wait(this.#initialize(transport));
+      if (frozen) await cancellation.wait(checkCodexLaunchConfiguration((method, params) => transport.request(method, params), frozen!.policy, frozen!.workingDirectory));
       const existing = await cancellation.wait(
         readCodexThreadState(transport, snapshot.driverSessionId),
       );
@@ -425,9 +455,8 @@ export class CodexAppServerDriver implements HarnessDriver {
         this.#options.workingDirectoryAuthority,
       );
       if (
-        this.#preparedLaunch() &&
-        snapshot.workingDirectory !== undefined &&
-        snapshot.workingDirectory !== workingDirectory
+        (frozen && workingDirectory !== frozen.workingDirectory) ||
+        (this.#preparedLaunch() && snapshot.workingDirectory !== undefined && snapshot.workingDirectory !== workingDirectory)
       ) {
         await cancellation.wait(cancellation.close());
         return {
@@ -441,11 +470,14 @@ export class CodexAppServerDriver implements HarnessDriver {
           threadId: snapshot.driverSessionId,
           ...createSecuredCodexThreadParams(
             workingDirectory,
-            this.#options.requestedCollaborationMode ?? "default",
-            this.#options.includeCollaborationModeInstructions ?? true,
-            this.#options.includeSkillInstructions ?? false,
+            frozen?.collaborationMode ?? this.#options.requestedCollaborationMode ?? "default",
+            frozen?.includeCollaborationModeInstructions ?? this.#options.includeCollaborationModeInstructions ?? true,
+            frozen?.includeSkillInstructions ?? this.#options.includeSkillInstructions ?? false,
             this.#options.environment,
           ),
+          ...(frozen ? { config: { ...record(createSecuredCodexThreadParams(workingDirectory, frozen.collaborationMode, frozen.includeCollaborationModeInstructions, frozen.includeSkillInstructions, this.#options.environment).config),
+            "skills.include_instructions": frozen.includeSkillInstructions, ...codexLaunchPolicyConfig(frozen.policy) },
+            permissions: codexLaunchPermission(frozen.policy, frozen.collaborationMode) } : {}),
           ...this.#instructionParams(this.#direct() ? "" : this.#baseInstructions()),
           approvalPolicy: this.#options.approvalPolicy ?? "never",
           ...(this.#options.model ? { model: this.#options.model } : {}),
@@ -459,7 +491,7 @@ export class CodexAppServerDriver implements HarnessDriver {
         this.#negotiateCollaborationMode(
           transport,
           response,
-          this.#options.requestedCollaborationMode ?? "default",
+          frozen?.collaborationMode ?? this.#options.requestedCollaborationMode ?? "default",
         ),
       );
       const opened = this.#openedThread(
@@ -467,6 +499,7 @@ export class CodexAppServerDriver implements HarnessDriver {
         initialize,
         workingDirectory,
         collaborationMode,
+        frozen,
       );
       if (opened.threadId !== snapshot.driverSessionId) {
         await cancellation.wait(cancellation.close());
@@ -687,6 +720,7 @@ export class CodexAppServerDriver implements HarnessDriver {
   }
 
   #transport(context?: {
+    frozenLaunchContext?: FrozenCodexLaunchContext;
     workingDirectory?: string;
     providerRecoveryPolicy?: PersistedHarnessSession["providerRecoveryPolicy"];
     persistedSession?: Pick<
@@ -706,16 +740,19 @@ export class CodexAppServerDriver implements HarnessDriver {
     if (!usesPreconfiguredHome(this.#options.environment) && !this.#options.transportFactory && this.#options.environment?.CODEX_HOME && workingDirectory) {
       trustCodexStartupRoot(this.#options.environment.CODEX_HOME, workingDirectory);
     }
-    return (
-      this.#options.transportFactory?.(context) ??
-      new ProcessCodexAppServerTransport({
+    if (this.#options.transportFactory) return this.#options.transportFactory(context);
+    const generated = context?.frozenLaunchContext
+      ? { args: codexLaunchPolicyArgs(context.frozenLaunchContext.policy), launchPolicy: context.frozenLaunchContext.policy }
+      : createIsolatedCodexAppServerLaunch(this.#options.environment, codexExecutableReadOnlyRoots(this.#options.environment ?? process.env), this.#options.instructionWorkingCopyRoot);
+    const transport = new ProcessCodexAppServerTransport({
         workingDirectory,
-        args: createIsolatedCodexAppServerArgs(this.#options.environment, codexExecutableReadOnlyRoots(this.#options.environment ?? process.env), this.#options.instructionWorkingCopyRoot),
+        args: generated.args,
         environment: createSanitizedCodexEnvironment(this.#options.environment),
         onDiagnostic: message => this.#options.onDiagnostic?.(redactObservabilityDiagnostic(message, this.#options.environment, this.#options.observability?.otelConfig)),
         processGroup: true,
-      })
-    );
+      });
+    this.#launchPolicies.set(transport, generated.launchPolicy);
+    return transport;
   }
 
   async #negotiateCollaborationMode(
@@ -837,6 +874,7 @@ export class CodexAppServerDriver implements HarnessDriver {
     initialize: Record<string, unknown>,
     expectedWorkingDirectory: string | null,
     collaborationMode: Record<string, unknown> | null,
+    launch?: Pick<FrozenCodexLaunchContext, "policy" | "collaborationMode" | "homeMode" | "includeSkillInstructions" | "includeCollaborationModeInstructions">,
   ): OpenedCodexThread {
     const thread = record(response.thread);
     const threadId = text(thread.id);
@@ -856,13 +894,13 @@ export class CodexAppServerDriver implements HarnessDriver {
       expectedWorkingDirectory,
       this.#options.workingDirectoryAuthority,
     );
-    const activePermissionProfile = record(thread.activePermissionProfile);
+    const activePermissionProfile = record(response.activePermissionProfile ?? thread.activePermissionProfile);
     const permissionProfileId = text(activePermissionProfile.id);
-    const requestedMode = this.#options.requestedCollaborationMode ?? "default";
+    const requestedMode = launch?.collaborationMode ?? this.#options.requestedCollaborationMode ?? "default";
     const requiredPermissionProfile =
-      text(createSecuredCodexThreadParams(workingDirectory, requestedMode, true, false, this.#options.environment).permissions);
+      launch ? codexLaunchPermission(launch.policy, requestedMode) : text(createSecuredCodexThreadParams(workingDirectory, requestedMode, true, false, this.#options.environment).permissions);
     if (
-      permissionProfileId.length > 0 &&
+      (launch !== undefined || permissionProfileId.length > 0) &&
       permissionProfileId !== requiredPermissionProfile
     ) {
       throw new Error(
@@ -873,10 +911,13 @@ export class CodexAppServerDriver implements HarnessDriver {
       ...activePermissionProfile,
       id: requiredPermissionProfile,
     };
-    const providerIdentity = parseProviderIdentity(thread.providerIdentity);
+    const frozenLaunchContext: FrozenCodexLaunchContext | undefined = launch ? { schema: "paperclip.codex.frozen-launch.v1", ...launch,
+      workingDirectory, threadId, providerSessionId, providerRecoveryPolicy: "same_session_only" } : undefined;
+    const providerIdentity = frozenLaunchContext ? { kind: "codex_launch_policy_v1" as const, digest: codexLaunchDigest(frozenLaunchContext) } : parseProviderIdentity(thread.providerIdentity);
     return {
       threadId,
       providerSessionId,
+      ...(frozenLaunchContext ? { frozenLaunchContext } : {}),
       ...(providerIdentity === undefined ? {} : { providerIdentity }),
       collaborationMode,
       context: {
@@ -893,14 +934,15 @@ export class CodexAppServerDriver implements HarnessDriver {
           boundedText(thread.modelProvider),
         ),
         workingDirectory,
-        collaborationMode: collaborationMode === null ? "default" : "plan",
+        collaborationMode: launch ? requestedMode : collaborationMode === null ? "default" : "plan",
         sandbox: {
           permissionProfile: boundedCodexValue(configuredPermissionProfile),
+          ...(launch ? { permissionProfiles: codexLaunchPolicyProfiles(launch.policy) } : {}),
           legacyPolicy: boundedCodexValue(response.sandbox ?? null),
           rootAccess: "none",
           minimalRuntimeAccess: "read",
           workspaceAccess: requestedMode === "plan" ? "read" : "write",
-          networkAccess: codexNetworkAccess(this.#options.environment),
+          networkAccess: launch?.policy.networkAccess ?? codexNetworkAccess(this.#options.environment),
           githubAuthenticationMode: this.#options.environment?.PAPERCLIP_GITHUB_AUTH_MODE ?? "managed",
         },
         approvalPolicy: boundedCodexValue(
@@ -916,10 +958,10 @@ export class CodexAppServerDriver implements HarnessDriver {
               .map((value) => boundedText(value))
           : [],
         instructionPolicy: {
-          skillInstructions: this.#options.includeSkillInstructions ?? false,
+          skillInstructions: launch?.includeSkillInstructions ?? this.#options.includeSkillInstructions ?? false,
           appInstructions: false,
           collaborationInstructions:
-            this.#options.includeCollaborationModeInstructions ?? true,
+            launch?.includeCollaborationModeInstructions ?? this.#options.includeCollaborationModeInstructions ?? true,
         },
         environmentKeys: Object.keys(
           codexCommandEnvironment(this.#options.environment),

@@ -48,6 +48,103 @@ import {
   type PrpEvent,
   type PrpStructuredRunResult,
 } from "./codex-app-server-driver.test-support.js";
+import { HarnessDriverBackend } from "../../backends/harness-driver-backend.js";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+
+it.each(["default", "plan"] as const)("freezes direct %s process context and unwraps checkpoint tokens only after validation", async collaborationMode => {
+  const root = mkdtempSync(join(tmpdir(), "codex-direct-policy-"));
+  const bin = join(root, "bin"); mkdirSync(bin);
+  const fake = resolve(import.meta.dirname, "../../../runner/target/debug/fake-codex-app-server");
+  const log = join(root, "requests.jsonl");
+  writeFileSync(join(bin, "codex"), `#!/bin/sh\nexec ${JSON.stringify(fake)} --returned-cwd ${JSON.stringify(WORKSPACE)} --state-file ${JSON.stringify(join(root, "fake-state.json"))} --request-log ${JSON.stringify(log)} "$@"\n`, { mode: 0o700 });
+  const options = { taskEnvelope: createCodexTaskEnvelope({ objective: "Synthetic launch test" }),
+    environment: { HOME: root, CODEX_HOME: join(root, "home"), PATH: `${bin}:/usr/bin:/bin` },
+    includeSkillInstructions: true, includeCollaborationModeInstructions: false, requestedCollaborationMode: collaborationMode };
+  try {
+    const session = await new CodexAppServerDriver(options).openSession({ runId: "policy-run", normalizedSessionId: "policy-session", workingDirectory: WORKSPACE });
+    await session.startTurn({ message: { role: "user", text: "Synthetic turn" } });
+    await collectUntilTerminal(session.events());
+    const snapshot = await session.snapshot();
+    expect(snapshot.driverSessionId).toMatch(/^paperclip-codex-launch-v1:[a-f0-9]{64}$/);
+    expect(snapshot.codexLaunchContext).toHaveProperty("threadId");
+    expect(snapshot.providerRecoveryPolicy).toBe("same_session_only");
+    expect(session.ids().displayId).not.toBe(snapshot.driverSessionId);
+    await session.close({ reason: "verify cold recovery" });
+    expect((await new CodexAppServerDriver(options).recoverSession({ ...snapshot, workingDirectory: undefined })).recovered).toBe(false);
+    expect((await new CodexAppServerDriver(options).recoverSession({ ...snapshot, workingDirectory: root })).recovered).toBe(false);
+    const oldSnapshot = { ...snapshot }; delete oldSnapshot.codexLaunchContext;
+    expect((await new CodexAppServerDriver(options).recoverSession(oldSnapshot)).recovered).toBe(false);
+    expect((await new CodexAppServerDriver(options).recoverSession({ ...snapshot, codexLaunchContext: { ...snapshot.codexLaunchContext!, includeSkillInstructions: false } })).recovered).toBe(false);
+    expect((await new CodexAppServerDriver({ ...options, environment: { ...options.environment, PAPERCLIP_RUNNER_HOME_MODE: "preconfigured" } }).recoverSession(snapshot)).recovered).toBe(false);
+    expect((await new CodexAppServerDriver({ ...options, instructionWorkingCopyRoot: root }).recoverSession(snapshot)).recovered).toBe(false);
+    const changed = await new CodexAppServerDriver({ ...options, environment: { ...options.environment, PAPERCLIP_RUNNER_NETWORK_ACCESS: "enabled" } }).recoverSession(snapshot);
+    expect(changed.recovered).toBe(false);
+    const recovered = await new CodexAppServerDriver({ ...options, includeSkillInstructions: false, includeCollaborationModeInstructions: true, requestedCollaborationMode: collaborationMode === "plan" ? "default" : "plan" }).recoverSession(snapshot);
+    expect(recovered.reason).toBeUndefined();
+    expect(recovered).toMatchObject({ recovered: true });
+    await recovered.session!.close({ reason: "test complete" });
+    const calls = readFileSync(log, "utf8").trim().split("\n").map(line => JSON.parse(line));
+    const start = calls.find(call => call.method === "thread/start");
+    const resume = calls.find(call => call.method === "thread/resume");
+    expect(resume.params.config).toEqual(start.params.config);
+    expect(calls.find(call => call.method === "turn/start").params.permissions).toBe(start.params.permissions);
+    expect(start.params.permissions).toContain(collaborationMode === "plan" ? "workspace-read-only" : "workspace-only");
+    expect(resume.params.threadId).toBe(snapshot.codexLaunchContext!.threadId);
+    expect(JSON.stringify(calls)).not.toContain(snapshot.driverSessionId);
+    const nativeIdentity = { runId: "native-policy-run", sessionId: "native-policy-session", companyId: "company", issueId: "issue", agentId: "agent" };
+    const nativeBackend = new HarnessDriverBackend(new CodexAppServerDriver(options));
+    const nativeSession = await nativeBackend.openSession({ identity: nativeIdentity, workingDirectory: WORKSPACE });
+    const nativeSnapshot = await nativeSession.snapshot();
+    expect(nativeSnapshot.sessionId).toMatch(/^paperclip-codex-launch-v1:/);
+    expect(nativeSnapshot.codexLaunchContext?.workingDirectory).toBe(WORKSPACE);
+    expect(nativeSnapshot.providerRecoveryPolicy).toBe("same_session_only");
+    await nativeSession.close({ reason: "backend checkpoint roundtrip" });
+    const nativeRecovered = await new HarnessDriverBackend(new CodexAppServerDriver(options)).recoverSession(nativeSnapshot, { signal: new AbortController().signal });
+    if (!nativeRecovered.recovered) throw new Error(nativeRecovered.reason);
+    expect((await nativeRecovered.session.snapshot()).codexLaunchContext).toEqual(nativeSnapshot.codexLaunchContext);
+    expect((await nativeRecovered.session.snapshot()).sessionId).toBe(nativeSnapshot.sessionId);
+    await nativeRecovered.session.close({ reason: "backend roundtrip verified" });
+    const shim = readFileSync(join(bin, "codex"), "utf8");
+    writeFileSync(join(bin, "codex"), shim.replace(JSON.stringify(WORKSPACE), JSON.stringify(root)), { mode: 0o700 });
+    expect((await new CodexAppServerDriver(options).recoverSession(snapshot)).recovered).toBe(false);
+    const afterMismatch = readFileSync(log, "utf8").trim().split("\n").map(line => JSON.parse(line));
+    expect(afterMismatch.filter(call => call.method === "thread/resume")).toHaveLength(2);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+it.each(["permissionProfile/list", "config/read"])("reaps the direct provider when %s preflight is cancelled", async method => {
+  const root = mkdtempSync(join(tmpdir(), "codex-policy-abort-")); const bin = join(root, "bin"); mkdirSync(bin);
+  const fake = resolve(import.meta.dirname, "../../../runner/target/debug/fake-codex-app-server"); const log = join(root, "requests.jsonl");
+  writeFileSync(join(bin, "codex"), `#!/bin/sh\nexec ${JSON.stringify(fake)} --block-policy-preflight ${JSON.stringify(method)} --state-file ${JSON.stringify(join(root, "state.json"))} --request-log ${JSON.stringify(log)} "$@"\n`, { mode: 0o700 });
+  let pid: number | undefined;
+  const controller = new AbortController(); const cancellation = new Error("cancel private preflight");
+  const driver = new CodexAppServerDriver({ taskEnvelope: createCodexTaskEnvelope({ objective: "Synthetic cancellation" }),
+    environment: { HOME: root, CODEX_HOME: join(root, "home"), PATH: `${bin}:/usr/bin:/bin` }, onSpawn: async info => { pid = info.pid; } });
+  const opened = driver.openSession({ runId: "abort-run", normalizedSessionId: "abort-session", workingDirectory: WORKSPACE, signal: controller.signal });
+  const outcome = opened.catch(error => error);
+  try {
+    await vi.waitFor(() => { expect(readFileSync(log, "utf8")).toContain(JSON.stringify(method)); });
+    controller.abort(cancellation);
+    expect(await outcome).toBe(cancellation);
+    expect(readFileSync(log, "utf8")).not.toContain('"method":"thread/start"');
+    expect(pid).toBeTypeOf("number"); expect(() => process.kill(pid!, 0)).toThrow();
+  } finally { controller.abort(cancellation); await outcome; rmSync(root, { recursive: true, force: true }); }
+});
+
+it.each(["--omit-active-profile", "--returned-active-profile wrong-profile"])("requires positive direct profile attestation (%s)", async flags => {
+  const root = mkdtempSync(join(tmpdir(), "codex-policy-attestation-")); const bin = join(root, "bin"); mkdirSync(bin);
+  const fake = resolve(import.meta.dirname, "../../../runner/target/debug/fake-codex-app-server"); const log = join(root, "requests.jsonl");
+  writeFileSync(join(bin, "codex"), `#!/bin/sh\nexec ${JSON.stringify(fake)} ${flags} --state-file ${JSON.stringify(join(root, "state.json"))} --request-log ${JSON.stringify(log)} "$@"\n`, { mode: 0o700 });
+  try {
+    const driver = new CodexAppServerDriver({ taskEnvelope: createCodexTaskEnvelope({ objective: "Synthetic attestation" }),
+      environment: { HOME: root, CODEX_HOME: join(root, "home"), PATH: `${bin}:/usr/bin:/bin` } });
+    await expect(driver.openSession({ runId: "attest-run", normalizedSessionId: "attest-session", workingDirectory: WORKSPACE }))
+      .rejects.toThrow("required filesystem permission profile");
+    expect(readFileSync(log, "utf8")).not.toContain('"method":"turn/start"');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
 
 class BlockingBootstrapTransport extends FakeCodexTransport {
   readonly blocked: Promise<void>;

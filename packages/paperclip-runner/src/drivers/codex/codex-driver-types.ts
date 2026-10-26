@@ -119,6 +119,7 @@ export interface TerminalReplayConflict {
 }
 
 export interface OpenedCodexThread {
+  frozenLaunchContext?: import("../../contracts/codex-launch-policy.js").FrozenCodexLaunchContext;
   threadId: string;
   providerSessionId: string | null;
   providerIdentity?: PersistedHarnessProviderIdentity;
