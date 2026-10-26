@@ -161,6 +161,19 @@
       "verifiedAt": "2026-10-26",
       "retireWhen": "The accepted stable base contains both commits from paperclipai/paperclip#17683 or patch-equivalent changes.",
       "notes": "Makes the inbox failed-run list and the sidebar badge apply one resolved-interruption rule. The run list accepts suppressResolvedFailures, and issue status changes refresh the filtered run query. Deploy and upstream commits have matching patch IDs."
+    },
+    {
+      "id": "model-public-reference-pricing",
+      "kind": "fork-only",
+      "status": "active",
+      "commits": [
+        "695050687671d22e6c72869807902cecf32558b3"
+      ],
+      "owner": "hrygo",
+      "reviewBy": "2026-11-30",
+      "verifiedAt": "2026-10-26",
+      "retireWhen": "The accepted upstream stable base supplies an equivalent company-level reference-rate editor and a separate estimate report for gateway and subscription usage.",
+      "notes": "Operator-requested scenario pricing on the pinned Delegra deployment baseline. Keep the implementation generic and instance alias mapping outside tracked source. This deployment patch does not assert upstream product approval; an upstream submission requires a separate roadmap discussion. It changes no invoices, receipts, subscription fees or budget enforcement. Public rates are explicitly selected and unknown local costs stay unknown."
     }
   ]
 }
