@@ -23,6 +23,12 @@ async function invoiceCostCandidates(tx: Db, companyId: string, biller: string, 
 
 export function billingReconciliationService(db: Db, hooks: BudgetServiceHooks = {}) {
   return {
+    event: async (companyId: string, eventId: string) => {
+      const [row] = await db.select({ event: costEvents, exact: sql<string>`${costEvents.costCents}::text` }).from(costEvents)
+        .where(and(eq(costEvents.companyId, companyId), eq(costEvents.id, eventId)));
+      if (!row) throw notFound("Cost event not found");
+      return { ...row.event, costCentsExact: normalizeCents(row.exact) };
+    },
     importInvoice: (companyId: string, raw: ImportBillingInvoice, actorId: string) => withAccountingTransaction(db, companyId, async (tx, publications) => {
       const input = importBillingInvoiceSchema.parse(raw);
       // Line order in an export is not part of invoice identity.
@@ -119,6 +125,9 @@ export function billingReconciliationService(db: Db, hooks: BudgetServiceHooks =
           .where(and(eq(costEvents.companyId, companyId), eq(costEvents.id, eventId))).for("update");
         if (!event) throw notFound("Cost event not found");
         if (normalizeCents(event.exact) !== input.expectedCents) throw conflict("Charge changed since review; review it again");
+        const classification = input.billingClassification;
+        if (classification && (classification.expected.billingType !== event.event.billingType || classification.expected.biller !== event.event.biller))
+          throw conflict("Billing classification changed since review; review it again");
         if (input.invoiceLineId) {
           const reportLine = await tx.select({ line: billingInvoiceLines, invoice: billingInvoices }).from(billingInvoiceLines)
             .innerJoin(billingInvoices, eq(billingInvoices.id, billingInvoiceLines.invoiceId)).where(and(eq(billingInvoiceLines.id, input.invoiceLineId), eq(billingInvoiceLines.companyId, companyId), eq(billingInvoices.companyId, companyId)));
@@ -139,12 +148,15 @@ export function billingReconciliationService(db: Db, hooks: BudgetServiceHooks =
         }
         const [adjustment] = await tx.insert(costAdjustments).values({ companyId, costEventId: eventId, invoiceLineId: input.invoiceLineId,
           idempotencyKey: input.idempotencyKey, receiptHash: hash, previousCents: input.expectedCents, correctedCents: input.correctedCents,
-          previousStatus: event.event.costStatus, previousPricing: event.event.pricingProvenance ?? {},
-          reason: input.reason, actorId, pricing: input.pricing }).returning();
+          previousStatus: event.event.costStatus, previousPricing: { ...event.event.pricingProvenance,
+            ...(classification ? { billingClassification: classification.expected } : {}) },
+          reason: input.reason, actorId, pricing: { ...input.pricing,
+            ...(classification ? { billingClassification: classification.corrected } : {}) } }).returning();
         // Original provider value and fingerprint remain immutable. cost_cents
         // is the effective valuation, backed by this append-only correction.
         const [updated] = await tx.update(costEvents).set({ costCents: sql`${input.correctedCents}::numeric`,
-          reportedCostCents: event.event.reportedCostCents ?? normalizeCents(event.exact), costStatus: input.pricing.source === "rate_card" ? "estimated" : "reported", pricingProvenance: input.pricing,
+          reportedCostCents: event.event.reportedCostCents ?? normalizeCents(event.exact), costStatus: classification?.corrected.billingType === "unknown" ? "unpriced" : input.pricing.source === "rate_card" ? "estimated" : "reported", pricingProvenance: input.pricing,
+          ...(classification ? classification.corrected : {}),
         }).where(eq(costEvents.id, eventId)).returning();
         await updateMonthlySpendProjections(tx, companyId, updated.agentId, subtractCents(input.correctedCents, input.expectedCents), updated.occurredAt);
         if (updated.heartbeatRunId && updated.agentId) {

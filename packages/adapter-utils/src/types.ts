@@ -41,6 +41,8 @@ export interface UsageSummary {
 
 /** Accounting-only snapshot. Never include prompt, response, or credentials. */
 export interface AdapterUsageCheckpoint {
+  /** Trusted connection snapshot, consumed before canonical receipt persistence. */
+  billingDeclaration?: import("@paperclipai/shared").IncludedBillingDeclaration;
   attemptId?: string;
   usage?: UsageSummary;
   usageByModel?: Array<{ model: string; usage: UsageSummary; costUsd: number }>;
@@ -100,6 +102,7 @@ export type AdapterExecutionErrorFamily =
   | "refresh_token_invalidated";
 
 export interface AdapterExecutionResult {
+  billingDeclaration?: import("@paperclipai/shared").IncludedBillingDeclaration;
   /** Positive evidence for retrying bootstrap; absent evidence never authorizes replay. */
   executionRecovery?: { kind: "bootstrap"; providerWorkStarted: false } | {
     kind: "interrupted";

@@ -1431,6 +1431,10 @@ describe("codex_local ACP lane", () => {
 });
 
 describe("resolveCodexAcpBillingIdentity", () => {
+  it("uses the server-frozen included declaration without changing API-key auth", () => {
+    const declaration = { billingType: "subscription_included", biller: "unknown", pricingProvenance: { source: "operator", version: "included/v1", evidence: "Synthetic fixed subscription" } } as const;
+    expect(resolveCodexAcpBillingIdentity({ config: { managedAiRouting: { kind: "local", protocol: "responses", auth: "bearer" }, managedAiConnection: { method: "api_key", billing: { revision: 1, declaration, updatedAt: "2026-10-26T12:00:00Z", updatedByUserId: "owner" } } } })).toMatchObject({ provider: "openai", biller: "unknown", billingType: "subscription_included", costUsd: 0, pricingProvenance: declaration.pricingProvenance, billingDeclaration: declaration });
+  });
   it.each([["openrouter", "api_key", "openrouter"], ["custom", "api_key", "unknown"], ["local", "none", "unknown"]])("classifies managed %s/%s independently of host authentication", (kind, auth, biller) => {
     expect(resolveCodexAcpBillingIdentity({ config: {
       managedAiRouting: { kind, auth },

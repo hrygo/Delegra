@@ -13,6 +13,7 @@ import {
   gitHubRepositoryPageQuerySchema,
   toggleAllGitHubRepositoriesSchema,
   createAiConnectionSchema,
+  updateAiBillingSchema,
   updateDecisionModelSchema,
   updatePromptInjectionPreventionSchema,
   updateAgentObservabilitySchema,
@@ -11070,6 +11071,9 @@ registerCurrentRoute({
   responses: { 200: r.ok(), 401: r.unauthorized, 403: r.forbidden, 404: r.notFound },
 });
 
+registerCurrentRoute({ method: "get", path: "/api/companies/{companyId}/ai-connections/{connectionId}/billing", tags: ["ai-connections"], summary: "Read the owner-confirmed billing declaration and effective binding", responses: { 200: r.ok(), 401: r.unauthorized, 403: r.forbidden, 404: r.notFound } });
+registerCurrentRoute({ method: "put", path: "/api/companies/{companyId}/ai-connections/{connectionId}/billing", tags: ["ai-connections"], summary: "Declare or clear included subscription billing with revision comparison", body: updateAiBillingSchema, responses: { 200: r.ok(), 400: r.badRequest, 401: r.unauthorized, 403: r.forbidden, 404: r.notFound, 409: r.conflict, 422: r.unprocessable } });
+
 registerCurrentRoute({
   method: "get",
   path: "/api/companies/{companyId}/ai-connections/{connectionId}/usage",
@@ -12724,3 +12728,5 @@ for (const [method, path, summary] of [
     404: r.notFound, 409: r.conflict, 422: r.unprocessable,
   },
 });
+
+registerCurrentRoute({ method: "get", path: "/api/companies/{companyId}/accounting/events/{eventId}", tags: ["costs"], summary: "Read one company accounting event with exact cents and original receipt fingerprint", responses: { 200: r.ok(), 401: r.unauthorized, 403: r.forbidden, 404: r.notFound } });

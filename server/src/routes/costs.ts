@@ -464,6 +464,8 @@ export function costRoutes(
     res.status(201).json(await billing.importInvoice(req.params.companyId as string, req.body, getActorInfo(req).actorId)));
   router.get("/companies/:companyId/accounting/invoices/:invoiceId", async (req, res) =>
     res.json(await billing.reconcile(req.params.companyId as string, req.params.invoiceId as string)));
+  router.get("/companies/:companyId/accounting/events/:eventId", async (req, res) =>
+    res.json(await billing.event(req.params.companyId as string, z.string().uuid().parse(req.params.eventId))));
   router.get("/companies/:companyId/accounting/events/:eventId/adjustments", async (req, res) =>
     res.json(await billing.adjustments(req.params.companyId as string, req.params.eventId as string)));
   router.post("/companies/:companyId/accounting/events/:eventId/adjustments", validate(adjustCostSchema), async (req, res) =>

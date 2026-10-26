@@ -1,3 +1,5 @@
+import type { AiBillingConfiguration } from "@paperclipai/shared";
+import { normalizeDeclaredBilling } from "@paperclipai/adapter-utils";
 import { lstat, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -118,7 +120,7 @@ describe("codex execute — outbound auth copy-back restore contribution", () =>
     );
   }
 
-  async function runTeardown(input: { sandboxAuth: string; hostAuth: string; onProviderStopped?: () => Promise<void>; withIdentity?: boolean; env?: Record<string, string> }) {
+  async function runTeardown(input: { sandboxAuth: string; hostAuth: string; onProviderStopped?: () => Promise<void>; withIdentity?: boolean; env?: Record<string, string>; billing?: AiBillingConfiguration }) {
     const rootDir = await mkdtemp(
       path.join(os.tmpdir(), "paperclip-codex-copyback-e2e-"),
     );
@@ -157,6 +159,7 @@ describe("codex execute — outbound auth copy-back restore contribution", () =>
       config: {
         command: "codex",
         engine: "cli",
+        ...(input.billing ? { managedAiRouting: { kind: "local", protocol: "responses", baseUrl: "http://127.0.0.1:19999/v1", auth: "none", models: [] }, managedAiConnection: { method: "api_key", billing: input.billing } } : {}),
         // External CODEX_HOME (outside the managed company tree) so no managed
         // seeding rewrites auth.json before teardown; equals the shared host home.
         env: { CODEX_HOME: sharedHostHome, ...input.env },
@@ -189,6 +192,13 @@ describe("codex execute — outbound auth copy-back restore contribution", () =>
       executionResult,
     };
   }
+
+  it("retains the server-frozen included declaration through legacy CLI execution", async () => {
+    const declaration = { billingType: "subscription_included", biller: "unknown", pricingProvenance: { source: "operator", version: "included/v1", evidence: "Synthetic fixed subscription" } } as const;
+    const { executionResult } = await runTeardown({ sandboxAuth: "{}", hostAuth: "{}", billing: { revision: 1, declaration, updatedAt: "2026-10-26T12:00:00Z", updatedByUserId: "fixture-owner" } });
+    expect(executionResult).toMatchObject({ provider: "openai", biller: "unknown", billingType: "subscription_included", billingDeclaration: declaration });
+    expect(normalizeDeclaredBilling(executionResult)).toMatchObject({ billingType: "subscription_included", costUsd: 0, costUsdExact: "0", costStatus: "reported", pricingProvenance: declaration.pricingProvenance });
+  });
 
   it.each([true, false])("delivers configured service tokens to CLI shells while isolating host and provider credentials (identity: %s)", async (withIdentity) => {
     vi.stubEnv("DATABASE_URL", "postgres://operator:host-password@host/private");

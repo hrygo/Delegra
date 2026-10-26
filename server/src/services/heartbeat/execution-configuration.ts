@@ -1,3 +1,4 @@
+import { freezeAiBillingSnapshot } from "../ai-connection-billing.js";
 import { agentHarnessType } from "@paperclipai/shared";
 import { observabilitySecretValues } from "@paperclipai/adapter-utils/agent-observability";
 import { agentObservabilityService, unavailableAgentObservability, type ResolvedAgentObservability } from "../agent-observability.js";
@@ -175,7 +176,13 @@ export async function prepareHeartbeatExecutionConfiguration(db: Db, input: Hear
       secretsSvc,
       trustPreset,
     }));
+  // These projection fields are server-owned, never adapter/run configuration authority.
+  delete resolvedConfig.managedAiConnection;
   onFailureSecretsResolved(() => collectRunFailureSecretValues(resolvedConfig.env, secretKeys));
+  if (!aiBinding && !persistedNativeExecutionInput) {
+    delete context.aiConnection;
+    if (run.contextSnapshot?.aiConnection) await db.update(heartbeatRuns).set({ contextSnapshot: sql`coalesce(${heartbeatRuns.contextSnapshot}, '{}'::jsonb) - 'aiConnection'` }).where(eq(heartbeatRuns.id, run.id));
+  }
   if (aiBinding) {
     try {
       managedAiRuntime = await time("configuration_ai_runtime", () => prepareManagedAiRuntime(db, { companyId: agent.companyId, agentId: agent.id, responsibleUserId, adapterType: agent.adapterType, binding: aiBinding, config: resolvedConfig }));
@@ -215,6 +222,12 @@ export async function prepareHeartbeatExecutionConfiguration(db: Db, input: Hear
       managedAiRuntime.identity,
     )) {
       throw new ConfigurationIncompleteFailure("The AI account changed while this native run was suspended. Start a new execution.", { configurationIncomplete: { reason: "ai_connection_changed", actionUrl: `/agents/${agent.id}/runtime` } });
+    }
+    // Recovery must use the fact fixed before the original provider execution.
+    // Missing legacy snapshots explicitly mean no declaration, never today's config.
+    if (persistedNativeExecutionInput) {
+      managedAiRuntime.attribution.billing = freezeAiBillingSnapshot(managedAiRuntime.attribution.billing, true, savedAiAccount.billing);
+      managedAiRuntime.config.managedAiConnection = { ...managedAiRuntime.config.managedAiConnection, billing: managedAiRuntime.attribution.billing };
     }
     Object.assign(resolvedConfig, managedAiRuntime.config);
     for (const key of AI_AUTH_ENV_KEYS) secretKeys.add(key);

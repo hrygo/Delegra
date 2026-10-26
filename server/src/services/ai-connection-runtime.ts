@@ -1,3 +1,4 @@
+import { effectiveAiBilling } from "./ai-connection-billing.js";
 import { environmentTaskResultSchema } from "@paperclipai/plugin-sdk";
 import type { PluginTaskCredentialWritebackBinding } from "./plugin-task-credential-writeback.js";
 import { OPENROUTER_ATTRIBUTION_HEADERS, openRouterClaudeHeaders } from "@paperclipai/shared/openrouter-attribution";
@@ -451,6 +452,10 @@ export async function prepareManagedAiRuntime(
       if (projected.hermesConfig) await writeFile(path.join(providerHome, "config.yaml"), projected.hermesConfig, { mode: 0o600 });
       if (projected.codexConfig) await writeFile(path.join(providerHome, "config.toml"), 'cli_auth_credentials_store = "file"\n' + projected.codexConfig, { mode: 0o600 });
     }
+    // Bind billing to the credential version actually adopted above. Reading
+    // mutable latest here alone could validate a different account's declaration.
+    selection.attribution.billing = await effectiveAiBilling(db, selection.connection,
+      credentialRef && freshness ? { secretId: credentialRef.secretId, version: freshness.version, epoch: freshness.epoch } : undefined);
     const attribution = { ...selection.attribution } as typeof selection.attribution & { subscriptionId?: string };
     if (attribution.method === "subscription") {
       const subscription = {

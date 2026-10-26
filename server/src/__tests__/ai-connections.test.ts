@@ -1,3 +1,4 @@
+import * as connectionBilling from "../services/ai-connection-billing.js";
 import { completeSetupTokenAiConnection } from "../services/setup-token-ai-connection.js";
 import { connectionIntentService } from "../services/connection-intents.js";
 import { connectionIntentDeliveryService } from "../services/connection-intent-delivery.js";
@@ -74,6 +75,44 @@ beforeAll(async () => {
 afterAll(async () => { await database?.cleanup(); vi.unstubAllEnvs(); if (home) await rm(home, { recursive: true, force: true }); });
 
 describe("managed AI connections", () => {
+  it.each(["before-read", "after-read"] as const)("binds subscription billing to the credential actually adopted (%s rotation)", async phase => {
+    const owner = `billing-race-${phase}`;
+    await db.insert(companyMemberships).values({ companyId, principalId: owner, principalType: "user", status: "active", membershipRole: "member" });
+    const routing = { kind: "local", protocol: "responses", baseUrl: "http://127.0.0.1:19999/v1", auth: "bearer", models: [] } as const;
+    const saved = await service.save(companyId, owner, { provider: "openai", method: "api_key", ownership: "personal", name: owner, apiKey: "fixture-old", allAgents: true, agentIds: [], routing }, "fixture-old");
+    const declaration = { billingType: "subscription_included", biller: "unknown", pricingProvenance: { source: "operator", version: "included/v1", evidence: "Synthetic fixed subscription" } } as const;
+    await connectionBilling.aiConnectionBillingService(db).put(companyId, saved.connectionId, { expectedRevision: null, declaration }, owner);
+    const [grant] = await db.select().from(connectionGrants).where(eq(connectionGrants.id, saved.grantId));
+    const ref = grant.credentialSecretRefs[0];
+    const original = connectionBilling.effectiveAiBilling;
+    const stages: string[] = [];
+    let calls = 0;
+    const spy = vi.spyOn(connectionBilling, "effectiveAiBilling").mockImplementation(async (database, connection, adopted) => {
+      calls++;
+      if (calls === 3) {
+        expect(adopted).toMatchObject({ secretId: ref.secretId, version: phase === "before-read" ? 2 : 1 });
+        stages.push("credential-adopted");
+        if (phase === "after-read") { await secretService(db).rotate(ref.secretId, { value: "fixture-new" }, { userId: owner }); stages.push("rotated"); }
+      }
+      const result = await original(database, connection, adopted);
+      if (calls === 2 && phase === "before-read") {
+        expect(result?.declaration).toEqual(declaration);
+        stages.push("selection-confirmed");
+        await secretService(db).rotate(ref.secretId, { value: "fixture-new" }, { userId: owner }); stages.push("rotated");
+      }
+      return result;
+    });
+    let runtime: Awaited<ReturnType<typeof prepareManagedAiRuntime>> | undefined;
+    try {
+      runtime = await prepareManagedAiRuntime(db, { companyId, agentId, responsibleUserId: owner, adapterType: "codex_local", binding: { provider: "openai", method: "api_key", mode: "delegated", ...saved }, config: { model: "synthetic-model" } });
+      expect(runtime.attribution.billing?.declaration).toEqual(phase === "before-read" ? null : declaration);
+      expect(runtime.config.env.PAPERCLIP_AI_PROVIDER_KEY).toBe(phase === "before-read" ? "fixture-new" : "fixture-old");
+      expect(stages).toEqual(phase === "before-read" ? ["selection-confirmed", "rotated", "credential-adopted"] : ["credential-adopted", "rotated"]);
+    } finally { spy.mockRestore(); await runtime?.cleanup(); }
+    const reconnect = await service.save(companyId, owner, { connectionId: saved.connectionId, provider: "openai", method: "api_key", ownership: "personal", name: owner, apiKey: "fixture-reconnected", allAgents: true, agentIds: [], routing }, "fixture-reconnected");
+    expect((await connectionBilling.aiConnectionBillingService(db).get(companyId, reconnect.connectionId, owner)).configuration).toMatchObject({ revision: 2, declaration: null });
+  });
+
   it.each(([
     { provider: "openai", adapterType: "codex_local" },
     { provider: "openrouter", adapterType: "codex_local" },

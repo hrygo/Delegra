@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { aiProviderRoutingSchema, aiRoutingHarness, isAiRoutingCompatible, type AiProviderRouting } from "./ai-provider-routing.js";
+import type { AiBillingConfiguration } from "./accounting.js";
 
 /** Runtime authentication is a separate transport, never a tool or channel. */
 export const connectionPurposeTransportSchema = z.discriminatedUnion(
@@ -152,6 +153,8 @@ export type AiConnectionUnavailableReason =
   | "access_denied"
   | "credential_missing";
 export interface AiConnectionAttribution {
+  /** Explicit null records that no billing declaration was present at admission. */
+  billing?: AiBillingConfiguration | null;
   /** Billing account at execution time; never resolved again from mutable settings. */
   subscriptionId?: string;
   connectionId: string;
