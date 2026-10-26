@@ -119,7 +119,34 @@ toolchain revision.
 
 ## Deployment and rollback
 
-The 2026-10-27 environment repair runs
+The current deployment is `deploy/v2026.1024.0-canary.7-r10`
+(`216f99e05907d150fa3057c1e2732188408f6baa`, tree
+`8e98f28c2f232b6d12d735351f0931f138bb5cc3`). It replaced r8 on
+2026-10-27 at 07:48 Asia/Shanghai. The controller health reported `ok` and the
+expected commit. [PR #24](https://github.com/hrygo/Delegra/pull/24) passed
+independent source review and all 50 CI checks. The isolated release build
+preserved the source and lockfiles and packaged macOS ARM64 and Linux ARM64
+Runner artifacts. The 13 active patch IDs are recorded in `currentDeployment`
+in [`.delegra/patches.json`](../.delegra/patches.json).
+
+A fresh database backup passed gzip integrity and SHA256 checks before the
+switch. No restore drill was run. The switch performed no schema migration or
+database restore. r9 remains an undeployed candidate; r8 is the source rollback
+release. Preserve the current database and the existing service configuration.
+Drain structured-policy sessions before a rollback to the older controller and
+Runner pair, and retain their checkpoints for recovery with compatible artifacts.
+
+The platform, workbench and reviewer roles saved the reviewed safety and explicit
+skill selections through the normal board API. Full configuration readback
+confirmed 75 explicit skill references. Models, effort, connections, execution
+environments, environment variables and unrelated adapter fields were unchanged.
+No agent was resumed, and no run was active before or after this configuration
+update. Live model, tool and finalization qualification, and the real product
+slice remain pending behind the unpriced Responses gate. Deployment health and
+configuration readback do not establish pilot acceptance. Copilot v59 live
+qualification remains pending.
+
+The earlier 2026-10-27 environment repair installed
 `deploy/v2026.1024.0-canary.7-r8` (`ec00bcd4c001502dde7f24ee7f72825efff495b8`),
 merged in [PR #20](https://github.com/hrygo/Delegra/pull/20).
 The reviewed source passed independent review, local typecheck and build,
@@ -128,9 +155,9 @@ on 2026-10-27 at 01:10 Asia/Shanghai with exit code 0; existing skipped cases
 remain skipped. The merge tree matches the reviewed source, and the isolated
 release installation built successfully.
 
-The authenticated controller health reports the expected clean commit and
-startup recovery ready. Both affected agents saved their final environment
-fields, and an exact read-only database check verified all three values.
+At r8 activation, authenticated controller health reported the expected clean
+commit and startup recovery ready. Both affected agents saved their final
+environment fields, and an exact read-only database check verified all three values.
 At activation, models, managed connections, secret references, all seven manual
 pauses, and the existing budget policy were unchanged; this repair did not run
 a business task. The full agent checkout/tool/report/finalize lifecycle was not
@@ -139,8 +166,8 @@ owned by the current project coordination workflow.
 
 The two historical zero-incremental-fee events were corrected through the
 existing r6 audited adjustment API before this release. They did not require
-new billing code. The budget is healthy and the original usage and receipts
-match after r8. PR #21's automatic billing declaration feature remains a draft
+new billing code. The budget was healthy and the original usage and receipts
+matched after r8. PR #21's automatic billing declaration feature remains a draft
 and was not deployed.
 
 A fresh pre-release database backup passed gzip integrity and SHA256 checks;

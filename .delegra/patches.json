@@ -5,8 +5,8 @@
     "deploy": "deploy"
   },
   "currentDeployment": {
-    "tag": "deploy/v2026.1024.0-canary.7-r8",
-    "commit": "ec00bcd4c001502dde7f24ee7f72825efff495b8",
+    "tag": "deploy/v2026.1024.0-canary.7-r10",
+    "commit": "216f99e05907d150fa3057c1e2732188408f6baa",
     "base": "canary/v2026.1024.0-canary.7",
     "patches": [
       "managed-codex-project-auth",
@@ -17,7 +17,11 @@
       "inbox-badge-resolved-failed-runs",
       "managed-agent-validation-environment",
       "workspace-test-host-isolation",
-      "company-cli-fixture-isolation"
+      "company-cli-fixture-isolation",
+      "codex-structured-launch-policy",
+      "managed-claude-task-safety",
+      "managed-ssh-run-environment",
+      "optional-ssh-file-error-contract"
     ]
   },
   "base": {
