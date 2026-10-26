@@ -220,6 +220,58 @@
       "verifiedAt": "2026-10-26",
       "retireWhen": "The accepted upstream stable base supplies an equivalent company-level reference-rate editor and a separate estimate report for gateway and subscription usage.",
       "notes": "Withdrawn at the operator request on 2026-10-26. The second commit reverses the reference-rate API, shared estimator, Providers editor, and related feature documentation from PR #17. Preserve the executed SQL migration, journal, snapshots, and schema as inert compatibility history. The running service and database were restored to the pre-r7 r6 baseline. A full billing proposal remains local until upstream scope review; no new billing feature is approved or implemented."
+    },
+    {
+      "id": "codex-structured-launch-policy",
+      "kind": "fork-only",
+      "status": "active",
+      "commits": [
+        "0e04c1379971773c4c4ce58db19fa1ca66d25119"
+      ],
+      "owner": "hrygo",
+      "reviewBy": "2026-11-30",
+      "verifiedAt": "2026-10-27",
+      "retireWhen": "The accepted stable base carries an equivalent bounded structured launch-policy contract, frozen recovery identity and old-artifact rejection on both controller and Runner.",
+      "notes": "Carry the reviewed transport repair against the pinned canary.7 deployment pair. Preserves all assigned skill roots and argv bounds; fixed CLI and real old-artifact qualifications pass. Upstream integration must preserve the complete recovery and permission contract rather than cherry-picking only argv removal."
+    },
+    {
+      "id": "managed-claude-task-safety",
+      "kind": "fork-only",
+      "status": "active",
+      "commits": [
+        "3f48d630c52b3f53bba8246ae733f24b57f4a308"
+      ],
+      "owner": "hrygo",
+      "reviewBy": "2026-11-30",
+      "verifiedAt": "2026-10-27",
+      "retireWhen": "The accepted stable base provides equivalent closed managed-Claude build/review policies, selected-skill discovery and fail-closed tool/sandbox boundaries.",
+      "notes": "Adapter-owned settings are needed for the managed connection authentication boundary on the pinned deployment. Raw settings remain rejected. Source regressions and real macOS CLI tool/file/network qualification pass; live saved-agent lifecycle remains a rollout gate."
+    },
+    {
+      "id": "managed-ssh-run-environment",
+      "kind": "fork-only",
+      "status": "active",
+      "commits": [
+        "e7fff3db1491aabd1cc45181190cd989a0e397ac"
+      ],
+      "owner": "hrygo",
+      "reviewBy": "2026-11-30",
+      "verifiedAt": "2026-10-27",
+      "retireWhen": "The accepted stable base gives managed SSH Codex runs equivalent private writable environment/cache projection and evidence-gated exact-run cleanup.",
+      "notes": "Carry target-host environment isolation for the current managed remote adapter. Preserves executable PATH, authentication home and configured model/effort. Targeted cleanup/restore regressions pass; actual remote toolchain and platform finalization are separate acceptance gates."
+    },
+    {
+      "id": "optional-ssh-file-error-contract",
+      "kind": "fork-only",
+      "status": "active",
+      "commits": [
+        "9494f40522f198ffccc8eb93f42dd2270421acfa"
+      ],
+      "owner": "hrygo",
+      "reviewBy": "2026-11-30",
+      "verifiedAt": "2026-10-27",
+      "retireWhen": "The accepted stable base normalizes confirmed remote optional-file absence without swallowing permission, transport, timeout or local SSH setup errors.",
+      "notes": "The managed routed home can legitimately have no auth.json. One bounded metadata probe maps only proven absence to ENOENT, preserving successful provider output and host authentication. Synthetic POSIX/transport regressions pass; no credential contents or data migration."
     }
   ]
 }
