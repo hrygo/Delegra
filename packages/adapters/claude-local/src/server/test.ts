@@ -1,3 +1,4 @@
+import { prepareClaudeTaskBuildCache } from "./task-build-cache.js";
 import type {
   AdapterEnvironmentCheck,
   AdapterEnvironmentTestContext,
@@ -393,156 +394,174 @@ export async function testEnvironment(
       if (maxTurns > 0) args.push("--max-turns", String(maxTurns));
       if (extraArgs.length > 0) args.push(...extraArgs);
       let safetyDirective = "";
-      if (safetyPolicyConfig) {
-        try {
-          const entries = await readPaperclipRuntimeSkillEntries(config, path.dirname(fileURLToPath(import.meta.url)));
-          const selected = new Set(resolveClaudeDesiredSkillNames(config, entries));
-          const skills = entries.filter(entry => selected.has(entry.key) && !isPaperclipSkillSourceMissing(entry));
-          const bundle = await prepareClaudePromptBundle({ companyId: ctx.companyId, skills, instructionsContents: null, onLog: async () => {} });
-          const policy = await buildClaudeSafetyPolicy({ config, cwd, promptBundleDir: bundle.addDir, selectedSkills: skills });
-          args.push("--add-dir", bundle.addDir, ...policy!.args);
-          safetyDirective = policy!.skillReadDirective;
-        } catch (error) {
-          checks.push({ code: "claude_safety_policy_invalid", level: "error", message: error instanceof Error ? error.message : "Could not construct safety policy" });
-          return { adapterType: "claude_local", status: "fail", checks, testedAt: new Date().toISOString() };
+      let taskBuildCache: Awaited<ReturnType<typeof prepareClaudeTaskBuildCache>> | null = null;
+      let probeCollectionSucceeded = false;
+      try {
+        if (safetyPolicyConfig) {
+          try {
+            const entries = await readPaperclipRuntimeSkillEntries(config, path.dirname(fileURLToPath(import.meta.url)));
+            const selected = new Set(resolveClaudeDesiredSkillNames(config, entries));
+            const skills = entries.filter(entry => selected.has(entry.key) && !isPaperclipSkillSourceMissing(entry));
+            const bundle = await prepareClaudePromptBundle({ companyId: ctx.companyId, skills, instructionsContents: null, onLog: async () => {} });
+            const policy = await buildClaudeSafetyPolicy({ config, cwd, promptBundleDir: bundle.addDir, selectedSkills: skills });
+            args.push("--add-dir", bundle.addDir, ...policy!.args);
+            safetyDirective = policy!.skillReadDirective;
+            if (safetyPolicyConfig.profile === "workspace-build") {
+              taskBuildCache = await prepareClaudeTaskBuildCache({ cwd, protectedWriteRoots: policy!.protectedWriteRoots });
+            }
+          } catch (error) {
+            checks.push({ code: "claude_safety_policy_invalid", level: "error", message: error instanceof Error ? error.message : "Could not construct safety policy" });
+            return { adapterType: "claude_local", status: "fail", checks, testedAt: new Date().toISOString() };
+          }
         }
-      }
 
-      // Sandbox bridges still add lease warmup and transport overhead, but
-      // the standard-2 Cloudflare tier now probes fast enough that a 90s
-      // budget leaves headroom without masking real hangs.
-      const helloProbeTimeoutSec = Math.max(
-        1,
-        asNumber(config.helloProbeTimeoutSec, targetIsSandbox ? 90 : 45),
-      );
-
-      // A local probe uses the trusted resolved executable and the
-      // deny-by-default child env. A remote probe uses the caller command and
-      // env, because the remote transport owns its own env sanitization.
-      const probeCommand = localProbe?.command ?? command;
-      const probeEnv = localProbe ? localProbe.env : env;
-      const probe = await runAdapterExecutionTargetProcess(
-        runId,
-        target,
-        probeCommand,
-        args,
-        {
-          cwd,
-          env: probeEnv,
-          timeoutSec: helloProbeTimeoutSec,
-          graceSec: 5,
-          stdin: ["Respond with hello.", safetyDirective].filter(Boolean).join("\n\n"),
-          onLog: async () => {},
-        },
-      );
-
-      const parsedStream = parseClaudeStreamJson(probe.stdout);
-      const parsed = parsedStream.resultJson;
-      const loginMeta = detectClaudeLoginRequired({
-        parsed,
-        stdout: probe.stdout,
-        stderr: probe.stderr,
-      });
-
-      if (probe.timedOut) {
-        checks.push({
-          code: "claude_hello_probe_timed_out",
-          level: "warn",
-          message: "Claude hello probe timed out.",
-          hint: "Retry the probe. If this persists, verify Claude can run `Respond with hello` from this directory manually.",
-        });
-      } else if (loginMeta.requiresLogin) {
-        // The raw probe output is untrusted. Log only the fixed context and the
-        // allowlisted classification. Return only a fixed public message and a
-        // safe hint.
-        logSandboxProbeDiagnostic(
-          "Claude CLI hello probe reported login required",
-          "auth_required",
+        // Sandbox bridges still add lease warmup and transport overhead, but
+        // the standard-2 Cloudflare tier now probes fast enough that a 90s
+        // budget leaves headroom without masking real hangs.
+        const helloProbeTimeoutSec = Math.max(
+          1,
+          asNumber(config.helloProbeTimeoutSec, targetIsSandbox ? 90 : 45),
         );
-        checks.push({
-          code: "claude_hello_probe_auth_required",
-          level: "warn",
-          message: "Claude CLI is installed, but login is required.",
-          hint: buildClaudeLoginRequiredHint(loginMeta.loginUrl),
+
+        // A local probe uses the trusted resolved executable and the
+        // deny-by-default child env. A remote probe uses the caller command and
+        // env, because the remote transport owns its own env sanitization.
+        const probeCommand = localProbe?.command ?? command;
+        // Only adapter-owned overrides are added after the caller allowlist.
+        const probeEnv = { ...(localProbe ? localProbe.env : env), ...taskBuildCache?.envOverrides };
+        const cacheStopped = taskBuildCache?.beginInvocation();
+        const probe = await runAdapterExecutionTargetProcess(
+          runId,
+          target,
+          probeCommand,
+          args,
+          {
+            cwd,
+            env: probeEnv,
+            onProcessStopped: cacheStopped,
+            timeoutSec: helloProbeTimeoutSec,
+            graceSec: 5,
+            stdin: ["Respond with hello.", safetyDirective].filter(Boolean).join("\n\n"),
+            onLog: async () => {},
+          },
+        );
+
+        probeCollectionSucceeded = true;
+        const parsedStream = parseClaudeStreamJson(probe.stdout);
+        const parsed = parsedStream.resultJson;
+        const loginMeta = detectClaudeLoginRequired({
+          parsed,
+          stdout: probe.stdout,
+          stderr: probe.stderr,
         });
-        if (targetIsSandbox) {
-          // Emit the neutral canonical check so the user interface can decide
-          // login eligibility from a stable code. The user interface does not
-          // read the message text or the top-level status.
+
+        if (probe.timedOut) {
           checks.push({
-            code: ADAPTER_AUTH_MISSING_CHECK_CODE,
+            code: "claude_hello_probe_timed_out",
             level: "warn",
-            message: "This environment has no ready authentication for this adapter.",
-            hint: "Provide credentials for this adapter, or start login in the environment.",
+            message: "Claude hello probe timed out.",
+            hint: "Retry the probe. If this persists, verify Claude can run `Respond with hello` from this directory manually.",
           });
-        }
-      } else if ((probe.exitCode ?? 1) === 0) {
-        const summary = parsedStream.summary.trim();
-        const hasHello = /\bhello\b/i.test(summary);
-        if (!hasHello) {
-          // The unexpected summary is untrusted probe output. Log only the fixed
-          // context and the allowlisted classification. Keep the check text
-          // fixed.
+        } else if (loginMeta.requiresLogin) {
+          // The raw probe output is untrusted. Log only the fixed context and the
+          // allowlisted classification. Return only a fixed public message and a
+          // safe hint.
           logSandboxProbeDiagnostic(
-            "Claude CLI hello probe returned unexpected output",
-            "unexpected_output",
+            "Claude CLI hello probe reported login required",
+            "auth_required",
+          );
+          checks.push({
+            code: "claude_hello_probe_auth_required",
+            level: "warn",
+            message: "Claude CLI is installed, but login is required.",
+            hint: buildClaudeLoginRequiredHint(loginMeta.loginUrl),
+          });
+          if (targetIsSandbox) {
+            // Emit the neutral canonical check so the user interface can decide
+            // login eligibility from a stable code. The user interface does not
+            // read the message text or the top-level status.
+            checks.push({
+              code: ADAPTER_AUTH_MISSING_CHECK_CODE,
+              level: "warn",
+              message: "This environment has no ready authentication for this adapter.",
+              hint: "Provide credentials for this adapter, or start login in the environment.",
+            });
+          }
+        } else if ((probe.exitCode ?? 1) === 0) {
+          const summary = parsedStream.summary.trim();
+          const hasHello = /\bhello\b/i.test(summary);
+          if (!hasHello) {
+            // The unexpected summary is untrusted probe output. Log only the fixed
+            // context and the allowlisted classification. Keep the check text
+            // fixed.
+            logSandboxProbeDiagnostic(
+              "Claude CLI hello probe returned unexpected output",
+              "unexpected_output",
+            );
+          }
+          checks.push({
+            code: hasHello ? "claude_hello_probe_passed" : "claude_hello_probe_unexpected_output",
+            level: hasHello ? "info" : "warn",
+            message: hasHello
+              ? "Claude hello probe succeeded."
+              : "Claude probe ran but did not return `hello` as expected.",
+            ...(hasHello
+              ? {}
+              : {
+                  hint: "Try the probe manually (`claude --print - --output-format stream-json --verbose`) and prompt `Respond with hello`.",
+                }),
+          });
+        } else {
+          // The failure diagnostic is untrusted. Log only the fixed context, the
+          // allowlisted classification, and the safe exit code. Return only a
+          // fixed public message and hint.
+          logSandboxProbeDiagnostic("Claude CLI hello probe failed", "nonzero_exit", {
+            exitCode: probe.exitCode ?? null,
+          });
+          // Provider-quota exhaustion (usage/session limit) is classified
+          // separately from generic transient upstream errors: auth works, the
+          // subscription's usage window is just spent. Surface it as its own
+          // warning instead of a hard probe failure.
+          const usageLimited = isClaudeProviderQuotaError({
+            parsed,
+            stdout: probe.stdout,
+            stderr: probe.stderr,
+          });
+          const transient = isClaudeTransientUpstreamError({
+            parsed,
+            stdout: probe.stdout,
+            stderr: probe.stderr,
+          });
+          checks.push(
+            usageLimited
+              ? {
+                  code: "claude_hello_probe_usage_limited",
+                  level: "warn",
+                  message: "Claude hello probe hit the subscription usage limit.",
+                  hint: "Authentication works; the account's usage window is exhausted. Wait for the limit to reset and re-run Test.",
+                }
+              : transient
+                ? {
+                    code: "claude_hello_probe_transient_upstream",
+                    level: "warn",
+                    message: "Claude hello probe hit a transient upstream error (rate limit or overload).",
+                    hint: "This is usually temporary. Wait a moment and re-run Test.",
+                  }
+                : {
+                    code: "claude_hello_probe_failed",
+                    level: "error",
+                    message: "Claude hello probe failed.",
+                    hint: `Exit code ${probe.exitCode ?? "unknown"}. Run \`claude --print - --output-format stream-json --verbose\` manually in this directory and prompt \`Respond with hello\` to debug.`,
+                  },
           );
         }
-        checks.push({
-          code: hasHello ? "claude_hello_probe_passed" : "claude_hello_probe_unexpected_output",
-          level: hasHello ? "info" : "warn",
-          message: hasHello
-            ? "Claude hello probe succeeded."
-            : "Claude probe ran but did not return `hello` as expected.",
-          ...(hasHello
-            ? {}
-            : {
-                hint: "Try the probe manually (`claude --print - --output-format stream-json --verbose`) and prompt `Respond with hello`.",
-              }),
-        });
-      } else {
-        // The failure diagnostic is untrusted. Log only the fixed context, the
-        // allowlisted classification, and the safe exit code. Return only a
-        // fixed public message and hint.
-        logSandboxProbeDiagnostic("Claude CLI hello probe failed", "nonzero_exit", {
-          exitCode: probe.exitCode ?? null,
-        });
-        // Provider-quota exhaustion (usage/session limit) is classified
-        // separately from generic transient upstream errors: auth works, the
-        // subscription's usage window is just spent. Surface it as its own
-        // warning instead of a hard probe failure.
-        const usageLimited = isClaudeProviderQuotaError({
-          parsed,
-          stdout: probe.stdout,
-          stderr: probe.stderr,
-        });
-        const transient = isClaudeTransientUpstreamError({
-          parsed,
-          stdout: probe.stdout,
-          stderr: probe.stderr,
-        });
-        checks.push(
-          usageLimited
-            ? {
-                code: "claude_hello_probe_usage_limited",
-                level: "warn",
-                message: "Claude hello probe hit the subscription usage limit.",
-                hint: "Authentication works; the account's usage window is exhausted. Wait for the limit to reset and re-run Test.",
-              }
-            : transient
-              ? {
-                  code: "claude_hello_probe_transient_upstream",
-                  level: "warn",
-                  message: "Claude hello probe hit a transient upstream error (rate limit or overload).",
-                  hint: "This is usually temporary. Wait a moment and re-run Test.",
-                }
-              : {
-                  code: "claude_hello_probe_failed",
-                  level: "error",
-                  message: "Claude hello probe failed.",
-                  hint: `Exit code ${probe.exitCode ?? "unknown"}. Run \`claude --print - --output-format stream-json --verbose\` manually in this directory and prompt \`Respond with hello\` to debug.`,
-                },
-        );
+      } finally {
+        if (taskBuildCache) {
+          const result = await taskBuildCache.cleanup({ collectionSucceeded: probeCollectionSucceeded });
+          checks.push({ code: `claude_task_cache_${result}`, level: "info", message: result === "removed"
+            ? "Private task cache cleanup completed."
+            : "Private task cache retained: process stop or safe cleanup is unconfirmed." });
+        }
       }
     }
   }

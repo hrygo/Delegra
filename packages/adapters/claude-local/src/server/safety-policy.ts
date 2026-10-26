@@ -67,7 +67,7 @@ export async function buildClaudeSafetyPolicy(input: {
   promptBundleDir: string;
   selectedSkills: ReadonlyArray<{ runtimeName: string; source: string }>;
   remote?: boolean;
-}): Promise<{ args: string[]; skillReadDirective: string; identity: string } | null> {
+}): Promise<{ args: string[]; skillReadDirective: string; identity: string; protectedWriteRoots: readonly string[] } | null> {
   const policy = parseClaudeSafetyPolicy(input.config);
   if (!policy) return null;
   if (input.remote) invalid("v1 supports local CLI targets only");
@@ -135,6 +135,7 @@ export async function buildClaudeSafetyPolicy(input: {
   return {
     args,
     skillReadDirective,
+    protectedWriteRoots: denyWrite,
     identity: createHash("sha256").update(JSON.stringify({ policy, cwd, args })).digest("hex"),
   };
 }

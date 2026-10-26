@@ -1,3 +1,4 @@
+import { prepareClaudeTaskBuildCache } from "./task-build-cache.js";
 import { isOpenRouterUrl, openRouterClaudeHeaders } from "@paperclipai/shared/openrouter-attribution";
 import { applyObservabilityEnvironment } from "@paperclipai/adapter-utils/agent-observability";
 import { createProviderStoppedBoundary } from "@paperclipai/adapter-utils/provider-stopped-boundary";
@@ -909,6 +910,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       : `Claude exited with code ${proc.exitCode ?? -1}`;
   };
 
+  let taskBuildCache: Awaited<ReturnType<typeof prepareClaudeTaskBuildCache>> | null = null;
   const runAttempt = async (resumeSessionId: string | null) => {
     await hydrateFreshSessionHandoff(ctx, { resumedSession: Boolean(resumeSessionId) });
     const renderedBootstrapPrompt =
@@ -984,8 +986,10 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         billingType, model: Object.keys(parseObject(parsed.resultJson?.modelUsage)).length > 1 ? "mixed" : parsed.model || model,
           usageByModel: claudeModelReceipts(parsed.resultJson?.modelUsage), complete: parsed.resultJson !== null };
     });
+    const providerStopped = providerStop.beginInvocation();
+    const cacheStopped = taskBuildCache?.beginInvocation();
     const proc = await runAdapterExecutionTargetProcess(runId, runtimeExecutionTarget, command, args, {
-      onProcessStopped: providerStop.beginInvocation(),
+      onProcessStopped: () => { providerStopped(); cacheStopped?.(); },
       cwd,
       env,
       stdin: prompt,
@@ -1313,6 +1317,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     };
   };
 
+  let executionFailed = false;
   try {
     const modelMinimumCliVersion = passesConfiguredModel && claudeCommandLooksLike(command, "claude")
       ? minimumClaudeCliVersionForModel(model)
@@ -1390,6 +1395,10 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       }
     }
 
+    if (safetyPolicyConfig?.profile === "workspace-build" && safetyPolicy) {
+      taskBuildCache = await prepareClaudeTaskBuildCache({ cwd: effectiveExecutionCwd, protectedWriteRoots: safetyPolicy.protectedWriteRoots, onLog });
+      Object.assign(env, taskBuildCache.envOverrides);
+    }
     const initial = await runAttempt(sessionId ?? null);
     const sessionErrorKind =
       sessionId &&
@@ -1441,19 +1450,35 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     }
 
     return toAdapterResult(initial, { fallbackSessionId: runtimeSessionId || runtime.sessionId });
+  } catch (error) {
+    executionFailed = true;
+    throw error;
   } finally {
+    let collectionSucceeded = false;
+    let recoverySucceeded = false;
     try {
       await providerStop.collectBeforeRestore();
+      collectionSucceeded = true;
+    } catch (error) {
+      // Keep legacy finalization behavior. For the typed build cache, a failed
+      // collection retains state and must not hide an existing provider error.
+      if (!taskBuildCache || !executionFailed) throw error;
+      await Promise.resolve().then(() => onLog("stderr", "[paperclip] Claude provider collection failed; task cache retained.\n")).catch(() => undefined);
     } finally {
-      if (paperclipBridge) {
-        await paperclipBridge.stop();
-      }
-      if (restoreRemoteWorkspace) {
-        await onLog(
-          "stdout",
-          `[paperclip] Restoring workspace changes from ${describeAdapterExecutionTarget(executionTarget)}.\n`,
-        );
-        await restoreRemoteWorkspace();
+      try {
+        if (paperclipBridge) {
+          await paperclipBridge.stop();
+        }
+        if (restoreRemoteWorkspace) {
+          await onLog(
+            "stdout",
+            `[paperclip] Restoring workspace changes from ${describeAdapterExecutionTarget(executionTarget)}.\n`,
+          );
+          await restoreRemoteWorkspace();
+        }
+        recoverySucceeded = true;
+      } finally {
+        await taskBuildCache?.cleanup({ collectionSucceeded: collectionSucceeded && recoverySucceeded, onLog });
       }
     }
   }

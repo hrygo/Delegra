@@ -29,6 +29,8 @@ describe("closed Claude safety policy v1", () => {
     expect(result?.args).toContain("--setting-sources="); expect(result?.args).not.toContain("--dangerously-skip-permissions");
     const args = result!.args; const settings = JSON.parse(args[args.indexOf("--settings") + 1]!);
     expect(settings.sandbox).toMatchObject({ enabled: true, failIfUnavailable: true, allowUnsandboxedCommands: false, autoAllowBashIfSandboxed: true, excludedCommands: [], network: { strictAllowlist: true, allowedDomains: [], allowLocalBinding: false } });
+    expect(result!.protectedWriteRoots).toEqual(settings.sandbox.filesystem.denyWrite);
+    expect(settings.sandbox.filesystem.allowWrite).toEqual([]);
     expect(settings.sandbox.filesystem.denyWrite).toEqual(expect.arrayContaining([path.dirname(f.bundle), f.common, path.join(f.cwd, ".git")]));
     expect(args[args.indexOf("--tools") + 1]).toContain("Bash");
     expect(args).toContain("--strict-mcp-config"); expect(args[args.indexOf("--mcp-config") + 1]).toBe('{"mcpServers":{}}');

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdtemp, mkdir, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, realpath, rm, symlink, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -23,7 +23,10 @@ beforeEach(async () => {
   cwd = await realpath(await mkdtemp(path.join(os.tmpdir(), "claude-policy-integration-")));
   vi.stubEnv("PAPERCLIP_HOME", cwd);
   prepareCommand.mockImplementation(async (input) => ({ command: input.command, version: "2.1.310", check: null }));
-  runProcess.mockResolvedValue({ exitCode: 0, signal: null, timedOut: false, stdout: JSON.stringify({ type: "result", subtype: "success", result: "hello", session_id: sessionId }), stderr: "", pid: 1, startedAt: new Date().toISOString() });
+  runProcess.mockImplementation(async (...args) => {
+    args[4].onProcessStopped?.();
+    return { exitCode: 0, signal: null, timedOut: false, stdout: JSON.stringify({ type: "result", subtype: "success", result: "hello", session_id: sessionId }), stderr: "", pid: 1, startedAt: new Date().toISOString() };
+  });
 });
 afterEach(async () => { vi.unstubAllEnvs(); await rm(cwd, { recursive: true, force: true }); });
 function config(profile = "workspace-build") {
@@ -32,7 +35,7 @@ function config(profile = "workspace-build") {
 function context(profile?: string) {
   return {
     runId: "policy-run", agent: { id: "policy-agent", companyId: "policy-company", name: "test", adapterType: "claude_local", adapterConfig: {} },
-    config: config(profile), context: {}, onLog: vi.fn(async () => {}),
+    config: config(profile), context: {}, onLog: vi.fn(async (_stream: string, _message: string) => {}),
     runtime: { sessionId, sessionParams: { sessionId, cwd }, sessionDisplayId: sessionId, taskKey: null },
     runtimeMcp: { getServers: () => [{ name: "not-enabled", url: "https://example.invalid" }] },
   };
@@ -114,4 +117,70 @@ describe("Claude safety policy execution and probe", () => {
     const probeSettings = JSON.parse(probe[3][probe[3].indexOf("--settings") + 1]);
     expect(probeSettings.sandbox.filesystem.allowRead).toEqual([selected]);
   });
+  it("projects the same seven trusted workspace cache keys in execute and local probe", async () => {
+    const snapshots: Record<string, string>[] = [];
+    runProcess.mockImplementation(async (...args) => {
+      const env = args[4].env; snapshots.push(env);
+      expect(typeof env.pnpm_config_store_dir).toBe("string");
+      expect(env.pnpm_config_store_dir.startsWith(`${cwd}/.paperclip-runtime/claude/task-cache/`)).toBe(true);
+      expect(env.PNPM_CONFIG_STORE_DIR).toBe(env.pnpm_config_store_dir);
+      for (const key of ["pnpm_config_store_dir", "UV_CACHE_DIR", "TMPDIR", "TMP", "TEMP", "XDG_RUNTIME_DIR"]) expect((await stat(env[key])).mode & 0o777).toBe(0o700);
+      expect(env.TMPDIR).toBe(env.TMP); expect(env.TMP).toBe(env.TEMP);
+      args[4].onProcessStopped?.();
+      return { exitCode: 0, signal: null, timedOut: false, stdout: JSON.stringify({ type: "result", subtype: "success", result: "hello", session_id: sessionId }), stderr: "" };
+    });
+    const cfg = { ...config(), env: { HOME: "/managed-provider-home", PATH: "/configured/toolchain", pnpm_config_store_dir: "/shared/store", TMPDIR: "/caller/tmp", UV_CACHE_DIR: "/shared/uv", XDG_RUNTIME_DIR: "/caller/runtime" } };
+    await execute({ ...context(), config: cfg } as never);
+    expect(snapshots[0]!.HOME).toBe(cfg.env.HOME); expect(snapshots[0]!.PATH).toBe(cfg.env.PATH);
+    expect((await testEnvironment({ companyId: "policy-company", adapterType: "claude_local", config: cfg })).status).toBe("pass");
+    expect(snapshots.length).toBe(2);
+    for (const env of snapshots) { await expect(stat(env.TMPDIR!)).rejects.toThrow(); await expect(stat(env.XDG_RUNTIME_DIR!)).rejects.toThrow(); }
+    // The local probe's caller allowlist stays closed; only adapter-owned cache
+    // values enter after it, with no caller HOME/PATH promotion.
+    expect(snapshots[1]!.HOME).toBeUndefined(); expect(snapshots[1]!.PATH).toBeUndefined();
+  });
+  it("retains build caches without a provider stop receipt and reports the outcome", async () => {
+    let temporary = "";
+    runProcess.mockImplementation(async (...args) => {
+      temporary = args[4].env.TMPDIR;
+      expect(typeof temporary).toBe("string");
+      return { exitCode: 0, signal: null, timedOut: false, stdout: JSON.stringify({ type: "result", subtype: "success", result: "hello", session_id: sessionId }), stderr: "" };
+    });
+    const ctx = context(); await execute(ctx as never);
+    expect((await stat(temporary)).isDirectory()).toBe(true);
+    expect(ctx.onLog.mock.calls.some(call => call[1].includes("retained"))).toBe(true);
+  });
+  it("retains caches when provider collection fails without hiding that error", async () => {
+    let temporary = "";
+    runProcess.mockImplementation(async (...args) => {
+      temporary = args[4].env.TMPDIR; expect(typeof temporary).toBe("string"); args[4].onProcessStopped?.();
+      return { exitCode: 0, signal: null, timedOut: false, stdout: JSON.stringify({ type: "result", subtype: "success", result: "hello", session_id: sessionId }), stderr: "" };
+    });
+    await expect(execute({ ...context(), onProviderStopped: async () => { throw new Error("collection failed"); } } as never)).rejects.toThrow("collection failed");
+    expect((await stat(temporary)).isDirectory()).toBe(true);
+  });
+
+  it("does not allocate writable caches for candidate review or legacy execution", async () => {
+    await execute(context("candidate-review") as never);
+    await expect(stat(path.join(cwd, ".paperclip-runtime/claude/task-cache"))).rejects.toThrow();
+    const { claudeSafetyPolicy: _policy, ...legacy } = config();
+    await execute({ ...context(), config: legacy } as never);
+    await expect(stat(path.join(cwd, ".paperclip-runtime/claude/task-cache"))).rejects.toThrow();
+    for (const call of runProcess.mock.calls) { expect(call[4].env.pnpm_config_store_dir).toBeUndefined(); expect(call[4].env.XDG_RUNTIME_DIR).toBeUndefined(); }
+  });
+
+  it("keeps provider failure primary when collection and cache cleanup cannot settle", async () => {
+    runProcess.mockImplementation(async (...args) => { args[4].onProcessStopped?.(); throw new Error("provider failure"); });
+    const ctx = { ...context(), onProviderStopped: async () => { throw new Error("collection failure"); } };
+    await expect(execute(ctx as never)).rejects.toThrow("provider failure");
+    expect(ctx.onLog.mock.calls.some(call => call[1].includes("retained"))).toBe(true);
+  });
+
+  it("retains probe cache if collection rejects after a provider stop receipt", async () => {
+    let temporary = "";
+    runProcess.mockImplementation(async (...args) => { temporary = args[4].env.TMPDIR; args[4].onProcessStopped?.(); throw new Error("probe collection failure"); });
+    await expect(testEnvironment({ companyId: "policy-company", adapterType: "claude_local", config: config() })).rejects.toThrow("probe collection failure");
+    expect((await stat(temporary)).isDirectory()).toBe(true);
+  });
+
 });
