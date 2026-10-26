@@ -202,9 +202,12 @@ function findExecutableOnPath(name: string) {
   throw new Error(`Could not find ${name} on the current PATH`);
 }
 
+function quoteShellArgument(value: string) {
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
 async function writeInstallDelegatingPnpmShim(binDir: string) {
   const realPnpmPath = findExecutableOnPath("pnpm");
-  await fs.symlink(realPnpmPath, path.join(binDir, "pnpm-real"));
   const shimPath = path.join(binDir, "pnpm");
   await fs.writeFile(
     shimPath,
@@ -213,7 +216,7 @@ async function writeInstallDelegatingPnpmShim(binDir: string) {
       'if [ "$1" = "paperclipai" ] && [ "$2" = "--help" ]; then',
       "  exit 1",
       "fi",
-      'exec "$(dirname "$0")/pnpm-real" "$@"',
+      `exec ${quoteShellArgument(realPnpmPath)} "$@"`,
       "",
     ].join("\n"),
     "utf8",
