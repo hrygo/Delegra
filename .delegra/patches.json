@@ -168,13 +168,27 @@
       "kind": "fork-only",
       "status": "active",
       "commits": [
-        "37209390fa2de22e86b49e4ed7ab9725ef551e3c"
+        "37209390fa2de22e86b49e4ed7ab9725ef551e3c",
+        "bb7319b37f7479bb3fc55b1a3a764d2c1544e373"
       ],
       "owner": "hrygo",
       "reviewBy": "2026-11-30",
       "verifiedAt": "2026-10-26",
       "retireWhen": "The accepted stable base compares managed bindings by normalized identity and resolves prospective environment variables before adoption checks, with equivalent permission and selection-change tests.",
-      "notes": "Local hotfix for the pinned canary adoption and legacy-adapter interfaces. Port the behavior separately for upstream review rather than publish this installation-specific diff as an upstream backport. Ordinary environment edits do not start a provider probe; actual model, harness, binding, or execution-environment changes still validate. Both probe paths use the same secret resolver after execution-target validation."
+      "notes": "Local hotfix for the pinned canary adoption and legacy-adapter interfaces. Port the behavior separately for upstream review rather than publish this installation-specific diff as an upstream backport. Ordinary environment edits do not start a provider probe; actual model, harness, binding, or execution-environment changes still validate. Both probe paths use the same secret resolver after execution-target validation. Unavailable targets retain missing-binding diagnostics through metadata-only inspection without resolving secret values."
+    },
+    {
+      "id": "workspace-test-host-isolation",
+      "kind": "fork-only",
+      "status": "active",
+      "commits": [
+        "b5ea0ff7f0f51759d6487aa2625bd161bf66dafa"
+      ],
+      "owner": "hrygo",
+      "reviewBy": "2026-11-30",
+      "verifiedAt": "2026-10-26",
+      "retireWhen": "The accepted stable base isolates workspace fallback fixtures from host-installed CLI commands and shell startup PATH changes with equivalent assertions.",
+      "notes": "Test-only isolation: controlled PATH and /bin/sh prevent a globally installed CLI from consuming synthetic fallback config. Real dependency installs still use pnpm and retain their exit status. No production fallback or fail-closed behavior changes."
     },
     {
       "id": "model-public-reference-pricing",

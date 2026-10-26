@@ -60,8 +60,10 @@ the saved configuration unchanged.
 Adoption checks and independent environment tests resolve the same prospective
 configuration. The selected environment supplies the base variables. Agent
 variables take precedence, followed by managed authentication. Both paths
-validate the execution target before reading its secrets. Missing bindings
-and unauthorized secrets still fail; secret values stay out of responses.
+validate the execution target before reading its secrets. When a target is
+unavailable, metadata-only checks still report missing environment bindings
+without resolving secret values. Missing bindings and unauthorized secrets
+still fail; secret values stay out of responses.
 
 ## Deployment and rollback
 
