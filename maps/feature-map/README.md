@@ -99,7 +99,7 @@ Use this index to open a recipe or copy its feature and full capability IDs.
 
 | Feature ID | Recipe | Capability IDs |
 | --- | --- | --- |
-| `budgets-costs` | [Costs and budgets](budgets-costs.md) | `budgets-costs/cost-reporting`, `budgets-costs/budgets`, `budgets-costs/incidents`, `budgets-costs/resolution`, `budgets-costs/subscriptions`, `budgets-costs/accounting-recovery` |
+| `budgets-costs` | [Costs and budgets](budgets-costs.md) | `budgets-costs/cost-reporting`, `budgets-costs/budgets`, `budgets-costs/incidents`, `budgets-costs/resolution`, `budgets-costs/subscriptions`, `budgets-costs/reference-pricing`, `budgets-costs/accounting-recovery` |
 | `activity` | [Dashboards and audit trails](activity.md) | `activity/overview`, `activity/activity`, `activity/runs`, `activity/routine-audit`, `activity/timeline`, `activity/agent-commentary` |
 | `navigation-preferences` | [Navigation, profile, and announcements](navigation-preferences.md) | `navigation-preferences/navigation`, `navigation-preferences/preferences`, `navigation-preferences/profile`, `navigation-preferences/announcements`, `navigation-preferences/fallbacks`, `navigation-preferences/command-palette` |
 | `instance-operations` | [Instance operations](instance-operations.md) | `instance-operations/install-update`, `instance-operations/server-service`, `instance-operations/configuration`, `instance-operations/diagnostics`, `instance-operations/backup`, `instance-operations/runtime-setup` |

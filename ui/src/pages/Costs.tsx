@@ -1,3 +1,4 @@
+import { ModelReferencePricing } from "../components/ModelReferencePricing";
 import { FastResponseHistory } from "../components/fast-responses/FastResponseHistory";
 import { DecisionHistory } from "../components/decision-models/DecisionHistory";
 import { SubscriptionCostCard, SubscriptionTokenUsage } from "../components/SubscriptionCostCard";
@@ -1036,6 +1037,7 @@ export function Costs({
         </TabsContent>
 
         <TabsContent value="providers" className="mt-4 space-y-4">
+          {!showCustomPrompt && <ModelReferencePricing key={companyId} companyId={companyId} from={from} to={to} />}
           {showCustomPrompt ? (
             <p className="text-sm text-muted-foreground">Select a start and end date to load data.</p>
           ) : (

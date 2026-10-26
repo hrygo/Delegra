@@ -1,3 +1,4 @@
+import { modelReferenceRateInputSchema } from "@paperclipai/shared";
 import { MUSE_ASSET_VERSION, museStopBoundarySchema, museDetectorCleanupAttestationSchema, createGrokInvitationSchema, configureGrokRoutineSchema, verifyGrokRoutineSchema, recoverGrokRoutineSchema, pairGrokBindingSchema, stopGrokWorkSchema, retryGrokDeliverySchema, updateFastResponseSchema } from "@paperclipai/shared";
 import { slackTestMessageSchema, slackTestMessageResultSchema, slackManagerAuthorizationSchema, slackSetupOptionsSchema, slackManagedProvisionSchema, slackManagedResultSchema, slackRegistrationSchema, slackSetupActionSchema, slackInstallAuthorizationSchema, slackRegistrationStateSchema, slackAppConfigurationSchema, slackAvatarStateSchema, slackAccountStateSchema } from "@paperclipai/shared";
 import { experimentalApiMetadata } from "./experimental-api-metadata.js";
@@ -5776,6 +5777,7 @@ const costSummaryPaths = [
   "quota-windows",
   "subscriptions",
   "data-quality",
+  "model-reference-rates",
 ] as const;
 
 for (const segment of costSummaryPaths) {
@@ -5793,6 +5795,13 @@ for (const segment of costSummaryPaths) {
     responses: { 200: r.ok(), 401: r.unauthorized },
   });
 }
+
+registry.registerPath({ method: "put", path: "/api/companies/{companyId}/costs/model-reference-rates", tags: ["costs"],
+  summary: "Save a company provider/model public reference rate",
+  description: "Board only, requires company cost read and AI connection management permission; viewers and agents are denied. Exact provider/model key, optimistic revision, public source/date. Only the separate scenario report changes; invoices and budgets are unchanged.",
+  request: { params: z.object({ companyId: z.string() }), body: jsonBody(modelReferenceRateInputSchema) },
+  responses: { 200: r.ok(), 400: r.badRequest, 401: r.unauthorized, 403: r.forbidden, 409: r.conflict },
+});
 
 registry.registerPath({ method: "post", path: "/api/companies/{companyId}/costs/retry-accounting", tags: ["costs"],
   summary: "Retry recording a run's saved cost data",

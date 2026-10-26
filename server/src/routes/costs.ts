@@ -1,3 +1,5 @@
+import { modelReferenceRateService } from "../services/model-reference-rates.js";
+import { modelReferenceRateInputSchema } from "@paperclipai/shared";
 import { importProviderDailyCosts } from "../services/provider-billing-import.js";
 import { subscriptionPriceSchema, mergeSubscriptionsSchema } from "@paperclipai/shared";
 import { subscriptionService } from "../services/subscriptions.js";
@@ -95,6 +97,22 @@ export function costRoutes(
   async function subscriptionActor(req: Parameters<typeof assertCompanyAccess>[0], companyId: string) {
     return { ...costReaderActor(req, companyId), canManage: await canManageAiConnections(db, req, companyId) };
   }
+
+  router.get("/companies/:companyId/costs/model-reference-rates", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    const actor = costReaderActor(req, companyId);
+    if (!(await assertCompanyCostReadAllowed(req, res, companyId))) return;
+    const canEdit = !actor.readOnly && await canManageAiConnections(db, req, companyId);
+    res.json(await modelReferenceRateService(db).report(companyId, parseCostDateRange(req.query), canEdit));
+  });
+  router.put("/companies/:companyId/costs/model-reference-rates", validate(modelReferenceRateInputSchema), async (req, res) => {
+    const companyId = req.params.companyId as string;
+    const actor = costReaderActor(req, companyId);
+    if (!(await assertCompanyCostReadAllowed(req, res, companyId))) return;
+    const canEdit = !actor.readOnly && await canManageAiConnections(db, req, companyId);
+    if (!canEdit) throw forbidden("Managing reference rates requires connection management permission");
+    res.json(await modelReferenceRateService(db).save(companyId, req.body, { userId: actor.userId, canEdit }));
+  });
 
   router.get("/companies/:companyId/costs/data-quality", async (req, res) => {
     const companyId = req.params.companyId as string;
