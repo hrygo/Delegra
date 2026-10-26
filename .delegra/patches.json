@@ -5,8 +5,8 @@
     "deploy": "deploy"
   },
   "currentDeployment": {
-    "tag": "deploy/v2026.1024.0-canary.7-r6",
-    "commit": "c59e0854ccb382273f7cacce9154aeb32021f633",
+    "tag": "deploy/v2026.1024.0-canary.7-r7",
+    "commit": "64b20f7ccdb4a30539b8425ec8beba29396da24f",
     "base": "canary/v2026.1024.0-canary.7",
     "patches": [
       "managed-codex-project-auth",
@@ -14,7 +14,8 @@
       "managed-claude-host-auth-boundary",
       "portable-test-baselines",
       "fork-review-workflow-token",
-      "inbox-badge-resolved-failed-runs"
+      "inbox-badge-resolved-failed-runs",
+      "model-public-reference-pricing"
     ]
   },
   "base": {
