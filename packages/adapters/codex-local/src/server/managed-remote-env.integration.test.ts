@@ -33,7 +33,7 @@ beforeEach(async () => {
 });
 afterEach(async () => { vi.unstubAllEnvs(); await rm(root, { recursive: true, force: true }); });
 function config() {
-  return { engine: "cli", cwd: root, model: "custom-model", modelReasoningEffort: "high", managedAiConnection: { identity: "unit-test" }, env: { CODEX_HOME: provider, HOME: "/var/folders/host/paperclip-ai-test", XDG_DATA_HOME: "/var/folders/host/data", PATH: "/remote/toolchain/bin:/usr/bin:/bin", OPENAI_API_KEY: "unit-test-key" } };
+  return { engine: "cli", cwd: root, model: "custom-model", modelReasoningEffort: "high", managedAiConnection: { identity: "unit-test" }, env: { CODEX_HOME: provider, HOME: "/var/folders/host/paperclip-ai-test", XDG_DATA_HOME: "/var/folders/host/data", PATH: "/remote/toolchain/bin:/usr/bin:/bin", pnpm_config_store_dir: "/shared/legacy-store", PNPM_CONFIG_STORE_DIR: "/shared/upper-store", OPENAI_API_KEY: "unit-test-key" } };
 }
 const target = { kind: "remote", transport: "sandbox", remoteCwd, providerKey: "test", runner: { execute: vi.fn() } };
 function context() {
@@ -44,12 +44,20 @@ describe("managed remote environment wiring", () => {
     expect((await execute(context() as never)).exitCode).toBe(0);
     const launched = runProcess.mock.calls.find(call => call[3].includes("exec"))![4].env;
     expect(launched.HOME).toBe(`${remoteCwd}/.paperclip-runtime/codex/run-environment/unit-run/home`);
-    for (const key of ["HOME", "XDG_DATA_HOME", "TMPDIR", "UV_CACHE_DIR", "COREPACK_HOME"]) expect(checkCommand.mock.calls.at(-1)![3][key]).toBe(launched[key]);
+    for (const key of ["HOME", "XDG_DATA_HOME", "TMPDIR", "UV_CACHE_DIR", "COREPACK_HOME", "pnpm_config_store_dir", "PNPM_CONFIG_STORE_DIR"]) expect(checkCommand.mock.calls.at(-1)![3][key]).toBe(launched[key]);
     expect(launched.CODEX_HOME).toBe(`${remoteCwd}/.paperclip-runtime/codex/home`);
+    expect(launched.pnpm_config_store_dir).toBe(`${launched.XDG_CACHE_HOME}/pnpm-store`);
+    expect(launched.PNPM_CONFIG_STORE_DIR).toBe(launched.pnpm_config_store_dir);
     expect(launched.PATH).toBe(config().env.PATH); expect(launched.OPENAI_API_KEY).toBe("unit-test-key");
     const preparation = runShell.mock.calls.find(call => call[2].includes("run-environment"));
     expect(preparation?.[2]).toContain("chmod 700"); expect(preparation?.[3].env).toEqual({});
     expect(runProcess.mock.calls.find(call => call[3].includes("exec"))![3]).toEqual(expect.arrayContaining(["--model", "custom-model", "model_reasoning_effort=\"high\""]));
+    const args = runProcess.mock.calls.find(call => call[3].includes("exec"))![3] as string[];
+    const policy = args.find(arg => arg.startsWith("shell_environment_policy.include_only="))!;
+    const shellKeys = JSON.parse(policy.slice(policy.indexOf("=") + 1)) as string[];
+    expect(shellKeys).toEqual(expect.arrayContaining(["pnpm_config_store_dir", "PNPM_CONFIG_STORE_DIR"]));
+    expect(args).toEqual(expect.arrayContaining(['shell_environment_policy.inherit="all"', "shell_environment_policy.ignore_default_excludes=true"]));
+    expect(args.join(" ")).not.toContain("/shared/legacy-store");
   });
   it("prepares probe directories before preflight and keeps its managed provider home", async () => {
     const result = await testEnvironment({ companyId: "unit-company", adapterType: "codex_local", config: config(), executionTarget: target } as never);
@@ -57,7 +65,10 @@ describe("managed remote environment wiring", () => {
     const launched = runProcess.mock.calls.find(call => call[3].includes("exec"))![4].env;
     expect(launched.HOME.startsWith(`${remoteCwd}/.paperclip-runtime/codex/run-environment/codex-envtest-`)).toBe(true);
     expect(checkCommand.mock.calls.at(-1)![3].HOME).toBe(launched.HOME);
+    expect(checkCommand.mock.calls.at(-1)![3].pnpm_config_store_dir).toBe(launched.pnpm_config_store_dir);
     expect(launched.CODEX_HOME).toBe(`${remoteCwd}/.paperclip-runtime/codex/home`);
+    expect(launched.pnpm_config_store_dir).toBe(`${launched.XDG_CACHE_HOME}/pnpm-store`);
+    expect(launched.PNPM_CONFIG_STORE_DIR).toBe(launched.pnpm_config_store_dir);
     expect(runShell.mock.calls.some(call => call[2].includes("chmod 700"))).toBe(true);
   });
   it("does not launch a provider after private directory preparation fails", async () => {

@@ -32,6 +32,10 @@ export function buildManagedRemoteEnvironment(input: {
     UV_CACHE_DIR: path.posix.join(cache, "uv"),
     COREPACK_HOME: path.posix.join(cache, "corepack"),
     PNPM_HOME: path.posix.join(data, "pnpm"),
+    // pnpm 12 accepts both spellings; an explicit store overrides HOME/XDG.
+    // Pin both to prevent an existing uppercase alias selecting shared state.
+    pnpm_config_store_dir: path.posix.join(cache, "pnpm-store"),
+    PNPM_CONFIG_STORE_DIR: path.posix.join(cache, "pnpm-store"),
   };
   const directories = [...new Set([root, ...Object.values(projected)])];
   const quote = (directory: string) => `'${directory.replace(/'/g, `'"'"'`)}'`;
