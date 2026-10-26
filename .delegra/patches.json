@@ -205,6 +205,19 @@
       "notes": "Narrow local repair for managed OpenAI-compatible Responses API-key connections. No reference-rate editor, retail price estimate, SQL migration, budget-policy weakening, or retroactive declaration inference. Positive provider charges take precedence. Historical corrections preserve original receipts and append evidence-backed, idempotent amount/classification adjustments. Native, CLI/ACP and acpx use a frozen server-owned declaration; legacy replays keep their original absence."
     },
     {
+      "id": "company-cli-fixture-isolation",
+      "kind": "fork-only",
+      "status": "active",
+      "commits": [
+        "b05f6d5c60a664764afa27363e55ec3f9c0be810"
+      ],
+      "owner": "hrygo",
+      "reviewBy": "2026-11-30",
+      "verifiedAt": "2026-10-26",
+      "retireWhen": "The accepted stable base isolates the company import/export fixture from package-registry update checks and records bounded startup failure timing with equivalent assertions.",
+      "notes": "Test-only configuration and diagnostics. Restore PAPERCLIP_UPDATE_CHECK=0 after clearing inherited Paperclip variables, capture relative output times and the last health result. Retain the original 30-second health deadline, 60-second setup bound, and import/export assertions. The CI timeout preceded listener readiness; the update query is a confirmed external dependency, not a proven sole cause."
+    },
+    {
       "id": "model-public-reference-pricing",
       "kind": "fork-only",
       "status": "retired",
