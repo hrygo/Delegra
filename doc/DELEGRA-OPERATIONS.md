@@ -67,6 +67,39 @@ still fail; secret values stay out of responses.
 
 ## Deployment and rollback
 
+The 2026-10-27 environment repair runs
+`deploy/v2026.1024.0-canary.7-r8` (`ec00bcd4c001502dde7f24ee7f72825efff495b8`),
+merged in [PR #20](https://github.com/hrygo/Delegra/pull/20).
+The reviewed source passed independent review, local typecheck and build,
+and 50 CI checks; one paired check was skipped. Its local full suite remains
+in progress and is not counted as passed. The merge tree matches the reviewed
+source, and the isolated release installation built successfully.
+
+The authenticated controller health reports the expected clean commit and
+startup recovery ready. Both affected agents saved their final environment
+fields, and an exact read-only database check verified all three values.
+Models, managed connections, secret references, all seven manual pauses,
+and the existing budget policy remain unchanged. No business task was run.
+The full agent checkout/tool/report/finalize lifecycle remains untested.
+
+The two historical zero-incremental-fee events were corrected through the
+existing r6 audited adjustment API before this release. They did not require
+new billing code. The budget is healthy and the original usage and receipts
+match after r8. PR #21's automatic billing declaration feature remains a draft
+and was not deployed.
+
+A fresh pre-release database backup passed gzip integrity and SHA256 checks;
+no restore drill was performed. This repair adds no migration. The deploy
+base retains the unused reference-rate table migration from the withdrawn
+feature. Keep current data for a source rollback to r6; do not overwrite the
+new audit adjustments with an older database snapshot.
+
+The source fix is proposed upstream in
+[PR #17760](https://github.com/paperclipai/paperclip/pull/17760), with
+[issue #17759](https://github.com/paperclipai/paperclip/issues/17759) and the
+existing [issue #14518](https://github.com/paperclipai/paperclip/issues/14518).
+Upstream acceptance remains separate from this local release.
+
 Keep service configuration, instance data, and source revisions separate.
 Preserve the instance data directory when switching source revisions. Run one
 service against that data directory; do not start a second controller on it.
@@ -86,9 +119,9 @@ fails. A later upgrade with schema changes may require a compatible database
 restore; source rollback alone is not a general migration rollback.
 
 The 2026-10-26 pricing rollback restored
-`deploy/v2026.1024.0-canary.7-r6` (`c59e0854c`). The controller reports that
-revision through `/api/health`. The operator authorized discarding post-r7
-changes, so the database uses the verified pre-r7 snapshot. The former r7
+`deploy/v2026.1024.0-canary.7-r6` (`c59e0854c`). The controller reported that
+revision through `/api/health` at the time. The operator authorized discarding post-r7
+changes, so the database was restored from the verified pre-r7 snapshot. The former r7
 database and a separate dump remain available as recovery points outside Git.
 PR #17's reference-rate API and Providers editor are withdrawn. Keep its SQL
 migration, journal, snapshots, and schema in source to preserve executable
