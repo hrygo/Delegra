@@ -113,7 +113,6 @@ export type RuntimeRequestResolution =
 
 export interface HeartbeatRunListOptions {
   summary?: boolean;
-  /** Drops failed runs whose task interruption is already resolved. */
   suppressResolvedFailures?: boolean;
 }
 
