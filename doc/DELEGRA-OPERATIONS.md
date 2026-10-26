@@ -71,16 +71,19 @@ The 2026-10-27 environment repair runs
 `deploy/v2026.1024.0-canary.7-r8` (`ec00bcd4c001502dde7f24ee7f72825efff495b8`),
 merged in [PR #20](https://github.com/hrygo/Delegra/pull/20).
 The reviewed source passed independent review, local typecheck and build,
-and 50 CI checks; one paired check was skipped. Its local full suite remains
-in progress and is not counted as passed. The merge tree matches the reviewed
-source, and the isolated release installation built successfully.
+and 50 CI checks; one paired check was skipped. The local full suite completed
+on 2026-10-27 at 01:10 Asia/Shanghai with exit code 0; existing skipped cases
+remain skipped. The merge tree matches the reviewed source, and the isolated
+release installation built successfully.
 
 The authenticated controller health reports the expected clean commit and
 startup recovery ready. Both affected agents saved their final environment
 fields, and an exact read-only database check verified all three values.
-Models, managed connections, secret references, all seven manual pauses,
-and the existing budget policy remain unchanged. No business task was run.
-The full agent checkout/tool/report/finalize lifecycle remains untested.
+At activation, models, managed connections, secret references, all seven manual
+pauses, and the existing budget policy were unchanged; this repair did not run
+a business task. The full agent checkout/tool/report/finalize lifecycle was not
+part of deployment qualification. Subsequent task rollout and role changes are
+owned by the current project coordination workflow.
 
 The two historical zero-incremental-fee events were corrected through the
 existing r6 audited adjustment API before this release. They did not require
