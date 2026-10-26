@@ -51,4 +51,4 @@ The main decisions I would like to confirm are the smallest useful first slice, 
 
 Published: https://github.com/paperclipai/paperclip/issues/17710
 
-Local design branch: `codex/internal-billing-plan-local` (not pushed).
+Fork design branch: `hrygo/Delegra:codex/internal-billing-plan-local`. Preserve this branch with deletion and force-push protection and no bypass actors. Keep the proposal separate from `deploy` and upstream code.

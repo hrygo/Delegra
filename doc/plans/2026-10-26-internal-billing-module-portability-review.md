@@ -1,6 +1,6 @@
 # 内部计费方案二次审查：Provider 与部署通用性
 
-> 保存范围：仅本地 fork，未推送。2026-10-26 已恢复 r6 与 r7 上线前的数据快照；源码撤回见 [fork PR #19](https://github.com/hrygo/Delegra/pull/19)。完整计费模块暂不实施，[上游范围协调 issue #17710](https://github.com/paperclipai/paperclip/issues/17710) 已提交并表明愿意开发，确认维护者方向后再推进。下文对 r7 的诊断和文件落点保留为历史设计依据，不表示 r6 已有这些接口。
+> 保存范围：fork `hrygo/Delegra` 的独立方案分支 `codex/internal-billing-plan-local`。该分支用于设计归档与后续讨论，不合入 `deploy` 或上游；保护策略为禁止删除和强制推送，不设绕过权限。2026-10-26 已恢复 r6 与 r7 上线前的数据快照；源码撤回见 [fork PR #19](https://github.com/hrygo/Delegra/pull/19)。完整计费模块暂不实施，[上游范围协调 issue #17710](https://github.com/paperclipai/paperclip/issues/17710) 已提交并表明愿意开发，确认维护者方向后再推进。下文对 r7 的诊断和文件落点保留为历史设计依据，不表示 r6 已有这些接口。
 
 日期：2026-10-26。对象：[设计方案](2026-10-26-internal-billing-module-design.md)与[实施计划](2026-10-26-internal-billing-module-implementation.md)。本轮为文档和契约审查，不是产品实现验收。
 
