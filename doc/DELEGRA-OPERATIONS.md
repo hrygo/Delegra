@@ -91,6 +91,11 @@ exposes only read tools and final text; the host persists the report. Both keep
 the complete selected skills and reject unsandboxed fallback. A CLI hello does
 not prove tool boundaries or a successful platform task lifecycle.
 
+Heartbeat skill preparation keeps the explicit company skill selection for both
+closed profiles. It does not add Legacy operational or feedback defaults. Invalid
+opt-ins fail before adapter dispatch. Stored selection snapshots retain their
+original skill set, versions and bytes during recovery.
+
 The build profile puts both pnpm store aliases, the UV cache and pnpm runtime
 locks in a private directory inside the task workspace. Cleanup requires the
 current provider stop receipt and successful collection; unknown state retains

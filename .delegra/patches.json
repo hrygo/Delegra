@@ -242,13 +242,14 @@
       "status": "active",
       "commits": [
         "3f48d630c52b3f53bba8246ae733f24b57f4a308",
-        "e081a19972f8945378542849fd308da8148c220c"
+        "e081a19972f8945378542849fd308da8148c220c",
+        "bbd108f641f890f678a8ffea6512dac447f4931e"
       ],
       "owner": "hrygo",
       "reviewBy": "2026-11-30",
       "verifiedAt": "2026-10-27",
       "retireWhen": "The accepted stable base provides equivalent closed managed-Claude build/review policies, selected-skill discovery and fail-closed tool/sandbox boundaries.",
-      "notes": "Adapter-owned settings are needed for the managed connection authentication boundary on the pinned deployment. Raw settings remain rejected. Source regressions and real macOS CLI tool/file/network qualification pass; live saved-agent lifecycle remains a rollout gate. The workspace-build profile derives seven private workspace cache variables, including XDG_RUNTIME_DIR for pnpm per-user operation locks; it adds no write grant. Exact-root cleanup requires the current provider stop and successful collection. Candidate-review remains read-only. Fixed CLI synthetic offline install and boundary qualification passed; provider quality and live task lifecycle remain separate."
+      "notes": "Adapter-owned settings are needed for the managed connection authentication boundary on the pinned deployment. Raw settings remain rejected. Source regressions and real macOS CLI tool/file/network qualification pass; live saved-agent lifecycle remains a rollout gate. The workspace-build profile derives seven private workspace cache variables, including XDG_RUNTIME_DIR for pnpm per-user operation locks; it adds no write grant. Exact-root cleanup requires the current provider stop and successful collection. Candidate-review remains read-only. Fixed CLI synthetic offline install and boundary qualification passed; provider quality and live task lifecycle remain separate. Common heartbeat preparation also keeps the explicit company skill selection for both closed profiles instead of adding Legacy operational and feedback defaults. Invalid opt-ins fail before adapter dispatch. Saved selection snapshots keep their original versions and bytes."
     },
     {
       "id": "managed-ssh-run-environment",
