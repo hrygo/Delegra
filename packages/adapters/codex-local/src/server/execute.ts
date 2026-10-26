@@ -115,6 +115,7 @@ import {
   resolveCodexExecutionEngineForRun,
 } from "./acp.js";
 import { codexShellEnvironmentKeys } from "@paperclipai/adapter-utils/codex-shell-environment";
+import { buildManagedRemoteEnvironment } from "./managed-remote-env.js";
 
 const __moduleDir = path.dirname(fileURLToPath(import.meta.url));
 const executeCodexAcp = createCodexAcpExecutor();
@@ -783,6 +784,10 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   let stagedCodexHomeDir: string | null = null;
   let observabilityProfile: Awaited<ReturnType<typeof prepareCodexObservabilityProfile>> | null = null;
   let observabilityPreparationFailed = false;
+  let cleanupManagedRemoteEnvironment: (() => Promise<void>) | null = null;
+  let managedRemoteProviderStarted = false;
+  let managedRemoteProviderStopped = false;
+  let managedRemoteRestoreSucceeded = false;
   try {
     if (ctx.observability) {
       if (isManagedCodexHomePath(process.env, agent.companyId, effectiveCodexHome)) {
@@ -1013,6 +1018,37 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       env.PAPERCLIP_RUNTIME_PRIMARY_URL = runtimePrimaryUrl;
     }
     env.CODEX_HOME = remoteCodexHome ?? effectiveCodexHome;
+    const managedRemoteEnvironment = buildManagedRemoteEnvironment({
+      managed: Boolean(config.managedAiConnection), remote: executionTargetIsRemote,
+      cwd: effectiveExecutionCwd, runId, env,
+    });
+    if (managedRemoteEnvironment.prepareCommand) {
+      const prepared = await runAdapterExecutionTargetShellCommand(runId, runtimeExecutionTarget, managedRemoteEnvironment.prepareCommand, {
+        cwd: effectiveExecutionCwd, env: {}, timeoutSec: 15,
+      });
+      if (prepared.exitCode !== 0 || prepared.timedOut || prepared.signal) {
+        throw new Error("Could not prepare the managed remote environment");
+      }
+      Object.assign(env, managedRemoteEnvironment.env);
+      cleanupManagedRemoteEnvironment = async () => {
+        const log = async (stream: "stdout" | "stderr", message: string) => {
+          await Promise.resolve().then(() => onLog(stream, `[paperclip] ${message}\n`)).catch(() => undefined);
+        };
+        if (managedRemoteProviderStarted && (!managedRemoteProviderStopped || !managedRemoteRestoreSucceeded)) {
+          await log("stderr", "Managed remote environment retained: provider stop or workspace/auth recovery is unconfirmed.");
+          return;
+        }
+        try {
+          const cleaned = await runAdapterExecutionTargetShellCommand(runId, runtimeExecutionTarget, managedRemoteEnvironment.cleanupCommand!, {
+            cwd: effectiveExecutionCwd, env: {}, timeoutSec: 15,
+          });
+          if (cleaned.exitCode !== 0 || cleaned.timedOut || cleaned.signal) throw new Error("cleanup failed");
+          await log("stdout", "Managed remote environment cleanup completed.");
+        } catch {
+          await log("stderr", "Managed remote environment cleanup failed; remaining run state retained.");
+        }
+      };
+    }
     if (ctx.observability && (observabilityProfile || observabilityPreparationFailed)) applyObservabilityEnvironment(env, ctx.observability);
     if (authToken) {
       env.PAPERCLIP_API_KEY = authToken;
@@ -1391,8 +1427,12 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         return { usage: parsed.usageReported ? parsed.usage : undefined, costStatus: parsed.usageComplete ? undefined : "unpriced", usageBasis: "per_run", provider: "openai", biller, billingType, model, pricingContext, costUsd: null, complete: parsed.usageComplete };
       });
       try {
+        managedRemoteProviderStarted = true;
+        managedRemoteProviderStopped = false;
+        managedRemoteRestoreSucceeded = false;
+        const stopped = providerStop.beginInvocation();
         const proc = await runAdapterExecutionTargetProcess(runId, runtimeExecutionTarget, command, args, {
-          onProcessStopped: providerStop.beginInvocation(),
+          onProcessStopped: () => { stopped(); managedRemoteProviderStopped = true; },
           cwd,
           env,
           stdin: prompt,
@@ -1671,8 +1711,11 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       executionError = error;
       throw error;
     } finally {
+      let providerCollectionSucceeded = false;
+      let workspaceRestoreSucceeded = false;
       try {
         await providerStop.collectBeforeRestore();
+        providerCollectionSucceeded = true;
       } finally {
         if (paperclipBridge) {
           await paperclipBridge.stop();
@@ -1684,6 +1727,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
               `[paperclip] Restoring workspace changes from ${describeAdapterExecutionTarget(executionTarget)}.\n`,
             );
             await restoreRemoteWorkspace();
+            workspaceRestoreSucceeded = true;
           } catch (error) {
             await Promise.resolve(
               onLog(
@@ -1698,10 +1742,16 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
             // the only workspace edits before a replacement sandbox starts.
             if (executionError === null) throw error;
           }
+        } else {
+          workspaceRestoreSucceeded = true;
         }
+        managedRemoteRestoreSucceeded = providerCollectionSucceeded && workspaceRestoreSucceeded;
       }
     }
   } finally {
+    // No provider has run on preflight failures; otherwise both the stop receipt
+    // and completed workspace/auth recovery are required before deleting state.
+    await cleanupManagedRemoteEnvironment?.();
     // Remove the staged CODEX_HOME allowlist temp dir on every exit path
     // (teardown AND error), never only the happy path. Cleanup failure is
     // logged, not fatal — a leaked temp dir must not crash the run.

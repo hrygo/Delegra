@@ -65,6 +65,39 @@ unavailable, metadata-only checks still report missing environment bindings
 without resolving secret values. Missing bindings and unauthorized secrets
 still fail; secret values stay out of responses.
 
+## Managed task safety
+
+Generated Codex filesystem policy travels through the typed launch-policy
+contract, not a command-line argument. Assigned skill roots and the 4,096-byte
+per-argument limit are preserved. Both controller and Runner artifacts must
+support the contract; older artifacts reject a new-policy session before
+admission. Drain those sessions before a source rollback and retain checkpoints
+for recovery with compatible artifacts. Do not retry with broader permissions.
+
+Managed Legacy Codex runs over SSH use private per-run HOME, XDG, temporary and
+tool-cache directories with mode `0700`. The target PATH and Codex authentication
+home remain explicit. Collection removes only that run's environment after
+provider stop and successful workspace/auth restoration. Unknown stop or restore
+failure retains it for investigation; a cleanup error does not replace the
+primary result. A confirmed missing optional auth file preserves host auth;
+permission, transport and local SSH setup failures remain fatal.
+
+Managed Claude CLI tasks can opt into adapter-owned `claudeSafetyPolicy`
+profiles: `workspace-build` or `candidate-review`. They require CLI 2.1.310 or
+newer, disabled permission bypass, and no conflicting raw settings/arguments.
+The build profile enables workspace file/build tools, protects prompt/skill/Git
+metadata and keeps Bash offline inside the required sandbox. The review profile
+exposes only read tools and final text; the host persists the report. Both keep
+the complete selected skills and reject unsandboxed fallback. A CLI hello does
+not prove tool boundaries or a successful platform task lifecycle.
+
+Verify a fixed toolchain entry with both a shell invocation and direct process
+spawn. A shell can execute a pnpm placeholder without a shebang while a direct
+spawn fails or falls through to another PATH entry. Use a versioned executable
+entry for the installed native package, preserving the per-run cache projection;
+do not repair this by installing a different global pnpm or rewriting a previous
+toolchain revision.
+
 ## Deployment and rollback
 
 The 2026-10-27 environment repair runs
