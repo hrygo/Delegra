@@ -76,8 +76,9 @@ does not record the subscription purchase price or estimate a retail API price.
 Use the authenticated management API:
 
 1. Read `GET /api/companies/{companyId}/ai-connections/{connectionId}/billing`.
-2. Use `PUT` on that path with the returned `expectedRevision` (or `null` for
-   the first declaration). Supply `declaration.billingType` as
+2. Use `PUT` on that path. Set the request field `expectedRevision` to the
+   GET response's `configuration.revision`, or `null` when `configuration` is
+   null for the first declaration. Supply `declaration.billingType` as
    `subscription_included`, a `biller`, and `pricingProvenance` with
    `source: operator`, a version, and the confirmation evidence.
 3. Read the configuration and its effective declaration back. A concurrent
