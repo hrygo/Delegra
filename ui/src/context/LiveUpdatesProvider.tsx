@@ -1344,6 +1344,9 @@ function invalidateActivityQueries(
     queryClient.invalidateQueries({
       queryKey: queryKeys.issues.listUnreadTouchedByMe(companyId),
     });
+    if (action === "issue.updated" && typeof details?.status === "string") {
+      queryClient.invalidateQueries({ queryKey: queryKeys.heartbeats(companyId) });
+    }
     if (entityId) {
       const selfCommentActivity =
         (action === "issue.comment_added" ||

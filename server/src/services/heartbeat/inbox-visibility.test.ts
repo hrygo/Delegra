@@ -4,9 +4,9 @@ import {
   excludeResolvedFailedRuns,
   filterResolvedFailedRuns,
   isResolvedFailedRun,
-} from "./heartbeat-inbox-visibility.js";
+} from "./inbox-visibility.js";
 
-vi.mock("./task-interruption-presentation.js", () => ({
+vi.mock("../task-interruption-presentation.js", () => ({
   taskInterruptionPresentations: vi.fn(async (_db: unknown, _companyId: string, issueRows: Array<{ id: string }>) =>
     new Map(issueRows.map((issue) => [issue.id, { state: issue.id === "issue-1" ? "resolved" : "failed" }])),
   ),
