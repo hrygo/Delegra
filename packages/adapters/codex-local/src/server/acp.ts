@@ -339,8 +339,8 @@ function withCodexAuthRefreshFailureClassification(result: AdapterExecutionResul
 export function resolveCodexAcpBillingIdentity(
   ctx: Pick<AdapterExecutionContext, "config"> &
     Partial<Pick<AdapterExecutionContext, "executionTarget" | "executionTransport">>,
-): { provider: string; biller: string; billingType: AdapterBillingType } {
-  const managedBilling = resolveManagedOpenAiBilling(ctx.config.managedAiRouting);
+): Pick<import("@paperclipai/adapter-utils").AdapterExecutionResult, "provider" | "biller" | "billingType" | "costUsd" | "pricingProvenance" | "billingDeclaration"> {
+  const managedBilling = resolveManagedOpenAiBilling(ctx.config.managedAiRouting, parseObject(ctx.config.managedAiConnection).billing);
   if (managedBilling) return managedBilling;
   const envConfig = parseObject(parseObject(ctx.config).env);
   const target = readAdapterExecutionTarget({

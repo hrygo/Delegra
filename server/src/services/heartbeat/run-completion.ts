@@ -1,3 +1,4 @@
+import { normalizeDeclaredBilling } from "@paperclipai/adapter-utils";
 import { measureRunPhase } from "../execution-preparation-timing.js";
 import { pendingCaseHandoffForRun } from "./case-handoff-lifecycle.js";
 import { NON_RETRYABLE_PREFLIGHT_FAILURE_CODES, isHeartbeatRunTerminalStatus } from "./run-lifecycle.js";
@@ -382,9 +383,10 @@ export function createHeartbeatRunCompletion(db: Db, dependencies: HeartbeatRunC
   } = dependencies;
 
   async function completeRun(input: CompleteHeartbeatRunInput) {
-    const { run, agent, issueId, issueRef, signal, output, session, readFailureReportSecrets, adapterResult, sessionCodec, taskSessionForRun, sessionCompaction,
+    const { run, agent, issueId, issueRef, signal, output, session, readFailureReportSecrets, adapterResult: rawAdapterResult, sessionCodec, taskSessionForRun, sessionCompaction,
       configFreshnessResultMetadata, runLedgerScope, currentUserRedactionOptions,
       providerTraceCapture, onProviderTraceFinalized, issueContext, onLog } = input;
+    const adapterResult = normalizeDeclaredBilling(rawAdapterResult);
     const { runtimeForAdapter, previousSessionParams, taskKey, configuredModel, sessionConfigMetadata } = session;
     const { handle, outputProgressState, flushOutputProgress } = output;
     const processCancellation =

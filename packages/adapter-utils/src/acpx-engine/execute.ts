@@ -274,7 +274,7 @@ interface AcpxEngineSettings {
   packageRootDir: string;
 }
 
-export interface AcpxEngineBillingIdentity {
+export interface AcpxEngineBillingIdentity extends Pick<AdapterExecutionResult, "costUsd" | "pricingProvenance" | "billingDeclaration"> {
   provider?: string | null;
   biller?: string | null;
   billingType?: AdapterBillingType | null;
@@ -4048,6 +4048,7 @@ export function createAcpxEngineExecutor(deps: AcpxEngineExecutorOptions = {}) {
       billingIdentity = null;
     }
     const billingFields = {
+      ...billingIdentity,
       provider: billingIdentity?.provider ?? "acpx",
       ...(billingIdentity?.biller ? { biller: billingIdentity.biller } : {}),
       billingType: billingIdentity?.billingType ?? ("unknown" as const),

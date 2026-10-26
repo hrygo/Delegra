@@ -1,3 +1,4 @@
+import { effectiveAiBilling, readAiBilling } from "./ai-connection-billing.js";
 import { notifyLoginSessionChanged } from "./login-cleanup-notifications.js";
 import { WORKSPACE_RESTORE_LOCK_TIMEOUT_CODE } from "@paperclipai/adapter-utils/workspace-restore-merge";
 import { withAccountHomeSecretMutationLock } from "@paperclipai/adapter-codex-local/server";
@@ -393,7 +394,8 @@ export function aiConnectionService(db: Db) {
         method: metadata.data.method,
         mode: binding.mode,
         responsibleUserId: userId,
-      } satisfies AiConnectionAttribution,
+        billing: await effectiveAiBilling(db, connection),
+      } as AiConnectionAttribution,
     };
   }
   /** Internal decision use has its own capability check, never a pretend CLI harness. */
@@ -759,7 +761,10 @@ export function aiConnectionService(db: Db) {
           ),
         );
       if (!app) throw unprocessable("Could not find the provider application");
-      if (reconnect)
+      if (reconnect) {
+        const [current] = await tx.select().from(toolConnections).where(eq(toolConnections.id, id)).for("update");
+        const billing = readAiBilling(current.config);
+        const config = { ...current.config, aiIsolatedSubscription: input.method === "subscription" && input.provider !== "anthropic", ...(billing ? { aiBilling: { ...billing, revision: billing.revision + 1, declaration: null, updatedAt: new Date().toISOString(), updatedByUserId: userId } } : {}) };
         await tx
           .update(toolConnections)
           .set({
@@ -767,11 +772,12 @@ export function aiConnectionService(db: Db) {
             status: "active",
             healthStatus: "ok",
             healthMessage: null,
-            config: { ...reconnect.connection.config, aiIsolatedSubscription: input.method === "subscription" && input.provider !== "anthropic" },
+            config,
             updatedAt: new Date(),
           })
           .where(eq(toolConnections.id, id));
-      else
+        if (billing) await logActivity(tx as unknown as Db, { companyId, actorType: "user", actorId: userId, action: "ai_connection.billing_invalidated", entityType: "tool_connection", entityId: id, details: { before: billing, after: config.aiBilling, reason: "connection_reconnected" } });
+      } else
         await tx
           .insert(toolConnections)
           .values({

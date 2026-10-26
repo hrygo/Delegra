@@ -1,3 +1,4 @@
+import { resolveManagedOpenAiBilling, normalizeDeclaredBilling } from "@paperclipai/adapter-utils";
 import * as environmentTaskRuntime from "../environment-task-runtime.js";
 import * as pluginTaskRuntime from "./plugin-runner-task.js";
 import { environmentTaskOperationSchema } from "@paperclipai/plugin-sdk";
@@ -6027,6 +6028,22 @@ describe("native startup restart detachment", () => {
 });
 
 describe("native terminal-turn accounting", () => {
+  it.each([null, 0.25].flatMap(charge => ["paperclip.native-execution-input.v1", "paperclip.native-execution-input.v8"].map(schema => ({ charge, schema }))))("preserves declared billing through native checkpoint and final result ($schema charge $charge)", async ({ charge, schema }) => {
+    const declaration = { billingType: "subscription_included", biller: "unknown", pricingProvenance: { source: "operator", version: "included/v1", evidence: "Synthetic subscription" } } as const;
+    const billing = { revision: 1, declaration, updatedAt: "2026-10-26T12:00:00Z", updatedByUserId: "fixture-owner" };
+    const onUsage = vi.fn(async (_receipt: import("@paperclipai/adapter-utils").AdapterUsageCheckpoint) => {});
+    state.execute.mockReset().mockImplementationOnce(async () => {
+      const usage = { inputTokens: 12, outputTokens: 4, providerCostUsd: charge ?? 0 };
+      await accountingEvents.committed!({ eventType: "item.completed", turnId: "turn", payload: { kind: "usage", usage: { runDeltaAvailable: true, runDelta: usage, total: usage } } } as unknown as PrpEvent);
+      return { result: { summary: "Synthetic completion" }, terminal: { runTerminalState: "succeeded" }, turnId: "turn", normalizedSessionId: "session", providerSessionId: null, driverKind: "codex_app_server", driverVersion: "1", nativeEventCount: 1, highestContiguousSourceSeq: 1, usage };
+    });
+    const result = await executePaperclipNativeSession({ db: leaseDb(), execution: { ...execution, schema, provider: { kind: "codex", model: "gpt-6.1-sol" } } as NativeExecutionInput,
+      runnerInstanceId: "runner", billingIdentity: resolveManagedOpenAiBilling({ kind: "local" }, billing), onUsage });
+    const receipt = normalizeDeclaredBilling(onUsage.mock.calls.at(-1)![0]);
+    expect(receipt).toMatchObject({ billingType: charge ? "metered_api" : "subscription_included", costUsd: charge ?? 0, costStatus: "reported" });
+    expect(normalizeDeclaredBilling(result)).toMatchObject({ billingType: charge ? "metered_api" : "subscription_included" });
+  });
+
   it.each([false, true])("prices only complete direct Claude API turn accounting (%s)", async complete => {
     const { rehydrateRunnerdUsageNotification } = await import("@paperclipai/paperclip-runner/live");
     const { priceAnthropicReceipt } = await import("../anthropic-pricing.js");

@@ -1,3 +1,5 @@
+import { normalizeDeclaredBilling } from "@paperclipai/adapter-utils";
+import { includedBillingDeclarationSchema } from "@paperclipai/shared";
 import { usdToUnits, unitsToCents } from "@paperclipai/shared";
 import { and, asc, eq, inArray, or, sql } from "drizzle-orm";
 import { accountingRuntimeBaselines, budgetReservations, agentRuntimeState, agents, costEvents, heartbeatRuns, nativeRunFinalizations, issues, projects, decisionInvocations, promptInjectionInvocations, type Db } from "@paperclipai/db";
@@ -77,7 +79,11 @@ export async function accountRunCost(db: Db, runId: string, hooks: BudgetService
         text(object(object(run.usageJson).ledgerScope).projectId));
       return true;
     }
-    const usage = object(run.usageJson);
+    const originalUsage = object(run.usageJson);
+    // Defense for already canonical operator-confirmed receipts only. Never
+    // infer a declaration from a wake context or today's connection config.
+    const declaration = includedBillingDeclarationSchema.safeParse({ billingType: originalUsage.billingType, biller: originalUsage.biller, pricingProvenance: originalUsage.pricingProvenance });
+    const usage: Record<string, unknown> = normalizeDeclaredBilling({ ...originalUsage, ...(declaration.success ? { billingDeclaration: declaration.data } : {}) });
     const scope = object(usage.ledgerScope);
     // Deleted attribution targets become unallocated; a deletion must never
     // prevent recording provider spend. Foreign-company references still fail.

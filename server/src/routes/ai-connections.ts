@@ -1,3 +1,4 @@
+import { aiConnectionBillingService } from "../services/ai-connection-billing.js";
 import { validateAiApiKey } from "../services/ai-api-key-test.js";
 export { validateAiApiKey } from "../services/ai-api-key-test.js";
 import { supportsLocalAiLogin } from "../services/local-ai-login-policy.js";
@@ -15,6 +16,7 @@ import {
 } from "@paperclipai/db";
 import {
   createAiConnectionSchema,
+  updateAiBillingSchema,
   aiConnectionLoginIntentSchema,
   localAiConnectionSchema,
   localAiLoginStartSchema,
@@ -146,6 +148,20 @@ export function aiConnectionRoutes(db: Db, options: Parameters<typeof supportsLo
   const service = aiConnectionService(db);
   const localLogin = localAiLoginService(db);
   const pools = aiConnectionRouterService(db);
+  function billingActor(req: Request) {
+    assertBoard(req); assertCompanyAccess(req, req.params.companyId as string);
+    return { userId: getActorInfo(req).actorId, instanceAdmin: req.actor.isInstanceAdmin === true || req.actor.source === "local_implicit" };
+  }
+  router.get("/companies/:companyId/ai-connections/:connectionId/billing", async (req, res) => {
+    const actor = billingActor(req);
+    res.setHeader("Cache-Control", "no-store");
+    res.json(await aiConnectionBillingService(db).get(req.params.companyId as string, z.string().uuid().parse(req.params.connectionId), actor.userId, actor.instanceAdmin));
+  });
+  router.put("/companies/:companyId/ai-connections/:connectionId/billing", validate(updateAiBillingSchema), async (req, res) => {
+    const actor = billingActor(req);
+    res.setHeader("Cache-Control", "no-store");
+    res.json(await aiConnectionBillingService(db).put(req.params.companyId as string, z.string().uuid().parse(req.params.connectionId), req.body, actor.userId, actor.instanceAdmin));
+  });
   router.get("/companies/:companyId/ai-connection-pools", async (req, res) => {
     const companyId = req.params.companyId as string;
     assertBoard(req); assertCompanyAccess(req, companyId);

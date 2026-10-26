@@ -121,6 +121,8 @@ function createBasePaperclipEnv(options: TestPaperclipEnv) {
     }
   }
 
+  // This fixture tests import/export, not the external package registry.
+  env.PAPERCLIP_UPDATE_CHECK = "0";
   env.PAPERCLIP_CONFIG = options.configPath;
   env.PAPERCLIP_HOME = options.paperclipHome;
   env.PAPERCLIP_INSTANCE_ID = options.instanceId;
@@ -252,6 +254,7 @@ async function waitForServer(
   output: { stdout: string[]; stderr: string[] },
 ) {
   const startedAt = Date.now();
+  let lastHealthResult = "not attempted";
   while (Date.now() - startedAt < 30_000) {
     if (child.exitCode !== null) {
       throw new Error(
@@ -262,15 +265,16 @@ async function waitForServer(
     try {
       const res = await fetch(`${apiBase}/api/health`);
       if (res.ok) return;
-    } catch {
-      // Server is still starting.
+      lastHealthResult = `HTTP ${res.status}`;
+    } catch (error) {
+      lastHealthResult = error instanceof Error ? error.message : String(error);
     }
 
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
 
   throw new Error(
-    `Timed out waiting for ${apiBase}/api/health.\nstdout:\n${output.stdout.join("")}\nstderr:\n${output.stderr.join("")}`,
+    `Timed out waiting for ${apiBase}/api/health. Last result: ${lastHealthResult}.\nstdout:\n${output.stdout.join("")}\nstderr:\n${output.stderr.join("")}`,
   );
 }
 
@@ -303,6 +307,7 @@ describeEmbeddedPostgres("paperclipai company import/export e2e", () => {
 
     const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
     const output = { stdout: [] as string[], stderr: [] as string[] };
+    const serverStartedAt = Date.now();
     const child = spawn(
       process.execPath,
       ["--import", createRequire(import.meta.url).resolve("tsx"), path.join(repoRoot, "cli/src/index.ts"), "run", "--config", configPath],
@@ -318,10 +323,10 @@ describeEmbeddedPostgres("paperclipai company import/export e2e", () => {
     );
     serverProcess = child;
     child.stdout?.on("data", (chunk) => {
-      output.stdout.push(String(chunk));
+      output.stdout.push(`[+${Date.now() - serverStartedAt}ms] ${String(chunk)}`);
     });
     child.stderr?.on("data", (chunk) => {
-      output.stderr.push(String(chunk));
+      output.stderr.push(`[+${Date.now() - serverStartedAt}ms] ${String(chunk)}`);
     });
 
     await waitForServer(apiBase, child, output);

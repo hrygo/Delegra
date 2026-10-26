@@ -21,6 +21,32 @@ export const pricingProvenanceSchema = z.object({
   serviceTier: z.string().max(50).optional(),
   contextTier: z.enum(["short", "long"]).optional(),
 });
+// A declaration changes billing semantics, never authentication or model prices.
+export const includedBillingDeclarationSchema = z.object({
+  billingType: z.literal("subscription_included"),
+  biller: z.string().trim().min(1).max(150).default("unknown"),
+  pricingProvenance: pricingProvenanceSchema.extend({
+    source: z.literal("operator"),
+    version: z.string().trim().min(1).max(100),
+    evidence: z.string().trim().min(1).max(1000),
+  }),
+}).strict();
+export const aiBillingConfigurationSchema = z.object({
+  revision: z.number().int().positive(),
+  declaration: includedBillingDeclarationSchema.nullable(),
+  // Binds the confirmation to the selected connection, routing and credential metadata.
+  bindingFingerprint: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  updatedAt: z.iso.datetime(),
+  updatedByUserId: z.string().min(1),
+}).strict();
+export const updateAiBillingSchema = z.object({
+  expectedRevision: z.number().int().positive().nullable(),
+  declaration: includedBillingDeclarationSchema.nullable(),
+}).strict();
+export type IncludedBillingDeclaration = z.infer<typeof includedBillingDeclarationSchema>;
+export type AiBillingConfiguration = z.infer<typeof aiBillingConfigurationSchema>;
+export type UpdateAiBilling = z.input<typeof updateAiBillingSchema>;
+const costBillingClassificationSchema = z.object({ billingType: z.string().min(1).max(100), biller: z.string().min(1).max(150) }).strict();
 export const importBillingInvoiceSchema = z.object({
   biller: z.string().trim().min(1).max(150),
   externalId: z.string().trim().min(1).max(200),
@@ -47,6 +73,15 @@ export const adjustCostSchema = z.object({
   invoiceLineId: z.string().uuid().optional(),
   reason: z.string().trim().min(1).max(1000),
   pricing: pricingProvenanceSchema,
+  billingClassification: z.object({
+    expected: costBillingClassificationSchema,
+    corrected: costBillingClassificationSchema.extend({ billingType: z.enum(["metered_api", "subscription_included", "unknown"]) }),
+  }).strict().optional(),
+}).superRefine((input, ctx) => {
+  if (input.billingClassification && (!input.pricing.evidence?.trim() || !input.pricing.version?.trim() || input.pricing.source === "unknown"))
+    ctx.addIssue({ code: "custom", message: "Billing classification requires versioned pricing evidence" });
+  if (input.billingClassification?.corrected.billingType === "subscription_included" && input.correctedCents !== "0.0000000")
+    ctx.addIssue({ code: "custom", message: "Subscription-included usage cannot have an additional per-run charge" });
 });
 export const repairAccountingSchema = z.object({ fingerprint: z.string().regex(/^[a-f0-9]{64}$/), reason: z.string().trim().min(1).max(1000) });
 export const retryAccountingSchema = z.object({ runId: z.string().uuid() });

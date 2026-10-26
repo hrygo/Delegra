@@ -1,3 +1,4 @@
+import { normalizeDeclaredBilling } from "@paperclipai/adapter-utils";
 import { beginIdleTrackedWork } from "./task-admission.js";
 import { priceAnthropicReceipt } from "./anthropic-pricing.js";
 import { priceCodexReceipt } from "./codex-pricing.js";
@@ -281,7 +282,7 @@ export async function createRunUsageRecorder(db: Db, input: { companyId: string;
     return result;
   }
   async function capture(raw: AdapterUsageCheckpoint) {
-    const parsed = checkpointSchema.parse(raw) as AdapterUsageCheckpoint;
+    const parsed = checkpointSchema.parse(normalizeDeclaredBilling(raw)) as AdapterUsageCheckpoint;
     const attempt = parsed.attemptId ?? currentAttempt;
     if (!attempts.has(attempt)) currentAttempt = attempt;
     const previous = attempts.get(attempt);
@@ -347,7 +348,7 @@ export async function createRunUsageRecorder(db: Db, input: { companyId: string;
     // terminal. A failed retry must propagate and leave finalization pending.
     persistFailure: async () => { await chain; await persistFailure(); },
     complete: (result: AdapterExecutionResult) => enqueue(async () => {
-      const final = checkpointSchema.parse({ ...result, complete: result.usageComplete !== false }) as AdapterUsageCheckpoint;
+      const final = checkpointSchema.parse(normalizeDeclaredBilling({ ...result, complete: result.usageComplete !== false })) as AdapterUsageCheckpoint;
       const previous = attempts.get(currentAttempt);
       // A bounded stdout tail can lose a terminal record already saved from the
       // full stream. Keep that stronger evidence, but never hide additional

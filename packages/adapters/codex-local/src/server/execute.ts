@@ -1038,9 +1038,9 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         (entry): entry is [string, string] => typeof entry[1] === "string",
       ),
     );
-    const managedBilling = resolveManagedOpenAiBilling(config.managedAiRouting);
+    const managedBilling = resolveManagedOpenAiBilling(config.managedAiRouting, parseObject(config.managedAiConnection).billing);
     const billingType = managedBilling?.billingType ?? resolveCodexBillingType(effectiveEnv);
-    const biller = managedBilling?.biller ?? resolveCodexBiller(effectiveEnv, billingType);
+    const biller = managedBilling?.biller ?? resolveCodexBiller(effectiveEnv, resolveCodexBillingType(effectiveEnv));
     const networkScope = parseLocalProcessNetworkScope(config.networkScope);
     const filesystemScope = parseLocalProcessFilesystemScope(config.filesystemScope);
     const localProcessSandbox: LocalProcessSandboxOptions | null =
@@ -1388,7 +1388,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       const consumeAccounting = createCodexJsonlParser();
       const accountingLog = createUsageCheckpointLog(onLog, ctx.onUsage, stdout => {
         const parsed = consumeAccounting(stdout);
-        return { usage: parsed.usageReported ? parsed.usage : undefined, costStatus: parsed.usageComplete ? undefined : "unpriced", usageBasis: "per_run", provider: "openai", biller, billingType, model, pricingContext, costUsd: null, complete: parsed.usageComplete };
+        return { ...managedBilling, usage: parsed.usageReported ? parsed.usage : undefined, costStatus: parsed.usageComplete ? undefined : "unpriced", usageBasis: "per_run", provider: "openai", biller, billingType, model, pricingContext, costUsd: null, complete: parsed.usageComplete };
       });
       try {
         const proc = await runAdapterExecutionTargetProcess(runId, runtimeExecutionTarget, command, args, {
@@ -1477,6 +1477,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
           sessionParams: null,
           sessionDisplayId: null,
           provider: "openai",
+          ...managedBilling,
           biller,
           model,
           billingType,
@@ -1506,6 +1507,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
           usage: attempt.parsed.usageReported ? attempt.parsed.usage : undefined,
           usageBasis: "per_run",
           provider: "openai",
+          ...managedBilling,
           biller,
           model,
           billingType,
@@ -1619,6 +1621,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         sessionParams: resolvedSessionParams,
         sessionDisplayId: resolvedSessionId,
         provider: "openai",
+        ...managedBilling,
         biller,
         model,
         billingType,

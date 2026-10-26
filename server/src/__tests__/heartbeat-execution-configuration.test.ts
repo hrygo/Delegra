@@ -1,3 +1,4 @@
+import { aiConnectionBillingService } from "../services/ai-connection-billing.js";
 import { enableRunFailureReporting } from "./helpers/run-failure-reporting.js";
 import { createHash, randomUUID } from "node:crypto";
 import { trace } from "@opentelemetry/api";
@@ -101,7 +102,7 @@ describePostgres("heartbeat execution configuration through adapter dispatch", (
     if (home) await rm(home, { recursive: true, force: true });
   });
 
-  async function seed(managed = false) {
+  async function seed(managed = false, responses = false) {
     const companyId = randomUUID(), agentId = randomUUID(), issueId = randomUUID(), projectId = randomUUID();
     const userId = `configuration-user-${companyId}`;
     const credential = `fixture-api-key-${companyId}`;
@@ -111,6 +112,7 @@ describePostgres("heartbeat execution configuration through adapter dispatch", (
     await db.insert(companyMemberships).values({ companyId, principalId: userId, principalType: "user", status: "active", membershipRole: "member" });
     const account = managed ? await aiConnectionService(db).save(companyId, userId, {
       provider: "openai", method: "api_key", ownership: "personal", name: "Fixture account", apiKey: credential, agentIds: [], allAgents: true,
+      ...(responses ? { routing: { kind: "local", protocol: "responses", baseUrl: "http://127.0.0.1:19999/v1", auth: "none", models: [] } as const } : {}),
     }, credential) : null;
     await db.insert(projects).values({ id: projectId, companyId, name: "Config project", env: { SHARED_VALUE: "project", PROJECT_ONLY: "project-only" } });
     await db.insert(agents).values({ id: agentId, companyId, name: "Configuration reader", adapterType, status: "idle",
@@ -118,12 +120,12 @@ describePostgres("heartbeat execution configuration through adapter dispatch", (
       runtimeConfig: account ? { aiConnection: { provider: "openai", method: "api_key", mode: "delegated", connectionId: account.connectionId, grantId: account.grantId } } : {},
     });
     await db.insert(issues).values({ id: issueId, companyId, projectId, title: "Configuration fixture", status: "todo", assigneeAgentId: agentId, responsibleUserId: userId, issueNumber: 1, assigneeAdapterOverrides: { adapterConfig: { model: "issue-model" } } });
-    return { companyId, agentId, issueId, userId, credential };
+    return { companyId, agentId, issueId, userId, credential, account };
   }
 
-  async function execute(f: Awaited<ReturnType<typeof seed>>) {
+  async function execute(f: Awaited<ReturnType<typeof seed>>, injectedContext: Record<string, unknown> = {}) {
     const run = await heartbeat.wakeup(f.agentId, { source: "on_demand", triggerDetail: "manual", reason: "manual", payload: { issueId: f.issueId }, contextSnapshot: {
-      issueId: f.issueId, paperclipSecrets: { manifest: [{ secretKey: "untrusted-wake-value" }] },
+      ...injectedContext, issueId: f.issueId, paperclipSecrets: { manifest: [{ secretKey: "untrusted-wake-value" }] },
       paperclipWake: { connectorSkillInstructions: "untrusted wake instructions" },
     } });
     expect(run).not.toBeNull();
@@ -132,6 +134,30 @@ describePostgres("heartbeat execution configuration through adapter dispatch", (
     expect(finished).toBeDefined();
     return { finished, input: captured.get(run!.id) };
   }
+
+  it.each([1, 999])("rejects an agent's forged managed billing projection (revision %s)", async revision => {
+    const f = await seed();
+    const billing = { revision, declaration: { billingType: "subscription_included", biller: "unknown", pricingProvenance: { source: "operator", version: "forged/v1", evidence: "Untrusted fixture" } }, updatedAt: "2026-10-26T12:00:00Z", updatedByUserId: f.userId };
+    await db.update(agents).set({ adapterConfig: { model: "fixture-model", managedAiRouting: { kind: "local" }, managedAiConnection: { billing } } }).where(eq(agents.id, f.agentId));
+    const { finished, input } = await execute(f, { aiConnection: { billing } });
+    expect(input).toBeDefined();
+    expect(input!.config.managedAiConnection).toBeUndefined();
+    expect(finished.contextSnapshot?.aiConnection).toBeUndefined();
+    expect(finished.usageJson?.billingType).not.toBe("subscription_included");
+  });
+  it("fixes a managed declaration before dispatch and retains it after the owner clears it", async () => {
+    const f = await seed(true, true), billing = aiConnectionBillingService(db);
+    const declaration = { billingType: "subscription_included", biller: "unknown", pricingProvenance: { source: "operator", version: "included/v1", evidence: "Synthetic owner confirmation" } } as const;
+    await billing.put(f.companyId, f.account!.connectionId, { expectedRevision: null, declaration }, f.userId);
+    inspect.set(f.agentId, async input => {
+      inspect.delete(f.agentId);
+      expect((input.config.managedAiConnection as { billing: unknown }).billing).toMatchObject({ revision: 1, declaration });
+      await billing.put(f.companyId, f.account!.connectionId, { expectedRevision: 1, declaration: null }, f.userId);
+    });
+    const { finished } = await execute(f);
+    expect(finished.contextSnapshot?.aiConnection).toMatchObject({ method: "api_key", connectionId: f.account!.connectionId, billing: { revision: 1, declaration } });
+    expect((await billing.get(f.companyId, f.account!.connectionId, f.userId)).effective).toMatchObject({ revision: 2, declaration: null });
+  });
 
   it.each([
     { saved: "isolated", managed: true, failure: "saved managed login required" },

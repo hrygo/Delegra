@@ -4466,6 +4466,7 @@ export function toolAccessService(
       input: CreateToolConnection,
       actor?: ActorInfo,
     ): Promise<ToolConnection> => {
+      if (Object.hasOwn(input.config ?? {}, "aiBilling") || Object.hasOwn(input.transportConfig ?? {}, "aiBilling")) throw badRequest("Use the AI connection billing declaration endpoint");
       let applicationId = input.applicationId;
       let applicationNamespace = input.applicationName ?? input.name;
       const transport = input.transport;
@@ -4581,6 +4582,7 @@ export function toolAccessService(
       input: UpdateToolConnection,
     ): Promise<ToolConnection> => {
       const existing = await getConnectionRow(connectionId);
+      if (Object.hasOwn(input.config ?? {}, "aiBilling") || Object.hasOwn(input.transportConfig ?? {}, "aiBilling")) throw badRequest("Use the AI connection billing declaration endpoint");
       if (existing.connectionPurpose === "ai" && (input.config || input.transportConfig || input.credentialRefs || input.credentialSecretRefs || (input.credentialPolicy && input.credentialPolicy !== existing.credentialPolicy))) throw badRequest("Use AI account reconnect to change credentials. Provider, sign-in method, and ownership cannot be changed.");
       const config = normalizeGoogleSheetsConnectionConfig(
         input.config ?? input.transportConfig ?? existing.config,
@@ -4612,14 +4614,13 @@ export function toolAccessService(
           status: input.status ?? existing.status,
           enabled: input.enabled ?? existing.enabled,
           ...(input.agentInstructions !== undefined ? { agentInstructions: input.agentInstructions } : {}),
-          config,
-          transportConfig: isGoogleSheetsConnectionConfig(config)
-            ? config
-            : (input.transportConfig ?? config),
-          credentialRefs: input.credentialRefs ?? existing.credentialRefs,
-          credentialSecretRefs:
-            input.credentialSecretRefs ?? existing.credentialSecretRefs,
-          credentialPolicy: input.credentialPolicy ?? existing.credentialPolicy,
+          ...(existing.connectionPurpose === "ai" ? {} : {
+            config,
+            transportConfig: isGoogleSheetsConnectionConfig(config) ? config : (input.transportConfig ?? config),
+            credentialRefs: input.credentialRefs ?? existing.credentialRefs,
+            credentialSecretRefs: input.credentialSecretRefs ?? existing.credentialSecretRefs,
+            credentialPolicy: input.credentialPolicy ?? existing.credentialPolicy,
+          }),
           updatedAt: new Date(),
         })
         .where(eq(toolConnections.id, connectionId))

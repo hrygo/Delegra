@@ -7,6 +7,9 @@ import { isRetiredComposioConnection, RETIRED_COMPOSIO_MESSAGE } from "@papercli
 export function toConnection(row: typeof toolConnections.$inferSelect): ToolConnection {
   connectionPurposeTransportSchema.parse(row);
   const retired = isRetiredComposioConnection(row);
+  // Declaration evidence is available only through the owner/admin billing API.
+  const { aiBilling: _billing, ...config } = row.config ?? {};
+  const { aiBilling: _transportBilling, ...transportConfig } = row.transportConfig ?? {};
   return {
     id: row.id,
     companyId: row.companyId,
@@ -24,8 +27,8 @@ export function toConnection(row: typeof toolConnections.$inferSelect): ToolConn
     status: row.status,
     enabled: row.enabled && !retired,
     agentInstructions: row.agentInstructions ?? null,
-    config: row.config ?? {},
-    transportConfig: row.transportConfig ?? {},
+    config,
+    transportConfig,
     credentialRefs: row.credentialRefs ?? [],
     credentialSecretRefs: row.credentialSecretRefs ?? [],
     healthStatus: retired ? "error" : row.healthStatus,

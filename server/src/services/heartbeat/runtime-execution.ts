@@ -637,7 +637,7 @@ export async function executeHeartbeatRuntime(db: Db, input: HeartbeatRuntimeExe
               // configured provider values and the server-selected
               // workspace boundary authoritative.
               managedGitHub: !useHostGitHub && githubSelection.configured,
-              billingIdentity: managedAiRuntime ? { provider: managedAiRuntime.attribution.provider, biller: managedAiRuntime.attribution.provider === "openai" ? resolveManagedOpenAiBilling(managedAiRuntime.config.managedAiRouting)?.biller ?? managedAiRuntime.attribution.provider : managedAiRuntime.attribution.provider, billingType: managedAiRuntime.attribution.method === "subscription" ? "subscription_included" : "metered_api" } : undefined,
+              billingIdentity: managedAiRuntime ? resolveManagedOpenAiBilling(managedAiRuntime.config.managedAiRouting, managedAiRuntime.attribution.billing) ?? { provider: managedAiRuntime.attribution.provider, biller: managedAiRuntime.attribution.provider, billingType: managedAiRuntime.attribution.method === "subscription" ? "subscription_included" : "metered_api" } : undefined,
               managedAiCredentialIdentity: managedAiRuntime?.identity,
               managedAiAccountIdentity: managedAiRuntime?.sessionIdentity,
               managedAiCredentialWriteback: managedAiRuntime?.credentialWriteback,
