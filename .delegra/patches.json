@@ -5,15 +5,16 @@
     "deploy": "deploy"
   },
   "currentDeployment": {
-    "tag": "deploy/v2026.1024.0-canary.7-r5",
-    "commit": "96fc2f47df9419e87fc4e24347e3d5d9ba115641",
+    "tag": "deploy/v2026.1024.0-canary.7-r6",
+    "commit": "c59e0854ccb382273f7cacce9154aeb32021f633",
     "base": "canary/v2026.1024.0-canary.7",
     "patches": [
       "managed-codex-project-auth",
       "native-ssh-macos-process-identity",
       "managed-claude-host-auth-boundary",
       "portable-test-baselines",
-      "fork-review-workflow-token"
+      "fork-review-workflow-token",
+      "inbox-badge-resolved-failed-runs"
     ]
   },
   "base": {
