@@ -1,4 +1,5 @@
 import type { NativeRunRuntimeGrant } from "./runtime-context.js";
+import type { FrozenCodexLaunchContext } from "./codex-launch-policy.js";
 import type {
   NativeRunIdentity,
   NativeSessionCapabilities,
@@ -47,7 +48,7 @@ export interface NativeSessionRecoveryOptions {
 }
 
 export interface PersistedNativeSession {
-  codexLaunchContext?: import("./codex-launch-policy.js").FrozenCodexLaunchContext;
+  codexLaunchContext?: FrozenCodexLaunchContext;
   backendKind: NativeSessionBackendDescriptor["kind"];
   driverKind?: string | null;
   sessionId: string;

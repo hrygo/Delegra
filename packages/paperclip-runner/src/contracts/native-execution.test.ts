@@ -428,7 +428,7 @@ describe("NativeExecutionInputV1", () => {
     })).toThrow("does not match");
   });
 
-  it.each([17, 43, 44] as const)("decodes saved Copilot v%s input after the current source declaration advances", (version) => {
+  it.each([17, 43, 44, 58] as const)("decodes saved Copilot v%s input after the current source declaration advances", (version) => {
     const historical = JSON.parse(readFileSync(new URL(`../../test/fixtures/copilot-profile-v${version}-identity.json`, import.meta.url), "utf8"));
     const { permissionPolicy, qualificationStatus: _status, ...currentProfile } = QUALIFIED_ACPX_PROFILES.copilot;
     const provider = { kind: "acpx", agent: "copilot", model: "explicit-provider-model", permissionPolicy,

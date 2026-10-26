@@ -1,4 +1,5 @@
 import type { NativeRunRuntimeGrant } from "./runtime-context.js";
+import type { CodexLaunchPolicyIdentity, FrozenCodexLaunchContext } from "./codex-launch-policy.js";
 import type {
   PrpEvent,
   PrpStructuredRunResult,
@@ -463,10 +464,10 @@ export interface AcpxSessionIdentity {
   providerLifetimeFenceCandidates: readonly [number, number, number];
 }
 
-export type PersistedHarnessProviderIdentity = AcpxSessionIdentity | import("./codex-launch-policy.js").CodexLaunchPolicyIdentity;
+export type PersistedHarnessProviderIdentity = AcpxSessionIdentity | CodexLaunchPolicyIdentity;
 
 export interface PersistedHarnessSession {
-  codexLaunchContext?: import("./codex-launch-policy.js").FrozenCodexLaunchContext;
+  codexLaunchContext?: FrozenCodexLaunchContext;
   driverKind: string;
   /** Execution-host startup root, revalidated before a cold provider launch. */
   workingDirectory?: string;
