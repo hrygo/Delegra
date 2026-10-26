@@ -70,6 +70,7 @@ export function agentEnvironmentTestService(db: Db, pluginWorkerManager?: Plugin
     adapterType: string;
     environmentId: string | null;
   }): Promise<{
+    environmentId: string | null;
     executionTarget: AdapterExecutionTarget | null;
     environmentName: string | null;
     fallbackChecks: AdapterEnvironmentCheck[];
@@ -80,6 +81,7 @@ export function agentEnvironmentTestService(db: Db, pluginWorkerManager?: Plugin
 
     if (!input.environmentId) {
       return {
+        environmentId: null,
         executionTarget: null,
         environmentName: null,
         fallbackChecks: [],
@@ -90,6 +92,7 @@ export function agentEnvironmentTestService(db: Db, pluginWorkerManager?: Plugin
     const requestedEnvironment = await environmentsSvc.getById(input.environmentId);
     if (!requestedEnvironment) {
       return {
+        environmentId: input.environmentId,
         executionTarget: null,
         environmentName: null,
         fallbackChecks: [
@@ -119,6 +122,7 @@ export function agentEnvironmentTestService(db: Db, pluginWorkerManager?: Plugin
         );
         if (!managedSandboxEnvironment) {
           return {
+            environmentId: null,
             executionTarget: null,
             environmentName: requestedEnvironment.name,
             fallbackChecks: [
@@ -139,6 +143,7 @@ export function agentEnvironmentTestService(db: Db, pluginWorkerManager?: Plugin
 
     if (environment.driver === "local") {
       return {
+        environmentId: environment.id,
         executionTarget: null,
         environmentName: environment.name,
         fallbackChecks: [],
@@ -161,6 +166,7 @@ export function agentEnvironmentTestService(db: Db, pluginWorkerManager?: Plugin
         });
         if (target) {
           return {
+            environmentId: environment.id,
             executionTarget: target,
             environmentName: environment.name,
             fallbackChecks: [],
@@ -168,6 +174,7 @@ export function agentEnvironmentTestService(db: Db, pluginWorkerManager?: Plugin
           };
         }
         return {
+          environmentId: environment.id,
           executionTarget: null,
           environmentName: environment.name,
           fallbackChecks: [
@@ -182,6 +189,7 @@ export function agentEnvironmentTestService(db: Db, pluginWorkerManager?: Plugin
         };
       } catch (err) {
         return {
+          environmentId: environment.id,
           executionTarget: null,
           environmentName: environment.name,
           fallbackChecks: [
@@ -248,6 +256,7 @@ export function agentEnvironmentTestService(db: Db, pluginWorkerManager?: Plugin
       });
     } catch (err) {
       return {
+        environmentId: environment.id,
         executionTarget: null,
         environmentName: environment.name,
         fallbackChecks: [
@@ -312,6 +321,7 @@ export function agentEnvironmentTestService(db: Db, pluginWorkerManager?: Plugin
     } catch (err) {
       await releaseLease("failed");
       return {
+        environmentId: environment.id,
         executionTarget: null,
         environmentName: environment.name,
         fallbackChecks: [
@@ -351,6 +361,7 @@ export function agentEnvironmentTestService(db: Db, pluginWorkerManager?: Plugin
     } catch (err) {
       await releaseLease("failed");
       return {
+        environmentId: environment.id,
         executionTarget: null,
         environmentName: environment.name,
         fallbackChecks: [
@@ -368,6 +379,7 @@ export function agentEnvironmentTestService(db: Db, pluginWorkerManager?: Plugin
     if (!target) {
       await releaseLease("failed");
       return {
+        environmentId: environment.id,
         executionTarget: null,
         environmentName: environment.name,
         fallbackChecks: [
@@ -383,6 +395,7 @@ export function agentEnvironmentTestService(db: Db, pluginWorkerManager?: Plugin
     }
 
     return {
+      environmentId: environment.id,
       executionTarget: target,
       environmentName: environment.name,
       fallbackChecks: [],

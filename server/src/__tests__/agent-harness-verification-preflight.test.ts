@@ -46,7 +46,7 @@ describePostgres("saved harness account preflight", () => {
   beforeEach(async () => {
     release.mockReset().mockResolvedValue(undefined);
     allocate.mockReset().mockResolvedValue({
-      executionTarget: null, environmentName: "Fixture execution target", fallbackChecks: [], release,
+      environmentId: null, executionTarget: null, environmentName: "Fixture execution target", fallbackChecks: [], release,
     });
     probe.mockReset().mockResolvedValue(passed);
     vi.spyOn(environmentTests, "agentEnvironmentTestService").mockImplementation((database, manager) => ({
@@ -112,7 +112,7 @@ describePostgres("saved harness account preflight", () => {
   it("checks account access again after allocation and releases on revocation", async () => {
     allocate.mockImplementationOnce(async () => {
       await db.update(connectionGrants).set({ status: "revoked" }).where(eq(connectionGrants.id, account.grantId));
-      return { executionTarget: null, environmentName: "Fixture execution target", fallbackChecks: [], release };
+      return { environmentId: null, executionTarget: null, environmentName: "Fixture execution target", fallbackChecks: [], release };
     });
     await expect(verify()).rejects.toThrow("Reconnect or validate the selected AI account");
     expect(allocate).toHaveBeenCalledOnce();

@@ -14,6 +14,9 @@ import { agentRoutes } from "../routes/agents.js";
 import { aiConnectionService } from "../services/ai-connections.js";
 import { secretService } from "../services/secrets.js";
 import * as environmentTarget from "../services/environment-execution-target.js";
+import * as environmentRuntime from "../services/environment-runtime.js";
+import { environmentService } from "../services/environments.js";
+import { instanceSettingsService } from "../services/instance-settings.js";
 
 vi.mock("../services/subscription-refresh.js", () => ({ refreshSubscriptionConnection: vi.fn() }));
 
@@ -29,7 +32,9 @@ beforeAll(async () => {
   database = await startEmbeddedPostgresTestDatabase("paperclip-env-save-db-");
   db = createDb(database.connectionString);
 }, 90000);
-beforeEach(() => {
+beforeEach(async () => {
+  await instanceSettingsService(db).updateExperimental({ enableManagedSandboxOnly: false });
+  await db.update(environments).set({ metadata: { managedByPaperclip: false } }).where(eq(environments.driver, "sandbox"));
   vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("Provider network calls are forbidden in this fixture"));
 });
 afterEach(() => vi.restoreAllMocks());
@@ -71,7 +76,113 @@ async function fixture(adapterType: "codex_local" | "paperclip_runner", savedBin
   return { app, companyId, agentId, userId, environment, binding, config, readAgent };
 }
 
+function installSandboxDriver() {
+  const createRuntime = environmentRuntime.environmentRuntimeService;
+  const environmentsSvc = environmentService(db);
+  const driver: environmentRuntime.EnvironmentRuntimeDriver = {
+    driver: "sandbox",
+    acquireRunLease: vi.fn(async input => environmentsSvc.acquireLease({
+      companyId: input.companyId, environmentId: input.environment.id,
+      provider: "fixture", metadata: { remoteCwd: "/fixture/sandbox" },
+      assertCompanyBinding: input.assertCompanyBinding,
+    })),
+    releaseRunLease: vi.fn(async input => environmentsSvc.releaseLease(input.lease.id, input.status)),
+    realizeWorkspace: vi.fn(async () => ({ cwd: "/fixture/sandbox" })),
+    resolveCapabilities: vi.fn(async () => ({ reusableLeases: false, nativeSyncIn: false, nativeSyncOut: false,
+      persistentProcessSessions: false, independentControlCommands: false, incrementalSessionOutput: false,
+      concurrentSyncOperations: false, duplexCommandStream: false, runnerWebSocketIngress: false })),
+  };
+  vi.spyOn(environmentRuntime, "environmentRuntimeService").mockImplementation((database, options) =>
+    createRuntime(database, { ...options, drivers: [driver] }));
+  const target = { kind: "remote" as const, transport: "sandbox" as const, remoteCwd: "/fixture/sandbox",
+    providerKey: "fixture", runner: { execute: vi.fn(async () => ({ exitCode: 0, signal: null, timedOut: false, stdout: "", stderr: "" })) } };
+  vi.spyOn(environmentTarget, "resolveEnvironmentExecutionTarget").mockResolvedValue(target);
+  return { driver, target };
+}
+
+async function managedSandboxFixture(adapterType: "codex_local" | "paperclip_runner", missing: "local" | "sandbox") {
+  const runtime = installSandboxDriver();
+  const f = await fixture(adapterType, false);
+  const secrets = secretService(db);
+  const localSecret = await secrets.create(f.companyId, { name: "Local fixture secret", provider: "local_encrypted", value: "fixture-local-only" });
+  const sandboxSecret = await secrets.create(f.companyId, { name: "Sandbox fixture secret", provider: "local_encrypted", value: "fixture-sandbox-only" });
+  const localEnv = { LOCAL_SECRET: { type: "secret_ref", secretId: localSecret.id } };
+  await db.update(environments).set({ envVars: localEnv }).where(eq(environments.id, f.environment.id));
+  if (missing !== "local") await secrets.syncEnvBindingsForTarget(f.companyId,
+    { targetType: "environment", targetId: f.environment.id }, localEnv);
+  const sandboxEnv = { SANDBOX_MARKER: { type: "plain", value: "sandbox" },
+    SANDBOX_SECRET: { type: "secret_ref", secretId: sandboxSecret.id } };
+  const [sandbox] = await db.insert(environments).values({ name: `Managed fixture sandbox ${f.companyId}`, driver: "sandbox",
+    status: "active", config: { provider: "fixture" }, metadata: { managedByPaperclip: true }, envVars: sandboxEnv }).returning();
+  if (missing !== "sandbox") await secrets.syncEnvBindingsForTarget(f.companyId,
+    { targetType: "environment", targetId: sandbox.id }, sandboxEnv);
+  await instanceSettingsService(db).updateExperimental({ enableManagedSandboxOnly: true });
+  return { ...f, ...runtime, sandbox, localSecret, sandboxSecret };
+}
+
 describe("managed agent environment saves", () => {
+  for (const adapterType of ["codex_local", "paperclip_runner"] as const) {
+    it.each(["test", "save"] as const)(`uses the redirected sandbox environment for ${adapterType} %s validation`, async operation => {
+      const f = await managedSandboxFixture(adapterType, "local");
+      const probe = vi.spyOn(requireServerAdapter(adapterType), "testEnvironment").mockResolvedValue({
+        adapterType, status: "pass", testedAt: new Date().toISOString(),
+        checks: [{ code: "codex_hello_probe_passed", level: "info", message: "Synthetic provider" }],
+      });
+      const response = operation === "test"
+        ? await request(f.app).post(`/api/companies/${f.companyId}/adapters/${adapterType}/test-environment`).send({
+          agentId: f.agentId, adapterConfig: f.config, aiConnection: f.binding,
+        })
+        : await request(f.app).patch(`/api/agents/${f.agentId}`).send({ runtimeConfig: { aiConnection: f.binding } });
+      expect(response.status, JSON.stringify(response.body)).toBe(200);
+      if (operation === "test") expect(response.body.status).toBe("pass");
+      expect(probe).toHaveBeenCalledOnce();
+      expect(probe.mock.calls[0][0]).toMatchObject({ executionTarget: f.target,
+        config: { env: { SANDBOX_MARKER: "sandbox", SANDBOX_SECRET: "fixture-sandbox-only" } } });
+      expect(probe.mock.calls[0][0].config.env).not.toHaveProperty("LOCAL_SECRET");
+      expect(f.driver.acquireRunLease).toHaveBeenCalledWith(expect.objectContaining({ environment: expect.objectContaining({ id: f.sandbox.id }) }));
+      expect(f.driver.releaseRunLease).toHaveBeenCalledOnce();
+      expect(await db.select().from(secretAccessEvents).where(eq(secretAccessEvents.secretId, f.localSecret.id))).toEqual([]);
+      expect(await db.select().from(secretAccessEvents).where(eq(secretAccessEvents.secretId, f.sandboxSecret.id))).toHaveLength(1);
+    });
+  }
+
+  it.each(["test", "save"] as const)("rejects the redirected sandbox's missing binding during %s validation", async operation => {
+    const f = await managedSandboxFixture("codex_local", "sandbox");
+    const before = await f.readAgent();
+    const probe = vi.spyOn(requireServerAdapter("codex_local"), "testEnvironment").mockResolvedValue({
+      adapterType: "codex_local", status: "pass", testedAt: new Date().toISOString(),
+      checks: [{ code: "codex_hello_probe_passed", level: "info", message: "Synthetic provider" }],
+    });
+    const response = operation === "test"
+      ? await request(f.app).post(`/api/companies/${f.companyId}/adapters/codex_local/test-environment`).send({
+        agentId: f.agentId, adapterConfig: f.config, aiConnection: f.binding,
+      })
+      : await request(f.app).patch(`/api/agents/${f.agentId}`).send({ runtimeConfig: { aiConnection: f.binding } });
+    expect(response.status, JSON.stringify(response.body)).toBe(operation === "test" ? 200 : 422);
+    const checks = operation === "test" ? response.body.checks : response.body.details.checks;
+    expect(checks).toContainEqual(expect.objectContaining({ code: "environment_env_binding_missing", level: "error" }));
+    if (operation === "test") expect(response.body.status).toBe("fail");
+    else expect(probe).not.toHaveBeenCalled();
+    expect(await f.readAgent()).toEqual(before);
+    expect(await db.select().from(secretAccessEvents).where(eq(secretAccessEvents.secretId, f.localSecret.id))).toEqual([]);
+    expect(await db.select().from(secretAccessEvents).where(eq(secretAccessEvents.secretId, f.sandboxSecret.id))).toEqual([]);
+  });
+
+  it("inspects the redirected sandbox metadata without reading secrets when its target is unavailable", async () => {
+    const f = await managedSandboxFixture("codex_local", "sandbox");
+    vi.mocked(environmentTarget.resolveEnvironmentExecutionTarget).mockResolvedValue(null);
+    const probe = vi.spyOn(requireServerAdapter("codex_local"), "testEnvironment");
+    const response = await request(f.app).post(`/api/companies/${f.companyId}/adapters/codex_local/test-environment`).send({
+      agentId: f.agentId, adapterConfig: f.config, aiConnection: f.binding,
+    });
+    expect(response.status, JSON.stringify(response.body)).toBe(200);
+    expect(response.body.status).toBe("fail");
+    expect(response.body.checks).toContainEqual(expect.objectContaining({ code: "environment_env_binding_missing", message: expect.stringContaining("SANDBOX_SECRET") }));
+    expect(probe).not.toHaveBeenCalled();
+    expect(await db.select().from(secretAccessEvents).where(eq(secretAccessEvents.secretId, f.localSecret.id))).toEqual([]);
+    expect(await db.select().from(secretAccessEvents).where(eq(secretAccessEvents.secretId, f.sandboxSecret.id))).toEqual([]);
+  });
+
   it.each(["codex_local", "paperclip_runner"] as const)("saves unrelated %s env edits without treating JSONB key order as a connection change", async adapterType => {
     const f = await fixture(adapterType, true);
     const probe = vi.spyOn(requireServerAdapter(adapterType), "testEnvironment").mockResolvedValue({

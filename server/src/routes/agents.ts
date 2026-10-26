@@ -3269,7 +3269,7 @@ export function agentRoutes(
         agentId: hasSavedAgent ? agentId : undefined, environmentId: testEnvironmentId });
       try {
         if (!target.executionTarget && target.fallbackChecks.length > 0) throw unprocessable("The agent environment is not available for adoption");
-        const resolved = await resolveAdapterTestConfig(req, companyId, adapterType, config, testEnvironmentId, true);
+        const resolved = await resolveAdapterTestConfig(req, companyId, adapterType, config, target.environmentId, true);
         if (resolved.checks.some(check => check.level === "error")) throw unprocessable("The selected AI connection failed validation in this agent’s environment. Run the agent test to see the failing checks.", {
           code: "ai_connection_validation_failed",
           checks: resolved.checks.map(check => ({ code: check.code, level: check.level })),
@@ -3405,7 +3405,7 @@ export function agentRoutes(
         adapterConfigForTest,
         { strictMode: strictSecretsMode, adapterType: type },
       );
-      const { executionTarget, environmentName, fallbackChecks, sandboxIdentityCheck, release } =
+      const { environmentId: effectiveEnvironmentId, executionTarget, environmentName, fallbackChecks, sandboxIdentityCheck, release } =
         await resolveAdapterTestExecutionContext({
           companyId,
           agentId: savedAgentId ?? undefined,
@@ -3419,8 +3419,10 @@ export function agentRoutes(
         // probing the host when we couldn't resolve that environment's
         // execution target. Surface the diagnostic checks instead.
         if (requestedEnvironmentId && !executionTarget && fallbackChecks.length > 0) {
-          const environment = await inspectAdapterTestEnvironment(req, companyId, requestedEnvironmentId, Boolean(aiBinding));
-          const combinedChecks = [...fallbackChecks, ...environment.checks];
+          const environmentChecks = effectiveEnvironmentId
+            ? (await inspectAdapterTestEnvironment(req, companyId, effectiveEnvironmentId, Boolean(aiBinding))).checks
+            : [];
+          const combinedChecks = [...fallbackChecks, ...environmentChecks];
           const status: AdapterEnvironmentTestResult["status"] = combinedChecks.some((c) => c.level === "error")
             ? "fail"
             : combinedChecks.some((c) => c.level === "warn")
@@ -3437,7 +3439,7 @@ export function agentRoutes(
           return;
         }
 
-        const resolved = await resolveAdapterTestConfig(req, companyId, type, normalizedAdapterConfig, requestedEnvironmentId, Boolean(aiBinding));
+        const resolved = await resolveAdapterTestConfig(req, companyId, type, normalizedAdapterConfig, effectiveEnvironmentId, Boolean(aiBinding));
         const environmentEnvChecks = resolved.checks;
         let effectiveAdapterConfig = resolved.config;
 
