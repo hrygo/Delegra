@@ -24,7 +24,6 @@ that hold. See [accounting behavior](../../doc/prompt-injection-prevention.md).
 - `incidents`: `budgets-costs/incidents` — distinguish warnings, hard stops, and manual pauses.
 - `resolution`: `budgets-costs/resolution` — raise or resolve a budget incident through authorized controls and verify resumption.
 - `subscriptions`: `budgets-costs/subscriptions` — inspect subscription fees separately from API usage, edit owned prices, link duplicate accounts, and end or exclude tracking.
-- `reference-pricing`: `budgets-costs/reference-pricing` — configure public provider/model token rates and inspect the separate usage estimate.
 - `accounting-recovery`: `budgets-costs/accounting-recovery` — inspect missing or unresolved run costs and retry saved cost recording without rerunning the agent.
 
 ## How to get to it (user POV)
@@ -44,10 +43,6 @@ Open Activity → Costs (or `/costs` in the production shell), then Subscription
 ### `cost-recording`
 
 Open the Costs overview and expand **run costs unavailable** or **billing types unknown**. Follow **View run** or the agent configuration link for context. **Retry cost recording** appears only for retryable entries and an eligible board user.
-
-### `reference-pricing`
-
-Open Costs → Providers → **Public price usage estimate**. Choose **Set rate**, **Edit rate** or **Add rate**. Select an explicit upstream preset or enter USD per million token prices with their public source and verification date. The exact ledger alias stays unchanged.
 
 ## Driving it with Playwright and the Paperclip CLI
 
@@ -89,12 +84,6 @@ Automated: [Cost notice](../../ui/src/components/CostDataQualityNotice.test.tsx)
 Manual: Use saved-cost fixtures for waiting-for-receipt, receipt-unavailable, unknown-billing, missing-model/price, and retryable states. Expand the notice, inspect the affected run, and verify the explanation matches its saved evidence. For a retryable entry, choose Retry cost recording, reload, and verify costs are recorded once while the run ID, transcript, task execution count, and original outcome stay unchanged. Repeat with no new receipt and with a failed recording attempt; neither may fabricate zero cost or start a model run. Sign in as a viewer and then an ordinary agent: check the read/mutation boundaries and denial. Keep unresolved budget holds visible until their own accounting obligations settle.
 
 Sources: [Cost notice](../../ui/src/components/CostDataQualityNotice.tsx), [cost routes](../../server/src/routes/costs.ts), [quality report](../../server/src/services/cost-data-quality.ts), and [accounting retry](../../server/src/services/accounting-integrity.ts).
-
-### `reference-pricing`
-
-Automated: [estimation and validation](../../packages/shared/src/model-reference-rates.test.ts), [real database persistence/reporting](../../server/src/__tests__/model-reference-rates.test.ts), [authorization](../../server/src/__tests__/model-reference-rate-routes.test.ts) and [editor states](../../ui/src/components/ModelReferencePricing.test.tsx) cover exclusive cache reads, unknown categories, stale writes, company isolation and retained ledger charges.
-
-Manual: In a disposable company, save a preset for a gateway alias, reload and verify exact values/source/date. Change the report period and company. Check a partially priced group, an unknown local model and a configured model without usage. Try a stale save and unauthorized identity. Compare the original ledger and budgets before/after; only the separate scenario estimate may change. Historical periods use current saved prices, and cache-write counts are unavailable. See [limitations](../../doc/model-reference-pricing.md).
 
 ## Gotchas
 

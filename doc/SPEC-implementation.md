@@ -1867,19 +1867,6 @@ Cost detail reads use company-scoped partial indexes matching their filters and
 sort order. Provider and biller cards retain estimate and missing-price labels;
 an accounting retry confirmation survives removal of the resolved cost gap.
 
-### Public reference price scenarios
-
-Company board cost readers can inspect a separate current-price estimate of
-recorded provider/model usage, including subscription events, at
-`GET /companies/:companyId/costs/model-reference-rates`. Non-viewer AI connection
-managers can save exact company/provider/model reference rates with `PUT` at the
-same path, requiring optimistic revisions, public source/date and atomic audit
-logging. Ordinary agents are denied. Missing prices stay unknown, with known
-subtotals shown separately. This report never rewrites charges, receipts, monthly
-fees or budget enforcement. Cached reads use exclusive ledger input; cache-write
-prices remain reference-only until the ledger supplies separate counts. See
-[public reference pricing](model-reference-pricing.md) for units and limitations.
-
 ## 14. UI Requirements (Board App)
 
 V1 UI routes:

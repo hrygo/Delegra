@@ -152,24 +152,6 @@ Verification: `not-run` — Read as each authorized person and verify the accoun
 
 Gaps: No ordinary-agent management path or request/result handoff is documented. Provider plan discovery, currencies, and seat-identity cases need live qualification; source tests do not establish actual provider billing.
 
-## `reference-pricing`
-
-Capability ID: `budgets-costs/reference-pricing`.
-
-Review: `baseline`.
-
-API: `present` — GET and PUT /api/companies/{companyId}/costs/model-reference-rates.
-
-Agent access: `restricted` — requires board identity. Ordinary agent REST/native calls cannot read or alter the reference price configuration; a board operator can use the Costs provider editor.
-
-Policy: Company membership and company cost-read permission apply to both operations. PUT additionally requires AI connection management permission and rejects viewer memberships. Exact company/provider/model key, strict decimal validation, revision comparison and atomic audit logging apply. Reports use current prices without mutating the ledger or budget controls.
-
-Evidence: `source-only` — 2026-10-26 working tree. [Routes](../../server/src/routes/costs.ts), [service](../../server/src/services/model-reference-rates.ts), [UI](../../ui/src/components/ModelReferencePricing.tsx). Controlled route and PostgreSQL tests exercise allowed reads/writes and company, agent, viewer and manager denials; this does not qualify live native-agent reachability.
-
-Verification: `not-run` for live agent identities. [Route tests](../../server/src/__tests__/model-reference-rate-routes.test.ts) and [database tests](../../server/src/__tests__/model-reference-rates.test.ts) cover the enumerated boundaries, concurrent stale saves, persisted values/audit and unchanged ledger charges. Browser verification uses a disposable company and explicit public-price preset.
-
-Gaps: No ordinary-agent request/result handoff is documented. Public prices cannot establish a gateway alias's actual upstream identity; operator selection is required. Cache-write counts and processing tiers require separate future ledger evidence.
-
 ## `accounting-recovery`
 
 Capability ID: `budgets-costs/accounting-recovery`.
