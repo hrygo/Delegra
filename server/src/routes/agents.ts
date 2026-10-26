@@ -3107,6 +3107,38 @@ export function agentRoutes(
     res.json(detected);
   });
 
+  async function inspectAdapterTestEnvironment(
+    req: Request,
+    companyId: string,
+    environmentId: string,
+    managedConnection: boolean,
+  ) {
+    const selectedEnvironment = await environmentsSvc.getById(environmentId);
+    const environmentEnv = Object.fromEntries(
+      Object.entries(managedConnection ? stripAiAuthBindings(selectedEnvironment?.envVars) : parseObject(selectedEnvironment?.envVars)).filter(
+        ([key]) => !isForbiddenConfigEnvKey(key),
+      ),
+    );
+    const secretContext = buildActorSecretContext(req, { consumerType: "environment", consumerId: environmentId });
+    // This inspection reads binding metadata only. It must remain safe when
+    // the selected environment cannot supply an execution target.
+    const missingBindings = Object.keys(environmentEnv).length > 0 && typeof secretsSvc.collectMissingRuntimeBindings === "function"
+      ? await secretsSvc.collectMissingRuntimeBindings(companyId, environmentEnv, secretContext)
+      : [];
+    const missingKeys = new Set(missingBindings.map((binding) => binding.envKey));
+    const checks: AdapterEnvironmentCheck[] = missingKeys.size > 0 ? [{
+      code: "environment_env_binding_missing",
+      level: "error",
+      message: `Environment variables with missing secret bindings were skipped: ${[...missingKeys].join(", ")}.`,
+      hint: "Re-save the environment's variables to restore the secret binding, then test again.",
+    }] : [];
+    return {
+      env: Object.fromEntries(Object.entries(environmentEnv).filter(([key]) => !missingKeys.has(key))),
+      secretContext,
+      checks,
+    };
+  }
+
   async function resolveAdapterTestConfig(
     req: Request,
     companyId: string,
@@ -3128,33 +3160,13 @@ export function agentRoutes(
     const checks: AdapterEnvironmentCheck[] = [];
     let config = runtimeAdapterConfig;
     if (environmentId) {
-      const selectedEnvironment = await environmentsSvc.getById(environmentId);
-      const environmentEnv = Object.fromEntries(
-        Object.entries(managedConnection ? stripAiAuthBindings(selectedEnvironment?.envVars) : parseObject(selectedEnvironment?.envVars)).filter(
-          ([key]) => !isForbiddenConfigEnvKey(key),
-        ),
-      );
-      if (Object.keys(environmentEnv).length > 0) {
-        const environmentSecretContext = buildActorSecretContext(req, {
-          consumerType: "environment",
-          consumerId: environmentId,
-        });
-        const missingBindings = typeof secretsSvc.collectMissingRuntimeBindings === "function"
-          ? await secretsSvc.collectMissingRuntimeBindings(companyId, environmentEnv, environmentSecretContext)
-          : [];
-        const missingKeys = new Set(missingBindings.map((binding) => binding.envKey));
-        if (missingKeys.size > 0) {
-          checks.push({
-            code: "environment_env_binding_missing",
-            level: "error",
-            message: `Environment variables with missing secret bindings were skipped: ${[...missingKeys].join(", ")}.`,
-            hint: "Re-save the environment's variables to restore the secret binding, then test again.",
-          });
-        }
+      const environment = await inspectAdapterTestEnvironment(req, companyId, environmentId, managedConnection);
+      checks.push(...environment.checks);
+      if (Object.keys(environment.env).length > 0) {
         const environmentEnvResolution = await secretsSvc.resolveEnvBindings(
           companyId,
-          Object.fromEntries(Object.entries(environmentEnv).filter(([key]) => !missingKeys.has(key))),
-          environmentSecretContext,
+          environment.env,
+          environment.secretContext,
         );
         // Mirror dispatch: environment variables form the base, agent values
         // win conflicts, and managed authentication is applied afterwards.
@@ -3394,7 +3406,8 @@ export function agentRoutes(
         // probing the host when we couldn't resolve that environment's
         // execution target. Surface the diagnostic checks instead.
         if (requestedEnvironmentId && !executionTarget && fallbackChecks.length > 0) {
-          const combinedChecks = fallbackChecks;
+          const environment = await inspectAdapterTestEnvironment(req, companyId, requestedEnvironmentId, Boolean(aiBinding));
+          const combinedChecks = [...fallbackChecks, ...environment.checks];
           const status: AdapterEnvironmentTestResult["status"] = combinedChecks.some((c) => c.level === "error")
             ? "fail"
             : combinedChecks.some((c) => c.level === "warn")
