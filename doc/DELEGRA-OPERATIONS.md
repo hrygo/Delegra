@@ -91,6 +91,20 @@ exposes only read tools and final text; the host persists the report. Both keep
 the complete selected skills and reject unsandboxed fallback. A CLI hello does
 not prove tool boundaries or a successful platform task lifecycle.
 
+The build profile puts both pnpm store aliases, the UV cache and pnpm runtime
+locks in a private directory inside the task workspace. Cleanup requires the
+current provider stop receipt and successful collection; unknown state retains
+the directory. No additional write grant is added. Requested temporary paths
+and the CLI's effective Bash temporary directory are separate observations.
+Candidate review creates no writable tool cache. Synthetic offline installation
+qualifies this boundary only; product dependency installation remains separate.
+
+The internal three-host pilot selects Codex, Claude CLI and OpenCode. Shared
+launch-source changes advance the generated Copilot profile to immutable v59,
+with live qualification explicitly pending and historical identities retained.
+Offline profile and packaging checks do not qualify Copilot service execution.
+The pilot does not claim a general four-platform provider release.
+
 Verify a fixed toolchain entry with both a shell invocation and direct process
 spawn. A shell can execute a pnpm placeholder without a shebang while a direct
 spawn fails or falls through to another PATH entry. Use a versioned executable
