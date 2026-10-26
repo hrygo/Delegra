@@ -65,6 +65,57 @@ unavailable, metadata-only checks still report missing environment bindings
 without resolving secret values. Missing bindings and unauthorized secrets
 still fail; secret values stay out of responses.
 
+## Included subscription usage on a Responses connection
+
+Use this local patch only for a managed OpenAI-compatible Responses connection
+with API-key authentication. The connection owner or a company/instance
+administrator must confirm that the subscription includes the run without an
+additional usage charge. Record the dated evidence and its version. This fact
+does not record the subscription purchase price or estimate a retail API price.
+
+Use the authenticated management API:
+
+1. Read `GET /api/companies/{companyId}/ai-connections/{connectionId}/billing`.
+2. Use `PUT` on that path with the returned `expectedRevision` (or `null` for
+   the first declaration). Supply `declaration.billingType` as
+   `subscription_included`, a `biller`, and `pricingProvenance` with
+   `source: operator`, a version, and the confirmation evidence.
+3. Read the configuration and its effective declaration back. A concurrent
+   change returns `409`; inspect the new revision instead of overwriting it.
+   To clear a declaration, submit `declaration: null` with the current revision.
+
+The confirmation binds to connection, routing, grant, and credential metadata.
+A changed binding invalidates the declaration until a new confirmation. Each
+admitted execution freezes its effective declaration, including explicit
+absence. Recovery uses that saved fact; it does not apply a later declaration
+to an older run. Normal connection updates and agent-supplied configuration
+cannot inject or overwrite billing declarations. Management records remain
+owner/admin-only; recorded execution facts follow existing company visibility.
+
+Codex native, CLI/ACP, and acpx accounting consume this saved declaration.
+A provider-reported positive charge takes precedence and remains a metered
+charge. An unsupported or undeclared path retains its existing unknown-cost
+behavior. The patch does not make all gateway usage free.
+
+For a historical event, first read
+`GET /api/companies/{companyId}/accounting/events/{eventId}` and verify its run,
+exact cents, billing classification, and original receipt fingerprint. Use the
+existing board-only adjustment endpoint on the same event with `/adjustments`.
+Supply a unique idempotency key, expected/corrected cents, versioned evidence,
+and `billingClassification.expected`/`corrected`. Included usage requires zero
+additional cents. Amount and classification comparisons reject stale writes.
+The adjustment records the prior and corrected facts. It preserves the
+original receipt, its fingerprint, tokens, and run usage. Read the adjustment
+and event back, then verify budget reconciliation. Keep the budget policy,
+manual pauses, and the original failed-run evidence intact.
+
+This patch adds no SQL migration. Previous r6 code ignores the new declaration
+configuration and reads standard included-usage receipts. That compatibility
+has synthetic coverage; a live process rollback/recovery is a separate check.
+Keep agents paused during rollout and confirm the service revision before any
+new execution. Do not replace the database with an old snapshot merely to undo
+a source release after new writes.
+
 ## Deployment and rollback
 
 Keep service configuration, instance data, and source revisions separate.

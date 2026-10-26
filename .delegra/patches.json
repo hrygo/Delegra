@@ -191,6 +191,19 @@
       "notes": "Test-only isolation: controlled PATH and /bin/sh prevent a globally installed CLI from consuming synthetic fallback config. Real dependency installs still use pnpm and retain their exit status. No production fallback or fail-closed behavior changes."
     },
     {
+      "id": "operator-confirmed-subscription-usage",
+      "kind": "fork-only",
+      "status": "active",
+      "commits": [
+        "a43ddcc8de6cc24a4ced694a254d5787c54d5618"
+      ],
+      "owner": "hrygo",
+      "reviewBy": "2026-11-30",
+      "verifiedAt": "2026-10-26",
+      "retireWhen": "The accepted stable base supports explicit owner-confirmed included usage, admission-time declaration snapshots, credential-bound invalidation, and audited historical classification adjustments with equivalent authorization and positive-charge tests.",
+      "notes": "Narrow local repair for managed OpenAI-compatible Responses API-key connections. No reference-rate editor, retail price estimate, SQL migration, budget-policy weakening, or retroactive declaration inference. Positive provider charges take precedence. Historical corrections preserve original receipts and append evidence-backed, idempotent amount/classification adjustments. Native, CLI/ACP and acpx use a frozen server-owned declaration; legacy replays keep their original absence."
+    },
+    {
       "id": "model-public-reference-pricing",
       "kind": "fork-only",
       "status": "retired",
@@ -202,7 +215,7 @@
       "reviewBy": "2026-11-30",
       "verifiedAt": "2026-10-26",
       "retireWhen": "The accepted upstream stable base supplies an equivalent company-level reference-rate editor and a separate estimate report for gateway and subscription usage.",
-      "notes": "Withdrawn at the operator request on 2026-10-26. The second commit reverses the reference-rate API, shared estimator, Providers editor, and related feature documentation from PR #17. Preserve the executed SQL migration, journal, snapshots, and schema as inert compatibility history. The running service and database were restored to the pre-r7 r6 baseline. A full billing proposal remains local until upstream scope review; no new billing feature is approved or implemented."
+      "notes": "Withdrawn at the operator request on 2026-10-26. The second commit reverses the reference-rate API, shared estimator, Providers editor, and related feature documentation from PR #17. Preserve the executed SQL migration, journal, snapshots, and schema as inert compatibility history. The running service and database were restored to the pre-r7 r6 baseline. At that rollback, no replacement billing feature was deployed. The full reference-pricing proposal remains local pending upstream scope review; a later narrow, operator-confirmed included-usage correction does not reinstate that proposal."
     }
   ]
 }
