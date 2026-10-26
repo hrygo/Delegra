@@ -3107,6 +3107,83 @@ export function agentRoutes(
     res.json(detected);
   });
 
+  async function resolveAdapterTestConfig(
+    req: Request,
+    companyId: string,
+    adapterType: string,
+    adapterConfig: Record<string, unknown>,
+    environmentId: string | null,
+    managedConnection: boolean,
+  ) {
+    // A prospective config has no declaration rows yet. Both manual tests and
+    // adoption resolve the acting user's secrets with the same honest consumer.
+    const { config: runtimeAdapterConfig } = await secretsSvc.resolveAdapterConfigForRuntime(
+      companyId,
+      managedConnection ? { ...adapterConfig, env: stripAiAuthBindings(adapterConfig.env) } : adapterConfig,
+      buildActorSecretContext(req, environmentId
+        ? { consumerType: "environment", consumerId: environmentId }
+        : { consumerType: "system", consumerId: "adapter_test" }),
+      { adapterType, userSecretMediation: "owner_scoped" },
+    );
+    const checks: AdapterEnvironmentCheck[] = [];
+    let config = runtimeAdapterConfig;
+    if (environmentId) {
+      const selectedEnvironment = await environmentsSvc.getById(environmentId);
+      const environmentEnv = Object.fromEntries(
+        Object.entries(managedConnection ? stripAiAuthBindings(selectedEnvironment?.envVars) : parseObject(selectedEnvironment?.envVars)).filter(
+          ([key]) => !isForbiddenConfigEnvKey(key),
+        ),
+      );
+      if (Object.keys(environmentEnv).length > 0) {
+        const environmentSecretContext = buildActorSecretContext(req, {
+          consumerType: "environment",
+          consumerId: environmentId,
+        });
+        const missingBindings = typeof secretsSvc.collectMissingRuntimeBindings === "function"
+          ? await secretsSvc.collectMissingRuntimeBindings(companyId, environmentEnv, environmentSecretContext)
+          : [];
+        const missingKeys = new Set(missingBindings.map((binding) => binding.envKey));
+        if (missingKeys.size > 0) {
+          checks.push({
+            code: "environment_env_binding_missing",
+            level: "error",
+            message: `Environment variables with missing secret bindings were skipped: ${[...missingKeys].join(", ")}.`,
+            hint: "Re-save the environment's variables to restore the secret binding, then test again.",
+          });
+        }
+        const environmentEnvResolution = await secretsSvc.resolveEnvBindings(
+          companyId,
+          Object.fromEntries(Object.entries(environmentEnv).filter(([key]) => !missingKeys.has(key))),
+          environmentSecretContext,
+        );
+        // Mirror dispatch: environment variables form the base, agent values
+        // win conflicts, and managed authentication is applied afterwards.
+        if (Object.keys(environmentEnvResolution.env).length > 0) {
+          config = { ...runtimeAdapterConfig, env: {
+            ...environmentEnvResolution.env,
+            ...parseObject(runtimeAdapterConfig.env),
+          } };
+        }
+      }
+    }
+    return { config, checks };
+  }
+
+  function managedAiValidationSelection(adapterType: string, config: Record<string, unknown>, environmentId: unknown) {
+    // Validate execution selection changes, without coupling ordinary env edits
+    // to a provider round trip. Normalize historical Runner profiles first.
+    const normalized = normalizePaperclipRunnerAdapterConfig(adapterType, config);
+    return {
+      adapterType,
+      harness: agentHarnessType(adapterType, normalized),
+      model: asNonEmptyString(normalized.model),
+      provider: normalized.provider ?? null,
+      acpxAgent: adapterType === "paperclip_runner" && normalized.provider === "acpx" ? normalized.acpxAgent : null,
+      engine: adapterType === "paperclip_runner" ? null : asNonEmptyString(normalized.engine)?.toLowerCase() ?? null,
+      environmentId: environmentId ?? null,
+    };
+  }
+
   async function validateManagedAgentBinding(req: Request, companyId: string, agentId: string, adapterType: string, config: Record<string, unknown>, binding: AiRuntimeConnectionBinding, environmentId: string | null | undefined, test: boolean, newAgent = false, validateModelCatalog = false) {
     if (binding.mode === "router") {
       const settings = await import("../services/instance-settings.js");
@@ -3167,7 +3244,12 @@ export function agentRoutes(
         agentId: hasSavedAgent ? agentId : undefined, environmentId: testEnvironmentId });
       try {
         if (!target.executionTarget && target.fallbackChecks.length > 0) throw unprocessable("The agent environment is not available for adoption");
-        await withManagedAiProbe(db, { companyId, agentId, responsibleUserId: userId, adapterType, binding, config, allowUninstalledPersonal: newAgent, allowUninstalledShared, allowLegacyValidation: true }, async managed => {
+        const resolved = await resolveAdapterTestConfig(req, companyId, adapterType, config, testEnvironmentId, true);
+        if (resolved.checks.some(check => check.level === "error")) throw unprocessable("The selected AI connection failed validation in this agent’s environment. Run the agent test to see the failing checks.", {
+          code: "ai_connection_validation_failed",
+          checks: resolved.checks.map(check => ({ code: check.code, level: check.level })),
+        });
+        await withManagedAiProbe(db, { companyId, agentId, responsibleUserId: userId, adapterType, binding, config: resolved.config, allowUninstalledPersonal: newAgent, allowUninstalledShared, allowLegacyValidation: true }, async managed => {
         const managedAiCredentialHome = adapterType === "paperclip_runner" && asRecord(managed.config)?.provider === "codex" && managed.home
           ? path.join(managed.home, "provider") : undefined;
         const result = await testManagedEnvironment(adapterType, { companyId, adapterType, config: managed.config, managedAiCredentialHome, executionTarget: target.executionTarget, environmentName: target.environmentName }, binding, managed, agentId);
@@ -3298,22 +3380,6 @@ export function agentRoutes(
         adapterConfigForTest,
         { strictMode: strictSecretsMode, adapterType: type },
       );
-      // Prospective, non-persisted config: resolve the acting user's own user
-      // secrets in owner_scoped mode (no declaration rows exist for this config).
-      // Record an honest audit consumer — environment:<id> when the caller selected
-      // one, otherwise system:adapter_test — never a fake agent consumer.
-      const { config: runtimeAdapterConfig } = await secretsSvc.resolveAdapterConfigForRuntime(
-        companyId,
-        normalizedAdapterConfig,
-        buildActorSecretContext(
-          req,
-          requestedEnvironmentId
-            ? { consumerType: "environment", consumerId: requestedEnvironmentId }
-            : { consumerType: "system", consumerId: "adapter_test" },
-        ),
-        { adapterType: type, userSecretMediation: "owner_scoped" },
-      );
-
       const { executionTarget, environmentName, fallbackChecks, sandboxIdentityCheck, release } =
         await resolveAdapterTestExecutionContext({
           companyId,
@@ -3324,67 +3390,11 @@ export function agentRoutes(
 
       let releaseStatus: "released" | "failed" = "released";
       try {
-        // Mirror the run path (resolveExecutionRunAdapterConfig): the selected
-        // environment's envVars are the base env layer and the agent's
-        // adapterConfig.env wins on key conflicts. Without this merge the probe
-        // cannot see environment-level auth (e.g. CLAUDE_CODE_OAUTH_TOKEN) that
-        // real runs receive.
-        const environmentEnvChecks: AdapterEnvironmentCheck[] = [];
-        let effectiveAdapterConfig = runtimeAdapterConfig;
-        if (requestedEnvironmentId) {
-          const selectedEnvironment = await environmentsSvc.getById(requestedEnvironmentId);
-          const environmentEnv = Object.fromEntries(
-            Object.entries(aiBinding ? stripAiAuthBindings(selectedEnvironment?.envVars) : parseObject(selectedEnvironment?.envVars)).filter(
-              ([key]) => !isForbiddenConfigEnvKey(key),
-            ),
-          );
-          if (Object.keys(environmentEnv).length > 0) {
-            const environmentSecretContext = buildActorSecretContext(req, {
-              consumerType: "environment",
-              consumerId: requestedEnvironmentId,
-            });
-            const missingBindings =
-              typeof secretsSvc.collectMissingRuntimeBindings === "function"
-                ? await secretsSvc.collectMissingRuntimeBindings(
-                    companyId,
-                    environmentEnv,
-                    environmentSecretContext,
-                  )
-                : [];
-            const missingKeys = new Set(missingBindings.map((binding) => binding.envKey));
-            if (missingKeys.size > 0) {
-              environmentEnvChecks.push({
-                code: "environment_env_binding_missing",
-                level: "error",
-                message: `Environment variables with missing secret bindings were skipped: ${[...missingKeys].join(", ")}.`,
-                hint: "Re-save the environment's variables to restore the secret binding, then test again.",
-              });
-            }
-            const resolvableEnvironmentEnv = Object.fromEntries(
-              Object.entries(environmentEnv).filter(([key]) => !missingKeys.has(key)),
-            );
-            const environmentEnvResolution = await secretsSvc.resolveEnvBindings(
-              companyId,
-              resolvableEnvironmentEnv,
-              environmentSecretContext,
-            );
-            if (Object.keys(environmentEnvResolution.env).length > 0) {
-              effectiveAdapterConfig = {
-                ...runtimeAdapterConfig,
-                env: {
-                  ...environmentEnvResolution.env,
-                  ...parseObject(runtimeAdapterConfig.env),
-                },
-              };
-            }
-          }
-        }
-
         // If the caller explicitly selected an environment, never fall back to
         // probing the host when we couldn't resolve that environment's
         // execution target. Surface the diagnostic checks instead.
         if (requestedEnvironmentId && !executionTarget && fallbackChecks.length > 0) {
-          const combinedChecks = [...fallbackChecks, ...environmentEnvChecks];
+          const combinedChecks = fallbackChecks;
           const status: AdapterEnvironmentTestResult["status"] = combinedChecks.some((c) => c.level === "error")
             ? "fail"
             : combinedChecks.some((c) => c.level === "warn")
@@ -3400,6 +3410,10 @@ export function agentRoutes(
           res.json(synthesized);
           return;
         }
+
+        const resolved = await resolveAdapterTestConfig(req, companyId, type, normalizedAdapterConfig, requestedEnvironmentId, Boolean(aiBinding));
+        const environmentEnvChecks = resolved.checks;
+        let effectiveAdapterConfig = resolved.config;
 
         // Probe-only credentials bypass storage, not authorization. The schema
         // allows only provider key names; they never enter persisted config.
@@ -5565,12 +5579,17 @@ export function agentRoutes(
     const nextAiBinding = aiRuntimeConnectionBindingSchema.safeParse(requestedRuntimeConfig ? requestedRuntimeConfig.aiConnection : existing.runtimeConfig.aiConnection).data;
     if (nextAiBinding) {
       await assertCanConfigureAgentSetup(req, existing);
-      const changed = JSON.stringify(nextAiBinding) !== JSON.stringify(existing.runtimeConfig.aiConnection);
+      // JSONB key order differs from schema output even for the same identity.
+      const existingAiBinding = aiRuntimeConnectionBindingSchema.safeParse(existing.runtimeConfig.aiConnection).data;
+      const changed = JSON.stringify(nextAiBinding) !== JSON.stringify(existingAiBinding);
       const aiConfig = (patchData.adapterConfig ?? existing.adapterConfig) as Record<string, unknown>;
+      const selectionChanged = JSON.stringify(managedAiValidationSelection(requestedAdapterType, aiConfig,
+        patchData.defaultEnvironmentId !== undefined ? patchData.defaultEnvironmentId : existing.defaultEnvironmentId))
+        !== JSON.stringify(managedAiValidationSelection(existing.adapterType, existing.adapterConfig, existing.defaultEnvironmentId));
       if (nextAiBinding.mode !== "router" && !isAiConnectionCompatible(nextAiBinding, requestedAdapterType, aiConfig.model, aiConfig.provider, aiConfig.acpxAgent)) throw unprocessable("Select an AI connection compatible with the new harness and model");
       const copilotConfigurationChanged = requestedAdapterType === "paperclip_runner" && aiConfig.provider === "acpx" && aiConfig.acpxAgent === "copilot"
         && (touchesAdapterConfiguration || Object.prototype.hasOwnProperty.call(patchData, "defaultEnvironmentId"));
-      if (runtimeSettings || changed || copilotConfigurationChanged || (nextAiBinding.mode === "router" && requestedAdapterType !== existing.adapterType)) {
+      if (runtimeSettings || changed || selectionChanged || copilotConfigurationChanged) {
         const configuringSetup = existing.lifecycleState === "paused" && existing.pauseReason === "setup";
         await validateManagedAgentBinding(req, existing.companyId, existing.id, requestedAdapterType, aiConfig, nextAiBinding,
           (patchData.defaultEnvironmentId !== undefined ? patchData.defaultEnvironmentId : existing.defaultEnvironmentId) as string | null,
