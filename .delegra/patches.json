@@ -220,6 +220,62 @@
       "verifiedAt": "2026-10-26",
       "retireWhen": "The accepted upstream stable base supplies an equivalent company-level reference-rate editor and a separate estimate report for gateway and subscription usage.",
       "notes": "Withdrawn at the operator request on 2026-10-26. The second commit reverses the reference-rate API, shared estimator, Providers editor, and related feature documentation from PR #17. Preserve the executed SQL migration, journal, snapshots, and schema as inert compatibility history. The running service and database were restored to the pre-r7 r6 baseline. A full billing proposal remains local until upstream scope review; no new billing feature is approved or implemented."
+    },
+    {
+      "id": "codex-structured-launch-policy",
+      "kind": "fork-only",
+      "status": "active",
+      "commits": [
+        "0e04c1379971773c4c4ce58db19fa1ca66d25119",
+        "16da63dd36a3faeffb2541183a9f50a446a5533a",
+        "4c7148df2d04541a9027da0b9bed873a91da3aa9"
+      ],
+      "owner": "hrygo",
+      "reviewBy": "2026-11-30",
+      "verifiedAt": "2026-10-27",
+      "retireWhen": "The accepted stable base carries an equivalent bounded structured launch-policy contract, frozen recovery identity and old-artifact rejection on both controller and Runner.",
+      "notes": "Carry the reviewed transport repair against the pinned canary.7 deployment pair. Preserves all assigned skill roots and argv bounds; fixed CLI and real old-artifact qualifications pass. Upstream integration must preserve the complete recovery and permission contract rather than cherry-picking only argv removal. Static contract imports preserve the server scenario closure. Canonical Copilot v59 identity records changed shared launch sources; all prior identity fixtures remain unchanged. v59 is pending live Copilot qualification and is not part of the Codex/Claude/OpenCode pilot. Synthetic handoff and damaged-session recovery fixtures implement the real preflight and assert its order before thread admission."
+    },
+    {
+      "id": "managed-claude-task-safety",
+      "kind": "fork-only",
+      "status": "active",
+      "commits": [
+        "3f48d630c52b3f53bba8246ae733f24b57f4a308",
+        "e081a19972f8945378542849fd308da8148c220c"
+      ],
+      "owner": "hrygo",
+      "reviewBy": "2026-11-30",
+      "verifiedAt": "2026-10-27",
+      "retireWhen": "The accepted stable base provides equivalent closed managed-Claude build/review policies, selected-skill discovery and fail-closed tool/sandbox boundaries.",
+      "notes": "Adapter-owned settings are needed for the managed connection authentication boundary on the pinned deployment. Raw settings remain rejected. Source regressions and real macOS CLI tool/file/network qualification pass; live saved-agent lifecycle remains a rollout gate. The workspace-build profile derives seven private workspace cache variables, including XDG_RUNTIME_DIR for pnpm per-user operation locks; it adds no write grant. Exact-root cleanup requires the current provider stop and successful collection. Candidate-review remains read-only. Fixed CLI synthetic offline install and boundary qualification passed; provider quality and live task lifecycle remain separate."
+    },
+    {
+      "id": "managed-ssh-run-environment",
+      "kind": "fork-only",
+      "status": "active",
+      "commits": [
+        "e7fff3db1491aabd1cc45181190cd989a0e397ac",
+        "d8c777a9f8ad53b72bd9f375ec9b6822796ca400"
+      ],
+      "owner": "hrygo",
+      "reviewBy": "2026-11-30",
+      "verifiedAt": "2026-10-27",
+      "retireWhen": "The accepted stable base gives managed SSH Codex runs equivalent private writable environment/cache projection and evidence-gated exact-run cleanup.",
+      "notes": "Carry target-host environment isolation for the current managed remote adapter. Preserves executable PATH, authentication home and configured model/effort. Targeted cleanup/restore regressions pass; actual remote toolchain and platform finalization are separate acceptance gates. Both supported pnpm 12 store aliases point to the same owned run directory. Three-host synthetic offline tar installation verified actual private CAS writes, artifact loading and exact cleanup; this is not a model task or product dependency qualification."
+    },
+    {
+      "id": "optional-ssh-file-error-contract",
+      "kind": "fork-only",
+      "status": "active",
+      "commits": [
+        "9494f40522f198ffccc8eb93f42dd2270421acfa"
+      ],
+      "owner": "hrygo",
+      "reviewBy": "2026-11-30",
+      "verifiedAt": "2026-10-27",
+      "retireWhen": "The accepted stable base normalizes confirmed remote optional-file absence without swallowing permission, transport, timeout or local SSH setup errors.",
+      "notes": "The managed routed home can legitimately have no auth.json. One bounded metadata probe maps only proven absence to ENOENT, preserving successful provider output and host authentication. Synthetic POSIX/transport regressions pass; no credential contents or data migration."
     }
   ]
 }

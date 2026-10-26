@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -101,13 +101,15 @@ suite("case handoff through the assembled native runner", () => {
     const provider = join(root, "scripted-codex.mjs"), command = join(bin, "codex");
     const config = { caseId: initial.caseId, taskId: initial.taskId, triage, engineer,
       errors: join(root, "provider-error.json"), exposed: join(root, "exposed.json"), accepted: join(root, "accepted.json"),
-      observed: join(root, "observed.json"), returned: join(root, "returned.json"), finalTurn: join(root, "final-turn.json"), terminal: join(root, "terminal.json") };
+      observed: join(root, "observed.json"), returned: join(root, "returned.json"), finalTurn: join(root, "final-turn.json"), terminal: join(root, "terminal.json"),
+      launchTrace: join(root, "launch-trace.jsonl") };
     await writeFile(provider, `
 import { createInterface } from 'node:readline';
 import { randomUUID } from 'node:crypto';
-import { existsSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, writeFileSync } from 'node:fs';
 const config=${JSON.stringify(config)};
 const send=value=>process.stdout.write(JSON.stringify(value)+'\\n');
+const recordLaunch=(method,params)=>appendFileSync(config.launchTrace,JSON.stringify({pid:process.pid,method,cwd:params.cwd,permissions:params.permissions,includeLayers:params.includeLayers,limit:params.limit})+'\\n');
 let turn='native-case-turn-'+randomUUID(), thread='native-case-thread-'+randomUUID(), step=0, context, prompt='', active=false, contract, returning=false, finishing=false, threadMethod;
 process.on('uncaughtException', error=>{writeFileSync(config.errors,JSON.stringify({message:error.message}));process.exit(1);});
 const call=(tool,args)=>{step++;send({id:'call-'+step,method:'item/tool/call',params:{threadId:thread,turnId:turn,callId:'tool-'+step,tool,arguments:args}});};
@@ -169,8 +171,10 @@ for await (const line of createInterface({input:process.stdin})) {
   }
   if(m.id===undefined) continue;
   if(m.method==='initialize') send({id:m.id,result:{user:{sessionId:'native-case-provider'}}});
+  else if(m.method==='permissionProfile/list') {recordLaunch(m.method,p);send({id:m.id,result:{data:[],nextCursor:null}});}
+  else if(m.method==='config/read') {recordLaunch(m.method,p);send({id:m.id,result:{config:{}}});}
   else if(['thread/start','thread/resume','thread/read'].includes(m.method)) {
-    if(m.method!=='thread/read') threadMethod=m.method;
+    if(m.method!=='thread/read') {threadMethod=m.method;recordLaunch(m.method,p);}
     if(m.method!=='thread/start'&&typeof p.threadId==='string') thread=p.threadId;
     const names=(p.dynamicTools??[]).map(t=>t.name);
     if(m.method!=='thread/read') {
@@ -180,7 +184,7 @@ for await (const line of createInterface({input:process.stdin})) {
       if(!creation.inputSchema?.required?.includes('kickoff')) throw new Error('create_case must require kickoff in provider tool discovery');
       writeFileSync(config.exposed,JSON.stringify({names,creationSchema:creation.inputSchema}));
     }
-    send({id:m.id,result:{model:'gpt-5.6-sol',thread:{id:thread,sessionId:thread,status:{type:active?'active':'idle'},turns:active?[{id:turn,status:'inProgress'}]:[]}}});
+    send({id:m.id,result:{model:'gpt-5.6-sol',activePermissionProfile:{id:p.permissions},thread:{id:thread,sessionId:thread,status:{type:active?'active':'idle'},turns:active?[{id:turn,status:'inProgress'}]:[]}}});
   } else if(m.method==='thread/turns/list') send({id:m.id,result:{data:active?[{id:turn,status:'inProgress',items:[],itemsView:'notLoaded'}]:[],nextCursor:null}});
   else if(m.method==='turn/start') {active=true;prompt=JSON.stringify(p);const envelope=JSON.parse(p.input.find(i=>i.type==='text').text);contract=envelope.completionContract??(envelope.completion?{revision:envelope.completion.revision,criteria:envelope.completion.criterionIds.map(id=>({id}))}:null);send({id:m.id,result:{turn:{id:turn,status:'inProgress'}}});send({method:'turn/started',params:{threadId:thread,turn:{id:turn,status:'inProgress'}}});call('get_task_context',{});}
   else if(m.method==='turn/interrupt') {active=false;send({id:m.id,result:{}});send({method:'turn/completed',params:{threadId:thread,turn:{id:p.turnId??turn,status:'interrupted'}}});}
@@ -287,5 +291,18 @@ for await (const line of createInterface({input:process.stdin})) {
     expect(ledger.map(row => row.issueId)).toEqual([initial.taskId, initial.taskId, initial.taskId, initial.taskId, initial.taskId]);
     expect(ledger.find(row => row.destinationKind === "done")).toMatchObject({ state: "completed", deliveredAt: null, completedAt: expect.any(Date) });
     expect(await db.select().from(caseEvents).where(and(eq(caseEvents.caseId, initial.caseId), eq(caseEvents.kind, "handoff_completed")))).toHaveLength(1);
+    const canonicalWorkspace = await realpath(workspace);
+    const launchRequests: Array<{ pid: number; method: string; cwd: string; permissions?: string; includeLayers?: boolean; limit?: number }> =
+      (await readFile(config.launchTrace, "utf8")).trim().split("\n").map(line => JSON.parse(line));
+    const admissions = launchRequests.filter(request => ["thread/start", "thread/resume"].includes(request.method));
+    expect(admissions.map(request => request.method)).toEqual(expect.arrayContaining(["thread/start", "thread/resume"]));
+    for (const admission of admissions) {
+      const preceding = launchRequests.slice(0, launchRequests.indexOf(admission)).filter(request => request.pid === admission.pid);
+      expect(preceding.slice(-2)).toEqual([
+        { pid: admission.pid, method: "permissionProfile/list", cwd: canonicalWorkspace, limit: 128 },
+        { pid: admission.pid, method: "config/read", cwd: canonicalWorkspace, includeLayers: false },
+      ]);
+      expect(admission.permissions).toMatch(/^paperclip-runner-policy-v1-[a-f0-9]{64}-workspace-only$/);
+    }
   }, 90_000);
 });

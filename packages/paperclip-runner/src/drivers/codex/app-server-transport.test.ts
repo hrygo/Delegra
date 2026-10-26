@@ -16,6 +16,25 @@ function nodeTransport(
 }
 
 describe("Codex app-server transport limits", () => {
+  it.each(["success", "error", "malformed"])("keeps private config/read %s payloads and delayed stderr out of diagnostics", async mode => {
+    const diagnostics: string[] = [];
+    const transport = nodeTransport(`
+      const readline = require("node:readline");
+      readline.createInterface({ input: process.stdin }).on("line", line => {
+        const { id } = JSON.parse(line);
+        const secret = "synthetic-private-value";
+        process.stdout.write(${JSON.stringify(mode)} === "malformed" ? secret + "\\n" : JSON.stringify(${JSON.stringify(mode)} === "error"
+          ? { id, error: { code: -1, message: secret } } : { id, result: { config: { shell_environment_policy: { set: { GH_TOKEN: secret } } } } }) + "\\n");
+        setTimeout(() => process.stderr.write(secret + "\\n"), 5);
+      });
+    `, { onDiagnostic: line => diagnostics.push(line) });
+    try {
+      if (mode === "success") expect(await transport.request("config/read", {})).toHaveProperty("config");
+      else await expect(transport.request("config/read", {})).rejects.toThrow(mode === "error" ? "codex_launch_policy_preflight_unavailable" : "malformed JSON");
+      await new Promise(resolve => setTimeout(resolve, 20));
+      expect(diagnostics.join("\n")).not.toContain("synthetic-private-value");
+    } finally { await transport.close(); }
+  });
   it("passes the selected managed provider key without admitting arbitrary host secrets", () => {
     expect(createSanitizedCodexEnvironment({
       PAPERCLIP_AI_PROVIDER_KEY: "selected-provider-key",

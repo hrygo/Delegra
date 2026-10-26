@@ -107,6 +107,33 @@ Package identity and executable containment remain checked. Browser login keeps
 its provider-specific credential home and resolves the installed Codex CLI on
 64-bit Linux and macOS independently of the daemon's libc requirements.
 
+Generated native Codex launches carry filesystem and non-secret shell policy in a
+bounded, versioned `launchPolicy`, then project it into app-server
+`thread/start.config` and `thread/resume.config`. Every assigned skill remains a
+separate read root; dynamic policy does not consume argv. The process contract
+still allows at most 64 arguments and 4,096 UTF-8 bytes per argument, without NUL.
+Filesystem paths are entry-array values in durable state, so TypeScript and Rust
+use the same receipt ordering, including non-BMP Unicode paths.
+
+Permission profiles use a digest of the complete frozen policy. Before thread
+admission, the owner rejects an existing same-name profile (including inheritance)
+and a configured shell `set` key that would shadow an allowed inherited variable.
+New native start/resume requests select that named profile, including external
+sandboxes; external turns use the frozen network decision. Unsupported preflight
+RPCs fail closed. Private `config/read` responses and stderr
+after that request do not enter diagnostic or trace retention; credentials remain
+in their existing execution-host binding. No user/global Codex config is changed.
+
+New native descriptors use an internal driver version that old runners reject;
+public driver/readiness evidence remains `codex_app_server`. Direct process
+checkpoints freeze the policy, home mode, working directory, instruction switches,
+and real provider IDs behind a versioned lookup token and `same_session_only`.
+Recovery validates that complete context before provider lookup and keeps generated
+profile IDs through `turn/start`. Old direct checkpoints without frozen context
+require a fresh authorized session. Historical native descriptors retain their
+saved argv. Downgrading cannot resume structured-policy checkpoints with an old
+owner or silently create a replacement thread.
+
 Exact dependency pins remain release and ACPX artifact-qualification checks.
 They make published builds reproducible and verify sandbox artifacts; they do not
 add a version-number gate to ordinary native Codex startup or browser login.

@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
+use crate::codex_launch_policy::{CodexLaunchPolicy, POLICY_DRIVER};
 #[cfg(test)]
 use crate::durable::QualifiedLaunchArtifact;
 use crate::durable::{redact_text, OpenCodeLaunchProfile};
@@ -356,6 +357,10 @@ pub struct CodexProviderConfig {
     pub command: PathBuf,
     #[serde(default)]
     pub args: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launch_policy: Option<CodexLaunchPolicy>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub include_collaboration_mode_instructions: Option<bool>,
     pub cwd: String,
     #[serde(default)]
     pub model: Option<String>,
@@ -417,6 +422,22 @@ impl CodexSkillInput {
 }
 
 impl CodexProviderConfig {
+    fn uses_external_sandbox(&self, ambient: bool) -> bool {
+        self.provider == "codex"
+            && !self.read_only
+            && self
+                .launch_policy
+                .as_ref()
+                .map(|policy| policy.externally_sandboxed)
+                .unwrap_or(self.externally_sandboxed || ambient)
+    }
+    pub fn logical_driver(&self) -> &str {
+        if self.driver == POLICY_DRIVER {
+            "codex_app_server"
+        } else {
+            &self.driver
+        }
+    }
     fn skill_instructions_config(&self) -> Option<Value> {
         (self.provider == "codex")
             .then_some(self.include_skill_instructions)
@@ -435,11 +456,26 @@ impl CodexProviderConfig {
         }
         if !matches!(
             (self.provider.as_str(), self.driver.as_str()),
-            ("codex", "codex_app_server") | ("opencode", "opencode_server")
+            ("codex", "codex_app_server")
+                | ("codex", POLICY_DRIVER)
+                | ("opencode", "opencode_server")
         ) {
             return Err(LocalRunnerError::invalid(
                 "local runner provider must be codex through codex_app_server or opencode through opencode_server",
             ));
+        }
+        if (self.driver == POLICY_DRIVER) != self.launch_policy.is_some() {
+            return Err(LocalRunnerError::invalid(
+                "codex_launch_policy_driver_mismatch",
+            ));
+        }
+        if let Some(policy) = &self.launch_policy {
+            policy.validate()?;
+            if policy.externally_sandboxed != self.externally_sandboxed {
+                return Err(LocalRunnerError::invalid(
+                    "codex_launch_policy_sandbox_mismatch",
+                ));
+            }
         }
         if self.provider_version.trim().is_empty() || self.provider_version.len() > 120 {
             return Err(LocalRunnerError::invalid(
@@ -465,14 +501,31 @@ impl CodexProviderConfig {
                 "Codex cwd must be an existing absolute directory",
             ));
         }
-        if self.args.len() > 64
-            || self.args.iter().any(|argument| {
-                argument.len() > 4096 || argument.chars().any(|character| character == '\0')
-            })
-        {
-            return Err(LocalRunnerError::invalid(
-                "Codex arguments exceed the bounded launch contract",
-            ));
+        if self.args.len() > 64 {
+            return Err(LocalRunnerError::invalid(format!(
+                "Codex arguments exceed the bounded launch contract: count={} limit=64",
+                self.args.len()
+            )));
+        }
+        for (index, argument) in self.args.iter().enumerate() {
+            if argument.len() > 4096 || argument.contains('\0') {
+                let key = argument
+                    .split_once('=')
+                    .map(|(key, _)| key)
+                    .filter(|key| {
+                        index > 0
+                            && self.args[index - 1] == "-c"
+                            && (key.starts_with("permissions.")
+                                || key.starts_with("shell_environment_policy.")
+                                || *key == "default_permissions")
+                            && key.len() <= 160
+                            && key.bytes().all(|b| {
+                                b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-')
+                            })
+                    })
+                    .unwrap_or("<argument>");
+                return Err(LocalRunnerError::invalid(format!("Codex arguments exceed the bounded launch contract: index={index} key={key} bytes={} limit=4096 nul={}", argument.len(), argument.contains('\0'))));
+            }
         }
         if self
             .model
@@ -706,7 +759,8 @@ pub struct CodexProvider {
     last_trace_frame_id: Option<u64>,
     opencode_launch_profile: Option<OpenCodeLaunchProfile>,
     completion_contract: Option<ProviderCompletionContract>,
-    permission_profile: &'static str,
+    permission_profile: String,
+    external_sandbox: bool,
     exit_drain: Option<ProviderExitDrain>,
 }
 
@@ -926,14 +980,20 @@ impl CodexProvider {
             ));
         }
         let authorized_tools = authorized_tools.into_iter().collect::<Vec<_>>();
-        let permission_profile = if config.read_only {
-            "paperclip-runner-workspace-read-only"
+        let external_sandbox = config.uses_external_sandbox(
+            std::env::var("PAPERCLIP_RUNNER_EXTERNAL_SANDBOX").as_deref() == Ok("1"),
+        );
+        let permission_profile = if let Some(policy) = &config.launch_policy {
+            policy.permission(config.read_only)
+        } else if config.read_only {
+            "paperclip-runner-workspace-read-only".to_owned()
         } else {
             codex_permission_profile(
                 &config.provider,
                 config.externally_sandboxed
                     || std::env::var("PAPERCLIP_RUNNER_EXTERNAL_SANDBOX").as_deref() == Ok("1"),
             )
+            .to_owned()
         };
         let (dynamic_tools, authorized_tool_ids) =
             codex_dynamic_tools(authorized_tools.iter().cloned())?;
@@ -1085,6 +1145,7 @@ impl CodexProvider {
                 }
             }),
             permission_profile,
+            external_sandbox,
             exit_drain: None,
         };
         let mut stage = ProviderStartupStage::Initialize;
@@ -1104,6 +1165,11 @@ impl CodexProvider {
                 }),
             )?;
             provider.send_frame(&json!({"method": "initialized"}))?;
+            if let Some(policy) = &config.launch_policy {
+                policy.preflight(&config.cwd, |method, params| {
+                    provider.request(method, params)
+                })?;
+            }
 
             let mut params = json!({
                 "cwd": config.cwd,
@@ -1123,7 +1189,8 @@ impl CodexProvider {
                 "baseInstructions"
             };
             params_object.insert(instruction_field.to_owned(), json!(config.instructions));
-            if provider.permission_profile == "paperclip-runner-external-sandbox" {
+            if provider.external_sandbox && config.launch_policy.is_none() {
+                // Legacy launches retain their recorded request shape.
                 // The execution target (for example Daytona) is the OS sandbox.
                 // Codex must not try to create nested user/network namespaces,
                 // which correctly fail inside an unprivileged container.
@@ -1145,8 +1212,25 @@ impl CodexProvider {
                     );
                 }
             }
+            let mut thread_config = config
+                .launch_policy
+                .as_ref()
+                .map(CodexLaunchPolicy::config)
+                .unwrap_or(json!({}));
             if let Some(skill_config) = config.skill_instructions_config() {
-                params_object.insert("config".to_owned(), skill_config);
+                thread_config
+                    .as_object_mut()
+                    .unwrap()
+                    .extend(skill_config.as_object().unwrap().clone());
+            }
+            if config.launch_policy.is_some() {
+                thread_config.as_object_mut().unwrap().extend(json!({
+                    "skills.include_instructions": config.include_skill_instructions.unwrap_or(false),
+                    "include_collaboration_mode_instructions": config.include_collaboration_mode_instructions.unwrap_or(true)
+                }).as_object().unwrap().clone());
+            }
+            if !thread_config.as_object().unwrap().is_empty() {
+                params_object.insert("config".to_owned(), thread_config);
             }
             let method = if let Some(thread_id) = resume_thread_id {
                 params_object.insert("threadId".to_owned(), json!(thread_id));
@@ -1160,6 +1244,17 @@ impl CodexProvider {
             };
             stage = ProviderStartupStage::ThreadOpen;
             let opened = provider.request(method, params)?;
+            if config.launch_policy.is_some()
+                && opened
+                    .pointer("/activePermissionProfile/id")
+                    .or_else(|| opened.pointer("/thread/activePermissionProfile/id"))
+                    .and_then(Value::as_str)
+                    != Some(provider.permission_profile.as_str())
+            {
+                return Err(LocalRunnerError::invalid(
+                    "codex_launch_policy_active_profile_mismatch",
+                ));
+            }
             provider.thread_id = opened
                 .pointer("/thread/id")
                 .or_else(|| opened.get("threadId"))
@@ -1830,10 +1925,10 @@ impl CodexProvider {
         if let Some(mode) = reasoning_mode {
             turn_params_object.insert("reasoningMode".to_owned(), json!(mode));
         }
-        if self.permission_profile == "paperclip-runner-external-sandbox" {
+        if self.external_sandbox {
             turn_params_object.insert(
                 "sandboxPolicy".to_owned(),
-                json!({"type": "externalSandbox", "networkAccess": "enabled"}),
+                json!({"type": "externalSandbox", "networkAccess": if self.config.launch_policy.as_ref().is_none_or(|policy| policy.network_access) { "enabled" } else { "disabled" }}),
             );
         } else {
             turn_params_object.insert("permissions".to_owned(), json!(self.permission_profile));
@@ -3125,7 +3220,11 @@ impl CodexProvider {
                     message,
                 )));
             };
-            let trace_frame_id = self.trace_inbound(&line);
+            let trace_frame_id = if method == "config/read" {
+                None
+            } else {
+                self.trace_inbound(&line)
+            };
             let message = parse_provider_message(&line).map_err(|error| {
                 if let (Some(trace), Some(frame_id)) = (self.trace.as_mut(), trace_frame_id) {
                     trace.interpretation(
@@ -3153,6 +3252,11 @@ impl CodexProvider {
                     );
                 }
                 if let Some(error) = message.get("error") {
+                    if method == "config/read" {
+                        return Err(ProviderRequestError::Rejected(LocalRunnerError::invalid(
+                            "codex_launch_policy_preflight_unavailable",
+                        )));
+                    }
                     let well_formed_rejection = error.get("code").and_then(Value::as_i64).is_some()
                         && error.get("message").and_then(Value::as_str).is_some();
                     if !well_formed_rejection || message.get("result").is_some() {
@@ -3206,7 +3310,12 @@ impl CodexProvider {
             match self.process.recv_timeout(remaining) {
                 Ok(ProcessOutput::Stdout(line)) => return Ok(Some(line)),
                 Ok(ProcessOutput::Stderr(line)) => {
-                    self.stderr_tail.push(redact_text(&line));
+                    // A private config/read may make arbitrary configured set
+                    // values appear on stderr, including delayed child writes.
+                    // Policy launches never persist that diagnostic channel.
+                    if self.config.launch_policy.is_none() {
+                        self.stderr_tail.push(redact_text(&line));
+                    }
                 }
                 Ok(ProcessOutput::StdoutError(message)) => {
                     return Err(LocalRunnerError::invalid(message));
@@ -3228,7 +3337,12 @@ impl CodexProvider {
             }
             match self.process.recv_timeout(remaining) {
                 Ok(ProcessOutput::Stderr(line)) => {
-                    self.stderr_tail.push(redact_text(&line));
+                    // A private config/read may make arbitrary configured set
+                    // values appear on stderr, including delayed child writes.
+                    // Policy launches never persist that diagnostic channel.
+                    if self.config.launch_policy.is_none() {
+                        self.stderr_tail.push(redact_text(&line));
+                    }
                 }
                 Ok(ProcessOutput::StderrClosed)
                 | Err(mpsc::RecvTimeoutError::Timeout)
@@ -4210,6 +4324,8 @@ done
             approval_policy: "never".to_owned(),
             externally_sandboxed: false,
             read_only: false,
+            launch_policy: None,
+            include_collaboration_mode_instructions: None,
             include_skill_instructions: None,
             conversation_mode: None,
         };
@@ -4598,6 +4714,8 @@ done
             approval_policy: "never".to_owned(),
             externally_sandboxed: false,
             read_only: false,
+            launch_policy: None,
+            include_collaboration_mode_instructions: None,
             include_skill_instructions: None,
             conversation_mode: None,
         };
@@ -4719,9 +4837,21 @@ done
             approval_policy: "never".to_owned(),
             externally_sandboxed: false,
             read_only: false,
+            launch_policy: None,
+            include_collaboration_mode_instructions: None,
             include_skill_instructions: None,
             conversation_mode: None,
         };
+        config.externally_sandboxed = true;
+        assert!(
+            !config.uses_external_sandbox(true),
+            "OpenCode retains its named workspace profile on external runners"
+        );
+        assert_eq!(
+            codex_permission_profile(&config.provider, config.uses_external_sandbox(true)),
+            "paperclip-runner-workspace-only"
+        );
+        config.externally_sandboxed = false;
         config.include_skill_instructions = Some(true);
         assert_eq!(
             config.skill_instructions_config(),

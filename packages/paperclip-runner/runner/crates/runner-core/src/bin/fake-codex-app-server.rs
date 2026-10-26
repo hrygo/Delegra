@@ -26,6 +26,13 @@ fn argument(args: &[String], name: &str) -> Option<String> {
         .cloned()
 }
 
+fn active_permission_profile(message: &Value, args: &[String]) -> Value {
+    if args.iter().any(|arg| arg == "--omit-active-profile") {
+        return Value::Null;
+    }
+    json!({"id": argument(args, "--returned-active-profile").map(Value::String).unwrap_or_else(|| message.pointer("/params/permissions").or_else(|| message.pointer("/params/config/default_permissions")).cloned().unwrap_or(Value::Null))})
+}
+
 fn send(value: Value) -> io::Result<()> {
     let mut stdout = io::stdout().lock();
     serde_json::to_writer(&mut stdout, &value)?;
@@ -594,6 +601,9 @@ fn send_runtime_request_flood(
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let args = std::env::args().skip(1).collect::<Vec<_>>();
+    if let Some(path) = argument(&args, "--process-id-file") {
+        fs::write(path, std::process::id().to_string())?;
+    }
     let state_path = if args
         .iter()
         .any(|value| value == "--state-file-in-codex-home")
@@ -1093,8 +1103,49 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         {
             return Err("thread request omitted skills.include_instructions=true".into());
         }
+        if argument(&args, "--block-policy-preflight").as_deref() == Some(method) {
+            loop {
+                thread::sleep(Duration::from_secs(1));
+            }
+        }
         let id = message.get("id").cloned();
         match method {
+            "collaborationMode/list" => {
+                send(
+                    json!({"id": id, "result": {"data": [{"mode": "plan", "model": "test-model", "reasoning_effort": null}]}}),
+                )?;
+            }
+            "permissionProfile/list"
+                if args
+                    .iter()
+                    .any(|arg| arg == "--unavailable-policy-preflight") =>
+            {
+                send(json!({"id": id, "error": {"code": -32601, "message": "unsupported"}}))?;
+            }
+            "permissionProfile/list" => {
+                send(json!({"id": id, "result": {"data": [], "nextCursor": null}}))?;
+            }
+            "config/read" => {
+                if let Some(mode) = argument(&args, "--private-config-fixture") {
+                    eprintln!("synthetic-config-private-value");
+                    if mode == "malformed" {
+                        println!("synthetic-config-private-value");
+                        io::stdout().flush()?;
+                    } else if mode == "error" {
+                        send(
+                            json!({"id": id, "error": {"code": -1, "message": "synthetic-config-private-value"}}),
+                        )?;
+                    } else {
+                        send(
+                            json!({"id": id, "result": {"config": {"shell_environment_policy": {"set": {"GH_TOKEN": "synthetic-config-private-value"}}}}}),
+                        )?;
+                    }
+                } else {
+                    send(
+                        json!({"id": id, "result": {"config": {"shell_environment_policy": {"set": {}}}}}),
+                    )?;
+                }
+            }
             "initialize" => {
                 if args
                     .iter()
@@ -1164,7 +1215,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 send(json!({
                     "id": id,
-                    "result": {"thread": {"id": state.thread_id, "sessionId": "codex-account-session"},
+                    "result": {"thread": {"id": state.thread_id, "sessionId": "codex-account-session"}, "activePermissionProfile": active_permission_profile(&message, &args),
                         "model": argument(&args, "--returned-model").map(Value::String).unwrap_or_else(|| message.pointer("/params/model").filter(|model| model.is_string()).cloned().unwrap_or(json!("gpt-test")))}
                 }))?;
                 if agent_created_goal {
@@ -1215,7 +1266,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 send(json!({
                     "id": id,
-                    "result": {"thread": {"id": state.thread_id, "sessionId": "codex-account-session"}}
+                    "result": {"thread": {"id": state.thread_id, "sessionId": "codex-account-session"}, "activePermissionProfile": active_permission_profile(&message, &args)}
                 }))?;
                 if args.iter().any(|arg| arg == "--resume-usage-snapshot")
                     && state.active_turn_id.is_none()
@@ -1294,7 +1345,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     .unwrap_or_default();
                 send(json!({
                     "id": id,
-                    "result": {"thread": {"id": state.thread_id, "status": {"type": if state.active_turn_id.is_some() { "active" } else { "idle" }}, "turns": turns}}
+                    "result": {"thread": {"id": state.thread_id, "cwd": argument(&args, "--returned-cwd"), "status": {"type": if state.active_turn_id.is_some() { "active" } else { "idle" }}, "turns": turns}}
                 }))?;
                 if fail_after_thread_read {
                     return Err("configured failure after thread read".into());

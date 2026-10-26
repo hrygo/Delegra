@@ -10,7 +10,9 @@ import {
   readPaperclipRuntimeSkillEntries,
   readInstalledSkillTargets,
   resolveLegacyPaperclipDesiredSkillNames,
+  resolvePaperclipDesiredSkillNames,
 } from "@paperclipai/adapter-utils/server-utils";
+import { parseClaudeSafetyPolicy } from "./safety-policy.js";
 
 const __moduleDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -30,7 +32,7 @@ function resolveClaudeSkillsHome(config: Record<string, unknown>) {
 
 async function buildClaudeSkillSnapshot(config: Record<string, unknown>): Promise<AdapterSkillSnapshot> {
   const availableEntries = await readPaperclipRuntimeSkillEntries(config, __moduleDir);
-  const desiredSkills = resolveLegacyPaperclipDesiredSkillNames(config, availableEntries);
+  const desiredSkills = resolveClaudeDesiredSkillNames(config, availableEntries);
   const skillsHome = resolveClaudeSkillsHome(config);
   const installed = await readInstalledSkillTargets(skillsHome);
   return buildRuntimeMountedSkillSnapshot({
@@ -58,7 +60,10 @@ export async function syncClaudeSkills(
 
 export function resolveClaudeDesiredSkillNames(
   config: Record<string, unknown>,
-  availableEntries: Array<{ key: string; required?: boolean }>,
+  availableEntries: Array<{ key: string; runtimeName?: string | null; required?: boolean }>,
 ) {
+  // Offline profiles have no control-plane tools. Do not implicitly attach
+  // operational/feedback skills; preserve only the explicit selected sources.
+  if (parseClaudeSafetyPolicy(config)) return resolvePaperclipDesiredSkillNames(config, availableEntries);
   return resolveLegacyPaperclipDesiredSkillNames(config, availableEntries);
 }

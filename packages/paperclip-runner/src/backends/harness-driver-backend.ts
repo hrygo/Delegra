@@ -115,6 +115,7 @@ export class HarnessDriverBackend implements NativeSessionBackend {
           null)
         : snapshot.activeTurnId;
     const persisted: PersistedHarnessSession = {
+      ...(snapshot.codexLaunchContext ? { codexLaunchContext: structuredClone(snapshot.codexLaunchContext) } : {}),
       driverKind: snapshot.driverKind ?? snapshot.backendKind,
       driverSessionId: snapshot.sessionId,
       providerSessionId: snapshot.providerSessionId,
@@ -839,6 +840,7 @@ class HarnessNativeSession implements NativeSession {
     const snapshot = await this.#harnessSnapshot();
     return {
       backendKind: "runner",
+      ...(snapshot.codexLaunchContext ? { codexLaunchContext: structuredClone(snapshot.codexLaunchContext) } : {}),
       driverKind: snapshot.driverKind,
       sessionId: snapshot.driverSessionId,
       identity: structuredClone(this.#input.identity),

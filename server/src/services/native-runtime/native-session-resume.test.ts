@@ -6,6 +6,7 @@ import {
   mkdtemp,
   readFile,
   readdir,
+  realpath,
   rm,
   writeFile,
 } from "node:fs/promises";
@@ -706,6 +707,9 @@ const recoveryFakeCodex = resolve(
       );
       expect(stateKey).toBeDefined();
       const root = join(stateBase, stateKey!);
+      const initialProviderLaunchRequests = JSON.parse(
+        await readFile(join(root, "codex-home", "fake-state.json"), "utf8"),
+      ).launchPolicyRequests;
       const runnerPath = join(root, "runner", "runner-state.json");
       const providerPath = join(root, "runner", "codex-provider-state.json");
       const runner = JSON.parse(await readFile(runnerPath, "utf8"));
@@ -945,6 +949,22 @@ const recoveryFakeCodex = resolve(
       const completedProvider = JSON.parse(
         await readFile(join(root, "codex-home", "fake-state.json"), "utf8"),
       );
+      const canonicalWorkspace = await realpath(workspace);
+      for (const requests of [initialProviderLaunchRequests, completedProvider.launchPolicyRequests] as Array<Array<{
+        pid: number; method: string; cwd?: string; permissions?: string; includeLayers?: boolean; limit?: number;
+      }>>) {
+        const admissions = requests.filter(request => ["thread/start", "thread/resume"].includes(request.method));
+        expect(admissions.length).toBeGreaterThan(0);
+        for (const admission of admissions) {
+          const preceding = requests.slice(0, requests.indexOf(admission)).filter(request => request.pid === admission.pid);
+          expect(preceding.slice(-2)).toEqual([
+            { pid: admission.pid, method: "permissionProfile/list", cwd: canonicalWorkspace, limit: 128 },
+            { pid: admission.pid, method: "config/read", cwd: canonicalWorkspace, includeLayers: false },
+          ]);
+          expect(admission.permissions).toMatch(/^paperclip-runner-policy-v1-[a-f0-9]{64}-workspace-only$/);
+        }
+      }
+      expect(completedProvider.launchPolicyRequests.at(-1).pid).not.toBe(initialProviderLaunchRequests.at(-1).pid);
       expect(completedProvider.nextTurn).toBe(1);
       expect(completedProvider.turns["final-burst-turn-1"]).toMatchObject({
         status: "completed",

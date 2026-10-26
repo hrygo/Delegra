@@ -1066,6 +1066,20 @@ fn remember_settled_provider_turn(
 }
 
 impl CodexProviderState {
+    fn launch_policy_identity(&self) -> Option<Value> {
+        let policy = self.config.launch_policy.as_ref()?;
+        let thread_id = self.thread_id.as_ref()?;
+        let context = json!({"schema": "paperclip.codex.native-launch-identity.v1", "policy": policy,
+            "collaborationMode": if self.config.read_only { "plan" } else { "default" },
+            "includeSkillInstructions": self.config.include_skill_instructions.unwrap_or(false),
+            "includeCollaborationModeInstructions": self.config.include_collaboration_mode_instructions.unwrap_or(true),
+            "threadId": thread_id, "providerSessionId": self.provider_session_id,
+            "providerRecoveryPolicy": "same_session_only"});
+        Some(
+            json!({"kind": "codex_launch_policy_v1", "digest": crate::codex_launch_policy::canonical_digest(&context)}),
+        )
+    }
+
     fn new(
         config: CodexProviderConfig,
         completion_contract: Option<CompletionContractBinding>,
@@ -2034,6 +2048,7 @@ impl CodexCommandExecutor {
                 state.provider_session_id = resumed_provider_session_id.clone();
                 state.settled_provider_turn_ids = settled_provider_turn_ids;
                 state.settled_provider_turn_filter = settled_provider_turn_filter;
+                let policy_identity = state.launch_policy_identity();
                 state.push_terminal_event(NormalizedProviderEvent {
                     event_type: "session.resumed".to_owned(),
                     priority: EventPriority::P0,
@@ -2041,6 +2056,7 @@ impl CodexCommandExecutor {
                         "provider": provider_label,
                         "providerSessionId": thread_id.clone(),
                         "providerAccountSessionId": resumed_provider_session_id,
+                        "providerIdentity": policy_identity,
                         "processId": resumed_process_id,
                     }),
                 })?;
@@ -2248,11 +2264,14 @@ impl CodexCommandExecutor {
         if config.provider != "codex" {
             config.include_skill_instructions = None;
         }
+        if config.launch_policy.is_none() {
+            config.include_collaboration_mode_instructions = None;
+        }
         config
             .validate()
             .map_err(|error| DurableRunnerError::invalid(error.to_string()))?;
         let provider_name = config.provider.clone();
-        let driver = config.driver.clone();
+        let driver = config.logical_driver().to_owned();
         let opencode_launch_profile_digest = self.bind_opencode_launch_profile(&config)?;
         let completion_contract = completion_contract(payload)?;
         let tool_set = authorized_tool_set(payload)?;
@@ -2476,6 +2495,31 @@ impl CodexCommandExecutor {
             .map_err(|_| {
                 DurableRunnerError::invalid("run.attach runtime launch arguments are invalid")
             })?;
+        let runtime_launch_policy: Option<crate::codex_launch_policy::CodexLaunchPolicy> = payload
+            .get("runtimeLaunchPolicy")
+            .map(|value| serde_json::from_value(value.clone()))
+            .transpose()
+            .map_err(|_| {
+                DurableRunnerError::invalid("run.attach runtime launch policy is invalid")
+            })?;
+        if next_state.config.launch_policy.is_some()
+            && runtime_launch_args.is_some() != runtime_launch_policy.is_some()
+            || next_state.config.launch_policy.is_none() && runtime_launch_policy.is_some()
+        {
+            return Err(DurableRunnerError::invalid(
+                "run.attach requires a paired compatible launch policy",
+            ));
+        }
+        if let Some(policy) = &runtime_launch_policy {
+            policy.validate().map_err(|_| {
+                DurableRunnerError::invalid("run.attach runtime launch policy is invalid")
+            })?;
+            if policy.externally_sandboxed != next_state.config.externally_sandboxed {
+                return Err(DurableRunnerError::invalid(
+                    "run.attach cannot change external sandbox authority",
+                ));
+            }
+        }
         let mut upgraded_skill_config = false;
         if let Some(provider) = payload.get("provider") {
             let mut config: CodexProviderConfig = serde_json::from_value(provider.clone())
@@ -2484,6 +2528,9 @@ impl CodexCommandExecutor {
                 })?;
             if config.provider != "codex" {
                 config.include_skill_instructions = None;
+            }
+            if config.launch_policy.is_none() {
+                config.include_collaboration_mode_instructions = None;
             }
             config
                 .validate()
@@ -2494,6 +2541,16 @@ impl CodexCommandExecutor {
                     == Self::stable_launch_args(&next_state.config.args)
             {
                 config.args = next_state.config.args.clone();
+            }
+            if let Some(policy) = &runtime_launch_policy {
+                if config.launch_policy.as_ref() != Some(policy)
+                    && config.launch_policy != next_state.config.launch_policy
+                {
+                    return Err(DurableRunnerError::invalid(
+                        "run.attach runtime launch policy disagrees with provider",
+                    ));
+                }
+                config.launch_policy = next_state.config.launch_policy.clone();
             }
             // Pre-fix checkpoints dropped this field. A fresh settled run may
             // adopt the explicit controller setting once, then must reopen the
@@ -2512,7 +2569,7 @@ impl CodexCommandExecutor {
                 ));
             }
         }
-        let runtime_launch_changed = if let Some(args) = runtime_launch_args {
+        let mut runtime_launch_changed = if let Some(args) = runtime_launch_args {
             if next_state.config.provider != "codex"
                 || Self::stable_launch_args(&args)
                     != Self::stable_launch_args(&next_state.config.args)
@@ -2531,6 +2588,10 @@ impl CodexCommandExecutor {
         } else {
             false
         };
+        if let Some(policy) = runtime_launch_policy {
+            runtime_launch_changed |= next_state.config.launch_policy.as_ref() != Some(&policy);
+            next_state.config.launch_policy = Some(policy);
+        }
         let completion_contract = completion_contract(payload)?;
         let tool_set = authorized_tool_set(payload)?;
         next_state
@@ -2702,12 +2763,16 @@ impl CodexCommandExecutor {
             state.goal_revision = state.goal_revision.saturating_add(1);
             (
                 state.config.provider.clone(),
-                state.config.driver.clone(),
+                state.config.logical_driver().to_owned(),
                 state.config.provider_version.clone(),
                 state.goal_revision,
             )
         };
         self.save_state()?;
+        let policy_identity = self
+            .state
+            .as_ref()
+            .and_then(CodexProviderState::launch_policy_identity);
         Ok(CommandExecution {
             result: json!({
                 "status": if resumed { "resumed" } else { "started" },
@@ -2732,6 +2797,7 @@ impl CodexCommandExecutor {
                         "providerAccountSessionId": provider_session_id,
                         "processId": process_id,
                         "providerDescriptor": { "driver": driver, "providerVersion": provider_version, "effectiveModel": observed_model },
+                        "providerIdentity": policy_identity,
                     }),
                 ),
                 (
@@ -4000,11 +4066,12 @@ impl CodexCommandExecutor {
         Ok(CommandExecution::result(json!({
             "status": state.lifecycle,
             "provider": state.config.provider,
-            "driver": state.config.driver,
+            "driver": state.config.logical_driver(),
             "driverSessionId": state.thread_id,
             "providerSessionId": state.thread_id,
             "sessionId": state.provider_session_id,
             "providerAccountSessionId": state.provider_session_id,
+            "providerIdentity": state.launch_policy_identity(),
             "activeProviderTurnId": state.active_provider_turn_id,
             "sessionGoals": state.goal_capability,
             "goal": state.goal,
@@ -5093,6 +5160,8 @@ mod tests {
                 approval_policy: "never".to_owned(),
                 externally_sandboxed: false,
                 read_only: false,
+                launch_policy: None,
+                include_collaboration_mode_instructions: None,
                 include_skill_instructions: None,
                 conversation_mode: None,
             },
@@ -5506,6 +5575,8 @@ mod tests {
                 approval_policy: "never".to_owned(),
                 externally_sandboxed: false,
                 read_only: false,
+                launch_policy: None,
+                include_collaboration_mode_instructions: None,
                 include_skill_instructions: None,
                 conversation_mode: None,
             },
@@ -5598,6 +5669,8 @@ mod tests {
                 approval_policy: "never".to_owned(),
                 externally_sandboxed: false,
                 read_only: false,
+                launch_policy: None,
+                include_collaboration_mode_instructions: None,
                 include_skill_instructions: None,
                 conversation_mode: None,
             },
@@ -5652,6 +5725,8 @@ mod tests {
                 approval_policy: "never".to_owned(),
                 externally_sandboxed: false,
                 read_only: false,
+                launch_policy: None,
+                include_collaboration_mode_instructions: None,
                 include_skill_instructions: None,
                 conversation_mode: None,
             },
@@ -5696,6 +5771,8 @@ mod tests {
                 approval_policy: "never".to_owned(),
                 externally_sandboxed: false,
                 read_only: false,
+                launch_policy: None,
+                include_collaboration_mode_instructions: None,
                 include_skill_instructions: None,
                 conversation_mode: None,
             },
@@ -5789,6 +5866,8 @@ mod tests {
                 approval_policy: "never".to_owned(),
                 externally_sandboxed: false,
                 read_only: false,
+                launch_policy: None,
+                include_collaboration_mode_instructions: None,
                 include_skill_instructions: None,
                 conversation_mode: None,
             },
@@ -5857,6 +5936,8 @@ mod tests {
                 approval_policy: "never".to_owned(),
                 externally_sandboxed: false,
                 read_only: false,
+                launch_policy: None,
+                include_collaboration_mode_instructions: None,
                 include_skill_instructions: None,
                 conversation_mode: None,
             },
@@ -5908,6 +5989,8 @@ mod tests {
                 approval_policy: "never".to_owned(),
                 externally_sandboxed: false,
                 read_only: false,
+                launch_policy: None,
+                include_collaboration_mode_instructions: None,
                 include_skill_instructions: None,
                 conversation_mode: None,
             },
@@ -6033,6 +6116,8 @@ mod tests {
                 approval_policy: "never".to_owned(),
                 externally_sandboxed: false,
                 read_only: false,
+                launch_policy: None,
+                include_collaboration_mode_instructions: None,
                 include_skill_instructions: None,
                 conversation_mode: None,
             },
@@ -6146,6 +6231,8 @@ mod tests {
                 approval_policy: "never".to_owned(),
                 externally_sandboxed: false,
                 read_only: false,
+                launch_policy: None,
+                include_collaboration_mode_instructions: None,
                 include_skill_instructions: None,
                 conversation_mode: None,
             },
@@ -6204,6 +6291,8 @@ mod tests {
                 approval_policy: "never".to_owned(),
                 externally_sandboxed: false,
                 read_only: false,
+                launch_policy: None,
+                include_collaboration_mode_instructions: None,
                 include_skill_instructions: None,
                 conversation_mode: None,
             },
@@ -6347,6 +6436,8 @@ mod tests {
                 approval_policy: "never".to_owned(),
                 externally_sandboxed: false,
                 read_only: false,
+                launch_policy: None,
+                include_collaboration_mode_instructions: None,
                 include_skill_instructions: None,
                 conversation_mode: None,
             },
@@ -6389,6 +6480,8 @@ mod tests {
                 approval_policy: "never".to_owned(),
                 externally_sandboxed: false,
                 read_only: false,
+                launch_policy: None,
+                include_collaboration_mode_instructions: None,
                 include_skill_instructions: None,
                 conversation_mode: None,
             },
@@ -6428,6 +6521,8 @@ mod tests {
                 approval_policy: "never".to_owned(),
                 externally_sandboxed: false,
                 read_only: false,
+                launch_policy: None,
+                include_collaboration_mode_instructions: None,
                 include_skill_instructions: None,
                 conversation_mode: None,
             },
@@ -6506,6 +6601,8 @@ mod tests {
                 approval_policy: "never".to_owned(),
                 externally_sandboxed: false,
                 read_only: false,
+                launch_policy: None,
+                include_collaboration_mode_instructions: None,
                 include_skill_instructions: None,
                 conversation_mode: None,
             },

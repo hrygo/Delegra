@@ -1,7 +1,8 @@
+import { codexLaunchDigest, validateCodexLaunchPolicy } from "../drivers/codex/codex-launch-policy.js";
 import { PRP_COMPLETION_TOOL_NAME, PRP_COMPLETION_RESULT_BRIDGE_INPUT_SCHEMA } from "../contracts/completion-result.js";
 import { RunnerLaunchPreparationStore } from "./runner-launch-preparation-store.js";
 import type { PreparedRunnerProviderLaunch, RunnerProviderLaunchRequirements } from "./runner-provider-launch.js";
-import { preparedRunnerLaunchWorkingDirectory, validatePreparedRunnerLaunch, runnerProviderLaunchRequirements, createRunnerProviderLaunch, createRunnerdCodexAppServerArgs, trustedRuntimeReadOnlyRoots } from "./runner-provider-launch.js";
+import { preparedRunnerLaunchWorkingDirectory, validatePreparedRunnerLaunch, runnerProviderLaunchRequirements, createRunnerProviderLaunch, createRunnerdCodexAppServerArgs, createRunnerdCodexAppServerLaunch, trustedRuntimeReadOnlyRoots } from "./runner-provider-launch.js";
 export { createRunnerdCodexAppServerArgs, resolveRunnerdAcpxPermissionMode, trustedRuntimeReadOnlyRoots, withCodexCollaborationRuntimeInstructions } from "./runner-provider-launch.js";
 import { applyProviderObservabilityEnvironment, redactObservabilityDiagnostic } from "../drivers/agent-observability.js";
 import type { RunnerExecutionDriver } from "../control-plane/runner-execution-driver.js";
@@ -3541,6 +3542,7 @@ class DurablePrpCodexTransport implements CodexAppServerTransport {
     providerIdentity: Record<string, unknown> | null;
   } | null = null;
   #checkpointProviderIdentityConfirmed = false;
+  #expectedCodexPolicyIdentity: { kind: string; digest: string } | null = null;
   #turnId = "";
   #turnStartResponsePending = false;
   #turnStartResponseSettled: Promise<void> = Promise.resolve();
@@ -3817,6 +3819,17 @@ class DurablePrpCodexTransport implements CodexAppServerTransport {
         snapshot,
         "authenticated session.snapshot",
       );
+      if (record(this.#runAttachTemplate?.provider).launchPolicy !== undefined) {
+        const identity = resolveRunnerdSessionIdentity(snapshot);
+        const tagged = record(snapshot.providerIdentity);
+        if (identity.threadId !== this.#threadId || identity.sessionId !== this.#sessionId
+          || tagged.kind !== "codex_launch_policy_v1" || typeof tagged.digest !== "string"
+          || !/^sha256:[a-f0-9]{64}$/.test(tagged.digest) || Object.keys(tagged).length !== 2
+          || (this.#expectedCodexPolicyIdentity !== null && tagged.digest !== this.#expectedCodexPolicyIdentity.digest)) {
+          throw new Error("native_runner_launch_policy_identity_unproven");
+        }
+        this.#providerIdentity = structuredClone(tagged);
+      }
       const activeProviderTurnId =
         typeof snapshot.activeProviderTurnId === "string" &&
         snapshot.activeProviderTurnId.length > 0
@@ -4110,6 +4123,7 @@ class DurablePrpCodexTransport implements CodexAppServerTransport {
     const previousRelease = this.#controlPlaneRelease;
     let previousReleased = false;
     let activationStarted = false;
+    let policyTransitionDispatched = false;
     try {
       this.#assertStartupOpen();
       const connection: RunnerProcessConnection =
@@ -4145,6 +4159,29 @@ class DurablePrpCodexTransport implements CodexAppServerTransport {
           currentRunGrant ? currentRunGrant.runtimeContext : priorRequirements?.runtimeContext
             ?? priorProvider.runtimeContext as NativeRuntimeContextSnapshot | null,
           currentRunGrant?.instructions ?? priorRequirements?.instructions ?? String(priorProvider.instructions ?? ""));
+        const nextProvider = record(runAttachTemplate.provider);
+        if (priorProvider.launchPolicy !== undefined) {
+          if (nextProvider.launchPolicy === undefined) throw new Error("runner_launch_policy_override_incompatible");
+          runAttachTemplate.runtimeLaunchArgs = nextProvider.args;
+          runAttachTemplate.runtimeLaunchPolicy = nextProvider.launchPolicy;
+        }
+      } else if (this.options.provider === "codex" && record(runAttachTemplate.provider).launchPolicy !== undefined) {
+        const nextProvider = record(runAttachTemplate.provider);
+        if (currentRunGrant !== undefined) {
+          const runtimeContext = currentRunGrant.runtimeContext;
+          const codexHome = this.options.homeMode === "preconfigured" ? preconfiguredCodexHome(this.options.environment)
+            : resolve(this.options.runnerFilesystemRoot ?? this.#root, "codex-home");
+          const launch = createRunnerdCodexAppServerLaunch({ environment: this.options.environment, codexHome,
+            externallySandboxed: nextProvider.externallySandboxed === true, readOnly: nextProvider.readOnly === true,
+            workingDirectory: String(nextProvider.cwd), runtimeStateRoot: this.options.runnerFilesystemRoot ?? this.#root,
+            codexCommand: String(nextProvider.command), instructionWorkingCopyRoot: runtimeContext?.instructions.workingCopy?.rootPath,
+            disableProjectInstructions: this.options.disableCodexProjectInstructions,
+            readOnlyRoots: [...trustedRuntimeReadOnlyRoots(this.options.environment), ...(runtimeContext
+              ? [resolve(codexHome, "skills"), runtimeContext.instructions.bundle.rootPath, ...runtimeContext.skills.map(skill => skill.bundle.rootPath)] : [])] });
+          nextProvider.args = launch.args; nextProvider.launchPolicy = launch.launchPolicy;
+        }
+        runAttachTemplate.runtimeLaunchArgs = nextProvider.args;
+        runAttachTemplate.runtimeLaunchPolicy = nextProvider.launchPolicy;
       }
       this.#assertStartupOpen();
       this.#runAttachTemplate = structuredClone(runAttachTemplate);
@@ -4152,6 +4189,18 @@ class DurablePrpCodexTransport implements CodexAppServerTransport {
         ...runAttachTemplate,
         paperclipNextAuthority: { identity: desired, connection },
       };
+      if (record(runAttachTemplate.provider).launchPolicy !== undefined) {
+        const provider = record(runAttachTemplate.provider);
+        const policy = validateCodexLaunchPolicy(runAttachTemplate.runtimeLaunchPolicy ?? provider.launchPolicy);
+        this.#expectedCodexPolicyIdentity = { kind: "codex_launch_policy_v1", digest: codexLaunchDigest({
+          schema: "paperclip.codex.native-launch-identity.v1", policy,
+          collaborationMode: provider.readOnly === true ? "plan" : "default",
+          includeSkillInstructions: provider.includeSkillInstructions === true,
+          includeCollaborationModeInstructions: provider.includeCollaborationModeInstructions !== false,
+          threadId: this.#threadId, providerSessionId: this.#sessionId, providerRecoveryPolicy: "same_session_only",
+        }) };
+        policyTransitionDispatched = true;
+      }
       core.queueCommand("run.attach", payload, commandId, true);
       // ACPX run attachment checkpoints the old sidecar and starts a fresh
       // provider process. Pi must use the same absolute cold-admission budget
@@ -4168,6 +4217,14 @@ class DurablePrpCodexTransport implements CodexAppServerTransport {
         throw new Error("native_runner_prp_run_rotation_failed");
       }
 
+      if (record(runAttachTemplate.provider).launchPolicy !== undefined) {
+        // The authenticated run.attach receipt admitted a new frozen policy.
+        // Its predecessor checkpoint no longer describes this run's identity;
+        // a fresh authenticated snapshot must now supply the new digest.
+        this.#checkpointProviderIdentityExpectation = null;
+        this.#checkpointProviderIdentityConfirmed = false;
+        this.#providerIdentity = null;
+      }
       activationStarted = true;
       core.rotateRunIdentity(desired, runAttachTemplate);
       await registration?.activate?.();
@@ -4221,6 +4278,7 @@ class DurablePrpCodexTransport implements CodexAppServerTransport {
         }
         this.#failTransport(failure);
       }
+      if (policyTransitionDispatched) this.#failTransport(failure);
       throw failure;
     }
   }
@@ -5515,7 +5573,22 @@ class DurablePrpCodexTransport implements CodexAppServerTransport {
         // These controller-owned, token-free paths belong to the new run.
         // Keep the durable provider profile and thread identity unchanged.
         const recordedCommand = record(runAttachTemplate.provider).command;
-        runAttachTemplate.runtimeLaunchArgs =
+        const launchInput = {
+            externallySandboxed: record(runAttachTemplate.provider).externallySandboxed === true, readOnly: record(runAttachTemplate.provider).readOnly === true,
+            environment: this.options.environment, codexHome, workingDirectory: this.options.resumeWorkingDirectory,
+            runtimeStateRoot: this.options.runnerFilesystemRoot ?? this.#root,
+            codexCommand: typeof recordedCommand === "string" ? recordedCommand : this.options.codexCommand,
+            instructionWorkingCopyRoot: runtimeContext?.instructions.workingCopy?.rootPath,
+            disableProjectInstructions: this.options.disableCodexProjectInstructions,
+            readOnlyRoots: [...trustedRuntimeReadOnlyRoots(this.options.environment), ...(runtimeContext
+              ? [resolve(codexHome, "skills"), runtimeContext.instructions.bundle.rootPath, ...runtimeContext.skills.map(skill => skill.bundle.rootPath)] : [])],
+        };
+        if (record(runAttachTemplate.provider).launchPolicy !== undefined) {
+          if (this.options.codexArgs !== undefined) throw new Error("runner_launch_policy_override_incompatible");
+          const launch = createRunnerdCodexAppServerLaunch(launchInput);
+          runAttachTemplate.runtimeLaunchArgs = launch.args;
+          runAttachTemplate.runtimeLaunchPolicy = launch.launchPolicy;
+        } else runAttachTemplate.runtimeLaunchArgs =
           this.options.codexArgs ??
           createRunnerdCodexAppServerArgs({
             environment: this.options.environment,
@@ -5541,6 +5614,10 @@ class DurablePrpCodexTransport implements CodexAppServerTransport {
       }
       if (environmentPrepared) {
         runAttachTemplate.provider = environmentPrepared.provider;
+        if (environmentPrepared.provider.launchPolicy !== undefined) {
+          runAttachTemplate.runtimeLaunchArgs = environmentPrepared.provider.args;
+          runAttachTemplate.runtimeLaunchPolicy = environmentPrepared.provider.launchPolicy;
+        }
       }
       this.#runAttachTemplate = structuredClone(runAttachTemplate);
       core.persistRunAttachTemplate(runAttachTemplate);
@@ -6762,8 +6839,14 @@ class DurablePrpCodexTransport implements CodexAppServerTransport {
     ) {
       return;
     }
+    // A quiescent, already-confirmed owner may receive the new policy's
+    // session.resumed before its run.attach receipt is consumed. Admit only
+    // that exact frozen candidate while preserving both raw-ID checks.
+    const transitionIdentityMatches = this.#attachmentOperation !== null && this.#startupComplete
+      && this.#pendingWarmRecoveryCompletion === null && this.#checkpointProviderIdentityConfirmed && this.#expectedCodexPolicyIdentity !== null
+      && durableRecoveryInternals.canonicalJson(providerIdentity) === durableRecoveryInternals.canonicalJson(this.#expectedCodexPolicyIdentity);
     const providerIdentityMatches =
-      checkpointExpectation.providerIdentity === null ||
+      transitionIdentityMatches || checkpointExpectation.providerIdentity === null ||
       (typeof providerIdentity.kind === "string" &&
         durableRecoveryInternals.canonicalJson(providerIdentity) ===
           durableRecoveryInternals.canonicalJson(

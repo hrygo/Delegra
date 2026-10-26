@@ -2454,7 +2454,7 @@ it.each(["installed", "explicit"] as const)("records the selected %s Codex comma
     await expect(transport.request("thread/start", { cwd: root, model: "gpt-6.1-sol", dynamicTools: [] }))
       .rejects.toThrow("fixture_stop_before_runner_launch");
     expect(template).toMatchObject({ provider: { command, model: "gpt-6.1-sol" } });
-    expect(JSON.stringify(template)).toContain(`${JSON.stringify(command).replaceAll('"', '\\"')}=\\"read\\"`);
+    expect((template!.provider as any).launchPolicy.defaultFilesystem).toContainEqual({ path: command, access: "read" });
     if (selection === "explicit") expect(resolver).not.toHaveBeenCalled();
     else expect(resolver).toHaveBeenCalledExactlyOnceWith(undefined, { PATH: "/missing-ambient-codex" }, root);
     expect(launch).not.toHaveBeenCalled();
@@ -3408,7 +3408,7 @@ it.each(["stuck", "late-release", "late-release-error", "stuck-release", "cooper
       expect(args[args.indexOf("project_doc_max_bytes=0") - 1]).toBe("-c");
       expect(args.indexOf("project_doc_max_bytes=0")).toBeLessThan(args.indexOf("app-server"));
       expect(args).not.toContain("--dangerously-bypass-approvals-and-sandbox");
-      expect(args).toContain('permissions.paperclip-runner-workspace-read-only.network.enabled=false');
+      expect((template!.provider as any).launchPolicy.networkAccess).toBe(false);
       expect(failure).toBeInstanceOf(Error);
       expect((failure as Error).message).toContain(launchFailure ? "owned launcher failed before execution" : "Native provider hello probe timed out.");
       if (mode === "stuck" || mode === "stuck-release" || mode === "late-release-error") {
@@ -8297,6 +8297,7 @@ async function verifyLiveRunnerAdoption(
   goalMidTurn = false,
   detachBeforeCleanup = false,
   startWithoutCheckpoint = false,
+  structuredPolicy = false,
 ) {
   const stateDirectory = await mkdtemp(join(tmpdir(), "runnerd-live-adopt-"));
   const server = createServer();
@@ -8333,8 +8334,26 @@ async function verifyLiveRunnerAdoption(
     turnId: "turn-live-adopt",
     itemId: "item-live-adopt",
   };
+  const fixture = structuredPolicy ? JSON.parse(await readFile(new URL("../../test/fixtures/codex-launch-policy-unicode.json", import.meta.url), "utf8")) : undefined;
+  const binary = defaultCapabilityRunnerdBinary();
   const sharedOptions = {
-    runnerBinary: defaultCapabilityRunnerdBinary(),
+    ...(structuredPolicy ? {
+      runnerArtifact: { version: "fixture", digest: `sha256:${createHash("sha256").update(await readFile(binary)).digest("hex")}` },
+      prepareLaunch: async (requirements: RunnerProviderLaunchRequirements, recovery?: PreparedRunnerProviderLaunch) => recovery ?? {
+        configurationId: "adopt-policy", requirementsDigest: runnerLaunchRequirementsDigest(requirements), provider: {
+          ...createRunnerProviderLaunch(requirements, { options: { codexArgs: fakeCodexArgs(stateDirectory) }, root: stateDirectory,
+            cwd: tmpdir(), codexHome: join(stateDirectory, "home"), codexCommand: fakeCodex, providerNodeCommand: process.execPath, opencodeProxyPath: "", acpxSidecarPath: "" }),
+          driver: "codex_app_server_launch_policy_v1", launchPolicy: fixture.policy,
+        },
+      },
+      runnerProcessLauncher: (spec: durableControlPlane.RunnerProcessLaunchSpec) => {
+        const child = spawn(binary, [...spec.args], { env: spec.environment, stdio: "ignore" });
+        return { child, completion: new Promise<{ code: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string }>((resolveExit, reject) => {
+          child.once("error", reject); child.once("exit", (code, signal) => resolveExit({ code, signal, stdout: "", stderr: "" }));
+        }) };
+      },
+    } : {}),
+    runnerBinary: binary,
     codexCommand: fakeCodex,
     codexArgs: fakeCodexArgs(stateDirectory, ...(goalMidTurn ? ["--goal-autostart", "--goal-item-trigger", join(stateDirectory, "emit-goal-item")] : [])),
     stateDirectory,
@@ -8426,6 +8445,7 @@ async function verifyLiveRunnerAdoption(
       resumeDynamicTools: [],
       resumeProviderSession: startWithoutCheckpoint ? undefined : {
         driverSessionId: String(openedThread.id),
+        ...(structuredPolicy ? { providerIdentity: openedThread.providerIdentity as any } : {}),
         providerSessionId: mismatchedCheckpoint
           ? "wrong-provider-session"
           : String(openedThread.sessionId),
@@ -8572,6 +8592,8 @@ it(
   () => verifyLiveRunnerAdoption(true),
   30_000,
 );
+
+it("confirms a structured policy checkpoint via authenticated snapshot after identity event compaction", () => verifyLiveRunnerAdoption(false, false, false, false, false, true), 30_000);
 
 it("binds buffered mid-goal items only after the authenticated recovery snapshot", () => verifyLiveRunnerAdoption(false, false, true), 30_000);
 

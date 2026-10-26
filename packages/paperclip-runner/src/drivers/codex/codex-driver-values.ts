@@ -48,6 +48,12 @@ export function parseProviderIdentity(
   value: unknown,
 ): PersistedHarnessProviderIdentity | undefined {
   const identity = record(value);
+  if (identity.kind === "codex_launch_policy_v1") {
+    if (Object.keys(identity).length !== 2 || typeof identity.digest !== "string" || !/^sha256:[a-f0-9]{64}$/.test(identity.digest)) {
+      throw new Error("codex_launch_policy_identity_invalid");
+    }
+    return { kind: "codex_launch_policy_v1", digest: identity.digest };
+  }
   if (identity.kind !== "acpx") return undefined;
   const requiredStrings = [
     "normalizedSessionId",

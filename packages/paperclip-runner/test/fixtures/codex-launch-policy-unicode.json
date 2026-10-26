@@ -1,0 +1,67 @@
+{
+  "policy": {
+    "schema": "paperclip.codex.launch-policy.v1",
+    "defaultFilesystem": [
+      {
+        "path": "/skills/",
+        "access": "read"
+      },
+      {
+        "path": "/skills/😀",
+        "access": "read"
+      },
+      {
+        "path": ":minimal",
+        "access": "read"
+      },
+      {
+        "path": ":root",
+        "access": "none"
+      },
+      {
+        "path": ":tmpdir",
+        "access": "none"
+      },
+      {
+        "path": ":workspace_roots",
+        "access": "write"
+      }
+    ],
+    "planningFilesystem": [
+      {
+        "path": "/skills/",
+        "access": "read"
+      },
+      {
+        "path": "/skills/😀",
+        "access": "read"
+      },
+      {
+        "path": ":minimal",
+        "access": "read"
+      },
+      {
+        "path": ":root",
+        "access": "none"
+      },
+      {
+        "path": ":tmpdir",
+        "access": "none"
+      },
+      {
+        "path": ":workspace_roots",
+        "access": "read"
+      }
+    ],
+    "networkAccess": false,
+    "externallySandboxed": false,
+    "shellEnvironmentPolicy": {
+      "inherit": "none",
+      "ignoreDefaultExcludes": false,
+      "includeOnly": [],
+      "set": {}
+    }
+  },
+  "canonical": "{\"defaultFilesystem\":[{\"access\":\"read\",\"path\":\"/skills/\"},{\"access\":\"read\",\"path\":\"/skills/😀\"},{\"access\":\"read\",\"path\":\":minimal\"},{\"access\":\"none\",\"path\":\":root\"},{\"access\":\"none\",\"path\":\":tmpdir\"},{\"access\":\"write\",\"path\":\":workspace_roots\"}],\"externallySandboxed\":false,\"networkAccess\":false,\"planningFilesystem\":[{\"access\":\"read\",\"path\":\"/skills/\"},{\"access\":\"read\",\"path\":\"/skills/😀\"},{\"access\":\"read\",\"path\":\":minimal\"},{\"access\":\"none\",\"path\":\":root\"},{\"access\":\"none\",\"path\":\":tmpdir\"},{\"access\":\"read\",\"path\":\":workspace_roots\"}],\"schema\":\"paperclip.codex.launch-policy.v1\",\"shellEnvironmentPolicy\":{\"ignoreDefaultExcludes\":false,\"includeOnly\":[],\"inherit\":\"none\",\"set\":{}}}",
+  "digest": "sha256:bd21d8111590089fdefcb061a0c3ecebdd90261f387213a0ab15173c893645c2"
+}

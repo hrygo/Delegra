@@ -4,6 +4,8 @@ import { resolve, isAbsolute, join, dirname, delimiter, relative, sep } from "no
 import { closeSync, constants, existsSync, fstatSync, openSync, realpathSync, readFileSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
 import { QUALIFIED_ACPX_PROFILES } from "../acpx/qualified-profiles.js";
+import { codexLaunchPolicyArgs, normalizeCodexLaunchPolicy } from "./codex-launch-policy.js";
+import type { CodexFilesystemEntry, CodexLaunchPolicy } from "../../contracts/codex-launch-policy.js";
 
 import {
   githubCredentialEnvironmentKeys,
@@ -248,13 +250,13 @@ function tomlString(value: string): string {
   return JSON.stringify(value);
 }
 
-export function createIsolatedCodexAppServerArgs(
+function createCodexSecurityConfiguration(
   source: NodeJS.ProcessEnv | undefined = undefined,
   readOnlyRoots: string[] = [],
   /** Server-registered run copy, never an environment/config-supplied root. */
   instructionWorkingCopyRoot?: string,
   protectedPaths: string[] = [],
-): string[] {
+): { args: string[]; policy: CodexLaunchPolicy } {
   const explicitSource = source;
   source ??= process.env;
   const gitRoots = gitFilesystemRoots(source);
@@ -320,7 +322,7 @@ export function createIsolatedCodexAppServerArgs(
   const defaultPermissionProfile = externalRunnerSandbox
     ? CODEX_EXTERNAL_SANDBOX_PERMISSION_PROFILE
     : CODEX_SKILLLESS_PERMISSION_PROFILE;
-  return [
+  const args = [
     "-c",
     `default_permissions=${tomlString(defaultPermissionProfile)}`,
     "-c",
@@ -358,6 +360,36 @@ export function createIsolatedCodexAppServerArgs(
       : []),
     "app-server",
   ];
+  const entries = (planning: boolean): CodexFilesystemEntry[] => [
+    { path: ":root", access: "none" }, { path: ":minimal", access: "read" },
+    { path: ":tmpdir", access: "none" },
+    ...[...deniedHostRoots, ...protectedPaths.map(path => resolve(path))].map(path => ({ path, access: "none" as const })),
+    ...(usesPreconfiguredHome(source) && source.HOME ? [{ path: source.HOME, access: planning ? "read" as const : "write" as const }] : []),
+    ...[...readOnlyRoots.map(path => resolve(path)), ...gitRoots.read].map(path => ({ path, access: "read" as const })),
+    ...gitRoots.write.map(path => ({ path, access: planning ? "read" as const : "write" as const })),
+    ...(instructionWorkingCopyRoot ? [{ path: resolve(instructionWorkingCopyRoot), access: planning ? "read" as const : "write" as const }] : []),
+    ...(source.PAPERCLIP_GITHUB_BROKER_TOKEN && source.GH_CONFIG_DIR ? [{ path: resolve(source.GH_CONFIG_DIR), access: "write" as const }] : []),
+    { path: ":workspace_roots", access: planning ? "read" : "write" },
+  ];
+  return { args, policy: { schema: "paperclip.codex.launch-policy.v1",
+    defaultFilesystem: entries(false), planningFilesystem: entries(true),
+    networkAccess, externallySandboxed: externalRunnerSandbox,
+    shellEnvironmentPolicy: { inherit: hasProjectedEnvironment ? "all" : "none",
+      ignoreDefaultExcludes: hasProjectedEnvironment, includeOnly: shellEnvironmentKeys, set: commandEnvironment } } };
+}
+
+/** Frozen historical launches retain this argv representation. New launches use the paired API. */
+export function createIsolatedCodexAppServerArgs(
+  source?: NodeJS.ProcessEnv, readOnlyRoots: string[] = [], instructionWorkingCopyRoot?: string, protectedPaths: string[] = [],
+): string[] {
+  return createCodexSecurityConfiguration(source, readOnlyRoots, instructionWorkingCopyRoot, protectedPaths).args;
+}
+
+export function createIsolatedCodexAppServerLaunch(
+  source?: NodeJS.ProcessEnv, readOnlyRoots: string[] = [], instructionWorkingCopyRoot?: string, protectedPaths: string[] = [],
+): { args: string[]; launchPolicy: CodexLaunchPolicy } {
+  const launchPolicy = normalizeCodexLaunchPolicy(createCodexSecurityConfiguration(source, readOnlyRoots, instructionWorkingCopyRoot, protectedPaths).policy);
+  return { args: codexLaunchPolicyArgs(launchPolicy), launchPolicy };
 }
 
 export function createSecuredCodexThreadParams(

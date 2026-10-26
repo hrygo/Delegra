@@ -2,6 +2,7 @@ import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it } from "vitest";
+import { createIsolatedCodexAppServerLaunch } from "../drivers/codex/codex-security-config.js";
 import { RunnerLaunchPreparationStore } from "./runner-launch-preparation-store.js";
 import { createRunnerProviderLaunch, runnerLaunchRequirementsDigest, runnerProviderLaunchRequirements } from "./runner-provider-launch.js";
 
@@ -76,5 +77,21 @@ it("keeps the active run when multiple new attachment attempts fail", () => {
     }
     expect(store.load(active.requirements.identity)).toEqual(active);
     expect(JSON.parse(readFileSync(join(root, "launch-preparation.json"), "utf8")).entries).toHaveLength(2);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+
+it("binds the complete structured policy under an unchanged configuration ID", () => {
+  const root = mkdtempSync(join(tmpdir(), "runner-preparation-policy-"));
+  try {
+    const store = new RunnerLaunchPreparationStore(root);
+    const { requirements, prepared } = preparation("policy-run");
+    const launch = createIsolatedCodexAppServerLaunch({ PATH: "/usr/bin" }, ["/skills/assigned"]);
+    prepared.provider = { ...prepared.provider, driver: "codex_app_server_launch_policy_v1", args: launch.args, launchPolicy: launch.launchPolicy };
+    store.save(requirements, prepared, requirements.identity);
+    const changed = structuredClone(prepared);
+    (changed.provider.launchPolicy as typeof launch.launchPolicy).networkAccess = true;
+    expect(() => store.save(requirements, changed, requirements.identity)).toThrow("runner_prepared_launch_recovery_changed");
+    expect(store.load(requirements.identity)?.prepared).toEqual(prepared);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

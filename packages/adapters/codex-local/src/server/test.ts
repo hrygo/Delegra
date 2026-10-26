@@ -13,9 +13,11 @@ import {
   ensureAdapterExecutionTargetDirectory,
   maybeRunSandboxInstallCommand,
   runAdapterExecutionTargetProcess,
+  runAdapterExecutionTargetShellCommand,
   describeAdapterExecutionTarget,
   resolveAdapterExecutionTargetCwd,
   prepareAdapterExecutionTargetRuntime,
+  adapterExecutionTargetRemoteCwd,
 } from "@paperclipai/adapter-utils/execution-target";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -38,6 +40,7 @@ import {
 import { resolveCodexExecutionEngineForRun, testCodexAcpEnvironment } from "./acp.js";
 import { ADAPTER_AUTH_MISSING_CHECK_CODE } from "./auth-check.js";
 import { checkCodexCliVersionForModel, codexHelloProbeModelRejectionCheck } from "./cli-version.js";
+import { buildManagedRemoteEnvironment } from "./managed-remote-env.js";
 
 function summarizeStatus(checks: AdapterEnvironmentCheck[]): AdapterEnvironmentTestResult["status"] {
   if (checks.some((check) => check.level === "error")) return "fail";
@@ -91,20 +94,22 @@ async function prepareCodexHelloProbe(input: {
   command: string;
   args: string[];
   env: Record<string, string>;
-  cleanup: () => Promise<void>;
+  cleanup: () => Promise<boolean>;
 }> {
   let preparedRuntime: Awaited<ReturnType<typeof prepareAdapterExecutionTargetRuntime>> | null = null;
   let preparedRuntimeWorkspaceLocalDir: string | null = null;
   let probeHomeLocalDir: string | null = null;
 
   const cleanup = async () => {
-    await preparedRuntime?.restoreWorkspace().catch(() => {});
+    let restored = true;
+    await preparedRuntime?.restoreWorkspace().catch(() => { restored = false; });
     if (preparedRuntimeWorkspaceLocalDir) {
       await fs.rm(preparedRuntimeWorkspaceLocalDir, { recursive: true, force: true }).catch(() => {});
     }
     if (probeHomeLocalDir) {
       await fs.rm(probeHomeLocalDir, { recursive: true, force: true }).catch(() => {});
     }
+    return restored;
   };
 
   if (input.targetIsRemote && !input.probeApiKey) {
@@ -280,7 +285,10 @@ export async function testEnvironment(
   const target = ctx.executionTarget ?? null;
   const targetIsRemote = target?.kind === "remote";
   const targetIsSandbox = target?.kind === "remote" && target.transport === "sandbox";
-  const cwd = resolveAdapterExecutionTargetCwd(target, asString(config.cwd, ""), process.cwd());
+  const configuredCwd = resolveAdapterExecutionTargetCwd(target, asString(config.cwd, ""), process.cwd());
+  const cwd = targetIsRemote && config.managedAiConnection
+    ? adapterExecutionTargetRemoteCwd(target, configuredCwd)
+    : configuredCwd;
   const targetLabel = targetIsRemote
     ? ctx.environmentName ?? describeAdapterExecutionTarget(target)
     : null;
@@ -319,265 +327,299 @@ export async function testEnvironment(
   for (const [key, value] of Object.entries(envConfig)) {
     if (typeof value === "string") env[key] = value;
   }
-  const runtimeEnv = ensurePathInEnv({ ...process.env, ...env });
-  const installCheck = await maybeRunSandboxInstallCommand({
-    runId,
-    target,
-    adapterKey: "codex",
-    installCommand: SANDBOX_INSTALL_COMMAND,
-    detectCommand: command,
-    env,
-  });
-  if (installCheck) checks.push(installCheck);
+  let managedRemoteCleanupCommand: string | null = null;
+  let managedRemoteProviderStarted = false;
+  let managedRemoteProviderStopped = false;
+  let managedRemoteRestoreSucceeded = false;
   try {
-    await ensureAdapterExecutionTargetCommandResolvable(command, target, cwd, runtimeEnv);
-    checks.push({
-      code: "codex_command_resolvable",
-      level: "info",
-      message: `Command is executable: ${command}`,
-    });
-  } catch (err) {
-    checks.push({
-      code: "codex_command_unresolvable",
-      level: "error",
-      message: err instanceof Error ? err.message : "Command is not executable",
-      detail: command,
-    });
-  }
-
-  const configOpenAiKey = env.OPENAI_API_KEY;
-  const hostOpenAiKey = targetIsRemote || Object.hasOwn(env, "OPENAI_API_KEY")
-    ? undefined : process.env.OPENAI_API_KEY;
-  if (config.managedAiRouting) {
-    checks.push({
-      code: "codex_managed_provider_configured",
-      level: "info",
-      message: "Testing the selected connection’s provider and model.",
-    });
-  } else if (isNonEmpty(configOpenAiKey) || isNonEmpty(hostOpenAiKey)) {
-    const source = isNonEmpty(configOpenAiKey) ? "adapter config env" : "server environment";
-    checks.push({
-      code: "codex_openai_api_key_present",
-      level: "info",
-      message: "OPENAI_API_KEY is set for Codex authentication.",
-      detail: `Detected in ${source}.`,
-    });
-  } else if (!targetIsRemote) {
-    // Local-only auth file check. On remote targets, the probe will surface
-    // any missing-auth errors directly from the remote `codex` invocation.
-    const codexHome = isNonEmpty(env.CODEX_HOME) ? env.CODEX_HOME : undefined;
-    const codexAuth = await readCodexAuthInfo(codexHome).catch(() => null);
-    if (codexAuth) {
-      checks.push({
-        code: "codex_native_auth_present",
-        level: "info",
-        message: "Codex is authenticated via its own auth configuration.",
-        detail: codexAuth.email ? `Logged in as ${codexAuth.email}.` : `Credentials found in ${path.join(codexHome ?? codexHomeDir(), "auth.json")}.`,
-      });
-    } else {
-      checks.push({
-        code: "codex_openai_api_key_missing",
-        level: "warn",
-        message: "OPENAI_API_KEY is not set. Codex runs may fail until authentication is configured.",
-        hint: "Set OPENAI_API_KEY in adapter env, shell environment, or run `codex auth` to log in.",
-      });
+    const projected = buildManagedRemoteEnvironment({ managed: Boolean(config.managedAiConnection), remote: targetIsRemote, cwd, runId, env });
+    if (projected.prepareCommand) {
+      const prepared = await runAdapterExecutionTargetShellCommand(runId, target, projected.prepareCommand, { cwd, env: {}, timeoutSec: 15 });
+      if (prepared.exitCode !== 0 || prepared.timedOut || prepared.signal) throw new Error("Could not prepare the managed remote environment");
+      Object.assign(env, projected.env);
+      managedRemoteCleanupCommand = projected.cleanupCommand;
     }
+  } catch {
+    checks.push({ code: "codex_managed_remote_env_failed", level: "error", message: "Could not prepare private remote HOME, cache and temporary directories; partial state retained." });
+    return { adapterType: "codex_local", status: "fail", checks, testedAt: new Date().toISOString() };
   }
-
-  const canRunProbe =
-    checks.every((check) => check.code !== "codex_cwd_invalid" && check.code !== "codex_command_unresolvable");
-  // Models with a verified CLI floor are compared against the installed Codex
-  // before the hello probe. A probe on an older CLI only produces the backend's
-  // "not supported when using Codex with a ChatGPT account" rejection, which
-  // hides the real gap: the CLI (often a stale sandbox image), not the account.
-  let detectedCliVersion: string | null = null;
-  let configuredModelIsCompatible = true;
-  if (canRunProbe && commandLooksLike(command, "codex")) {
-    const versionCheck = await checkCodexCliVersionForModel({
+  try {
+    const runtimeEnv = ensurePathInEnv({ ...process.env, ...env });
+    const installCheck = await maybeRunSandboxInstallCommand({
       runId,
-      model: asString(config.model, ""),
-      command,
       target,
-      cwd,
+      adapterKey: "codex",
+      installCommand: SANDBOX_INSTALL_COMMAND,
+      detectCommand: command,
       env,
     });
-    if (versionCheck) {
-      checks.push(versionCheck.check);
-      configuredModelIsCompatible = versionCheck.compatible;
-      detectedCliVersion = versionCheck.detectedVersion;
-    }
-  }
-  if (canRunProbe && !configuredModelIsCompatible) {
-    checks.push({
-      code: "codex_hello_probe_skipped_cli_version",
-      level: "info",
-      message: "Skipped hello probe because the installed Codex CLI cannot use the configured model.",
-    });
-  } else if (canRunProbe) {
-    if (!commandLooksLike(command, "codex")) {
+    if (installCheck) checks.push(installCheck);
+    try {
+      await ensureAdapterExecutionTargetCommandResolvable(command, target, cwd, runtimeEnv);
       checks.push({
-        code: "codex_hello_probe_skipped_custom_command",
+        code: "codex_command_resolvable",
         level: "info",
-        message: "Skipped hello probe because command is not `codex`.",
+        message: `Command is executable: ${command}`,
+      });
+    } catch (err) {
+      checks.push({
+        code: "codex_command_unresolvable",
+        level: "error",
+        message: err instanceof Error ? err.message : "Command is not executable",
         detail: command,
-        hint: "Use the `codex` CLI command to run the automatic login and installation probe.",
       });
-    } else {
-      const execArgs = buildCodexExecArgs(
-        { ...config, fastMode: false },
-        { skipGitRepoCheck: targetIsSandbox },
-      );
-      // A connection test needs one small response, not plugin catalog sync,
-      // repository instructions, or a durable session. Keep provider/model
-      // configuration intact while removing unrelated startup work.
-      const args = [...execArgs.args];
-      args.splice(args.length - 1, 0,
-        "-c", "features.plugins=false",
-        "-c", "features.remote_plugin=false",
-        "-c", "project_doc_max_bytes=0",
-        ...(args.includes("--ephemeral") ? [] : ["--ephemeral"]),
-      );
-      if (execArgs.fastModeIgnoredReason) {
-        checks.push({
-          code: "codex_fast_mode_unsupported_model",
-          level: "warn",
-          message: execArgs.fastModeIgnoredReason,
-          hint: "Switch the agent model to GPT-5.4 or enter a manual model ID to enable Codex Fast mode.",
-        });
-      }
-      if (targetIsSandbox) {
-        checks.push({
-          code: "codex_git_repo_check_skipped",
-          level: "info",
-          message: "Added --skip-git-repo-check for sandbox hello probes.",
-          hint: "Codex requires an explicit trust bypass in headless remote sandbox workspaces.",
-        });
-      }
+    }
 
-      // Codex CLI (>= 0.122) ignores the OPENAI_API_KEY env var and only reads
-      // credentials from $CODEX_HOME/auth.json. When we have a key available,
-      // wrap the probe with a shell that materializes a per-run auth.json so
-      // the CLI can authenticate. The key content is passed via env (not on
-      // the command line) to avoid leaking it into process listings.
-      // Managed connections already contain their exact auth and provider config.
-      // Replacing that home with a native-key probe would test another provider.
-      const probeApiKey = config.managedAiConnection ? null : isNonEmpty(configOpenAiKey)
-        ? configOpenAiKey
-        : isNonEmpty(hostOpenAiKey)
-          ? hostOpenAiKey
-          : null;
-      const preparedProbe = await prepareCodexHelloProbe({
-        managedAiConnection: Boolean(config.managedAiConnection),
-        runId,
-        companyId: ctx.companyId,
-        target,
-        targetIsRemote,
-        cwd,
-        command,
-        args,
-        env,
-        probeApiKey,
+    const configOpenAiKey = env.OPENAI_API_KEY;
+    const hostOpenAiKey = targetIsRemote || Object.hasOwn(env, "OPENAI_API_KEY")
+      ? undefined : process.env.OPENAI_API_KEY;
+    if (config.managedAiRouting) {
+      checks.push({
+        code: "codex_managed_provider_configured",
+        level: "info",
+        message: "Testing the selected connection’s provider and model.",
       });
-      try {
-        const probe = await runAdapterExecutionTargetProcess(
-          runId,
-          target,
-          preparedProbe.command,
-          preparedProbe.args,
-          {
-            cwd,
-            env: preparedProbe.env,
-            timeoutSec: 45,
-            graceSec: 5,
-            stdin: "Respond with hello.",
-            onLog: async () => {},
-          },
+    } else if (isNonEmpty(configOpenAiKey) || isNonEmpty(hostOpenAiKey)) {
+      const source = isNonEmpty(configOpenAiKey) ? "adapter config env" : "server environment";
+      checks.push({
+        code: "codex_openai_api_key_present",
+        level: "info",
+        message: "OPENAI_API_KEY is set for Codex authentication.",
+        detail: `Detected in ${source}.`,
+      });
+    } else if (!targetIsRemote) {
+      // Local-only auth file check. On remote targets, the probe will surface
+      // any missing-auth errors directly from the remote `codex` invocation.
+      const codexHome = isNonEmpty(env.CODEX_HOME) ? env.CODEX_HOME : undefined;
+      const codexAuth = await readCodexAuthInfo(codexHome).catch(() => null);
+      if (codexAuth) {
+        checks.push({
+          code: "codex_native_auth_present",
+          level: "info",
+          message: "Codex is authenticated via its own auth configuration.",
+          detail: codexAuth.email ? `Logged in as ${codexAuth.email}.` : `Credentials found in ${path.join(codexHome ?? codexHomeDir(), "auth.json")}.`,
+        });
+      } else {
+        checks.push({
+          code: "codex_openai_api_key_missing",
+          level: "warn",
+          message: "OPENAI_API_KEY is not set. Codex runs may fail until authentication is configured.",
+          hint: "Set OPENAI_API_KEY in adapter env, shell environment, or run `codex auth` to log in.",
+        });
+      }
+    }
+
+    const canRunProbe =
+      checks.every((check) => check.code !== "codex_cwd_invalid" && check.code !== "codex_command_unresolvable");
+    // Models with a verified CLI floor are compared against the installed Codex
+    // before the hello probe. A probe on an older CLI only produces the backend's
+    // "not supported when using Codex with a ChatGPT account" rejection, which
+    // hides the real gap: the CLI (often a stale sandbox image), not the account.
+    let detectedCliVersion: string | null = null;
+    let configuredModelIsCompatible = true;
+    if (canRunProbe && commandLooksLike(command, "codex")) {
+      const versionCheck = await checkCodexCliVersionForModel({
+        runId,
+        model: asString(config.model, ""),
+        command,
+        target,
+        cwd,
+        env,
+      });
+      if (versionCheck) {
+        checks.push(versionCheck.check);
+        configuredModelIsCompatible = versionCheck.compatible;
+        detectedCliVersion = versionCheck.detectedVersion;
+      }
+    }
+    if (canRunProbe && !configuredModelIsCompatible) {
+      checks.push({
+        code: "codex_hello_probe_skipped_cli_version",
+        level: "info",
+        message: "Skipped hello probe because the installed Codex CLI cannot use the configured model.",
+      });
+    } else if (canRunProbe) {
+      if (!commandLooksLike(command, "codex")) {
+        checks.push({
+          code: "codex_hello_probe_skipped_custom_command",
+          level: "info",
+          message: "Skipped hello probe because command is not `codex`.",
+          detail: command,
+          hint: "Use the `codex` CLI command to run the automatic login and installation probe.",
+        });
+      } else {
+        const execArgs = buildCodexExecArgs(
+          { ...config, fastMode: false },
+          { skipGitRepoCheck: targetIsSandbox },
         );
-        const parsed = parseCodexJsonl(probe.stdout);
-        // Plugin-catalog login is separate from model authentication. Its
-        // warnings must not explain an unrelated provider/process failure.
-        const providerStderr = probe.stderr.split(/\r?\n/)
-          .filter((line) => !/\bcodex_core_plugins(?:::|:)/.test(line) && !line.includes(PROBE_CLEANUP_WARNING))
-          .join("\n");
-        const detail = summarizeProbeDetail(probe.stdout, providerStderr, parsed.errorMessage);
-        const authEvidence = parsed.errorMessage?.trim() || providerStderr;
-        if (probe.stderr.includes(PROBE_CLEANUP_WARNING)) {
+        // A connection test needs one small response, not plugin catalog sync,
+        // repository instructions, or a durable session. Keep provider/model
+        // configuration intact while removing unrelated startup work.
+        const args = [...execArgs.args];
+        args.splice(args.length - 1, 0,
+          "-c", "features.plugins=false",
+          "-c", "features.remote_plugin=false",
+          "-c", "project_doc_max_bytes=0",
+          ...(args.includes("--ephemeral") ? [] : ["--ephemeral"]),
+        );
+        if (execArgs.fastModeIgnoredReason) {
           checks.push({
-            code: "codex_probe_cleanup_incomplete",
+            code: "codex_fast_mode_unsupported_model",
+            level: "warn",
+            message: execArgs.fastModeIgnoredReason,
+            hint: "Switch the agent model to GPT-5.4 or enter a manual model ID to enable Codex Fast mode.",
+          });
+        }
+        if (targetIsSandbox) {
+          checks.push({
+            code: "codex_git_repo_check_skipped",
             level: "info",
-            message: "Temporary probe files could not be fully removed; this does not change the connection result.",
+            message: "Added --skip-git-repo-check for sandbox hello probes.",
+            hint: "Codex requires an explicit trust bypass in headless remote sandbox workspaces.",
           });
         }
 
-        if (probe.timedOut) {
-          checks.push({
-            code: "codex_hello_probe_timed_out",
-            level: "warn",
-            message: "Codex hello probe timed out.",
-            hint: "Retry the probe. If this persists, verify Codex can run `Respond with hello` from this directory manually.",
-          });
-        } else if ((probe.exitCode ?? 1) === 0) {
-          const summary = parsed.summary.trim();
-          const hasHello = /\bhello\b/i.test(summary);
-          checks.push({
-            code: hasHello ? "codex_hello_probe_passed" : "codex_hello_probe_unexpected_output",
-            level: hasHello ? "info" : "warn",
-            message: hasHello
-              ? "Codex hello probe succeeded."
-              : "Codex probe ran but did not return `hello` as expected.",
-            ...(summary ? { detail: summary.replace(/\s+/g, " ").trim().slice(0, 240) } : {}),
-            ...(hasHello
-              ? {}
-              : {
-                  hint: "Try the probe manually (`codex exec --json -` then prompt: Respond with hello) to inspect full output.",
-                }),
-          });
-        } else if (CODEX_AUTH_REQUIRED_RE.test(authEvidence)) {
-          checks.push({
-            code: "codex_hello_probe_auth_required",
-            level: "warn",
-            message: "Codex CLI is installed, but authentication is not ready.",
-            ...(detail ? { detail } : {}),
-            hint: probeApiKey
-              ? "OPENAI_API_KEY was provided but Codex still rejected the request. Verify the key is valid for the OpenAI Responses API (e.g. `curl -H \"Authorization: Bearer $OPENAI_API_KEY\" https://api.openai.com/v1/models`), or run `codex login` and seed `~/.codex/auth.json`."
-              : "Codex CLI does not read OPENAI_API_KEY from the environment; set OPENAI_API_KEY in this adapter's config (so Paperclip writes it to `$CODEX_HOME/auth.json`) or run `codex login` on the host first.",
-          });
-          if (targetIsSandbox) {
-            // Emit the neutral canonical check so the user interface can decide
-            // login eligibility from a stable code. The user interface does not
-            // read the message text or the top-level status.
+        // Codex CLI (>= 0.122) ignores the OPENAI_API_KEY env var and only reads
+        // credentials from $CODEX_HOME/auth.json. When we have a key available,
+        // wrap the probe with a shell that materializes a per-run auth.json so
+        // the CLI can authenticate. The key content is passed via env (not on
+        // the command line) to avoid leaking it into process listings.
+        // Managed connections already contain their exact auth and provider config.
+        // Replacing that home with a native-key probe would test another provider.
+        const probeApiKey = config.managedAiConnection ? null : isNonEmpty(configOpenAiKey)
+          ? configOpenAiKey
+          : isNonEmpty(hostOpenAiKey)
+            ? hostOpenAiKey
+            : null;
+        const preparedProbe = await prepareCodexHelloProbe({
+          managedAiConnection: Boolean(config.managedAiConnection),
+          runId,
+          companyId: ctx.companyId,
+          target,
+          targetIsRemote,
+          cwd,
+          command,
+          args,
+          env,
+          probeApiKey,
+        });
+        try {
+          managedRemoteProviderStarted = true;
+          const probe = await runAdapterExecutionTargetProcess(
+            runId,
+            target,
+            preparedProbe.command,
+            preparedProbe.args,
+            {
+              onProcessStopped: () => { managedRemoteProviderStopped = true; },
+              cwd,
+              env: preparedProbe.env,
+              timeoutSec: 45,
+              graceSec: 5,
+              stdin: "Respond with hello.",
+              onLog: async () => {},
+            },
+          );
+          const parsed = parseCodexJsonl(probe.stdout);
+          // Plugin-catalog login is separate from model authentication. Its
+          // warnings must not explain an unrelated provider/process failure.
+          const providerStderr = probe.stderr.split(/\r?\n/)
+            .filter((line) => !/\bcodex_core_plugins(?:::|:)/.test(line) && !line.includes(PROBE_CLEANUP_WARNING))
+            .join("\n");
+          const detail = summarizeProbeDetail(probe.stdout, providerStderr, parsed.errorMessage);
+          const authEvidence = parsed.errorMessage?.trim() || providerStderr;
+          if (probe.stderr.includes(PROBE_CLEANUP_WARNING)) {
             checks.push({
-              code: ADAPTER_AUTH_MISSING_CHECK_CODE,
-              level: "warn",
-              message: "This environment has no ready authentication for this adapter.",
-              ...(detail ? { detail } : {}),
-              hint: "Provide credentials for this adapter, or start login in the environment.",
+              code: "codex_probe_cleanup_incomplete",
+              level: "info",
+              message: "Temporary probe files could not be fully removed; this does not change the connection result.",
             });
           }
-        } else {
-          const modelRejection = codexHelloProbeModelRejectionCheck({
-            evidence: `${parsed.errorMessage ?? ""}\n${providerStderr}\n${probe.stdout}`,
-            detectedVersion: detectedCliVersion,
-            targetIsSandbox,
-          });
-          checks.push(modelRejection ?? {
-            code: "codex_hello_probe_failed",
-            level: "error",
-            message: "Codex hello probe failed.",
-            ...(detail ? { detail } : {}),
-            hint: "Run `codex exec --json -` manually in this working directory and prompt `Respond with hello` to debug.",
-          });
+
+          if (probe.timedOut) {
+            checks.push({
+              code: "codex_hello_probe_timed_out",
+              level: "warn",
+              message: "Codex hello probe timed out.",
+              hint: "Retry the probe. If this persists, verify Codex can run `Respond with hello` from this directory manually.",
+            });
+          } else if ((probe.exitCode ?? 1) === 0) {
+            const summary = parsed.summary.trim();
+            const hasHello = /\bhello\b/i.test(summary);
+            checks.push({
+              code: hasHello ? "codex_hello_probe_passed" : "codex_hello_probe_unexpected_output",
+              level: hasHello ? "info" : "warn",
+              message: hasHello
+                ? "Codex hello probe succeeded."
+                : "Codex probe ran but did not return `hello` as expected.",
+              ...(summary ? { detail: summary.replace(/\s+/g, " ").trim().slice(0, 240) } : {}),
+              ...(hasHello
+                ? {}
+                : {
+                    hint: "Try the probe manually (`codex exec --json -` then prompt: Respond with hello) to inspect full output.",
+                  }),
+            });
+          } else if (CODEX_AUTH_REQUIRED_RE.test(authEvidence)) {
+            checks.push({
+              code: "codex_hello_probe_auth_required",
+              level: "warn",
+              message: "Codex CLI is installed, but authentication is not ready.",
+              ...(detail ? { detail } : {}),
+              hint: probeApiKey
+                ? "OPENAI_API_KEY was provided but Codex still rejected the request. Verify the key is valid for the OpenAI Responses API (e.g. `curl -H \"Authorization: Bearer $OPENAI_API_KEY\" https://api.openai.com/v1/models`), or run `codex login` and seed `~/.codex/auth.json`."
+                : "Codex CLI does not read OPENAI_API_KEY from the environment; set OPENAI_API_KEY in this adapter's config (so Paperclip writes it to `$CODEX_HOME/auth.json`) or run `codex login` on the host first.",
+            });
+            if (targetIsSandbox) {
+              // Emit the neutral canonical check so the user interface can decide
+              // login eligibility from a stable code. The user interface does not
+              // read the message text or the top-level status.
+              checks.push({
+                code: ADAPTER_AUTH_MISSING_CHECK_CODE,
+                level: "warn",
+                message: "This environment has no ready authentication for this adapter.",
+                ...(detail ? { detail } : {}),
+                hint: "Provide credentials for this adapter, or start login in the environment.",
+              });
+            }
+          } else {
+            const modelRejection = codexHelloProbeModelRejectionCheck({
+              evidence: `${parsed.errorMessage ?? ""}\n${providerStderr}\n${probe.stdout}`,
+              detectedVersion: detectedCliVersion,
+              targetIsSandbox,
+            });
+            checks.push(modelRejection ?? {
+              code: "codex_hello_probe_failed",
+              level: "error",
+              message: "Codex hello probe failed.",
+              ...(detail ? { detail } : {}),
+              hint: "Run `codex exec --json -` manually in this working directory and prompt `Respond with hello` to debug.",
+            });
+          }
+        } finally {
+          managedRemoteRestoreSucceeded = await preparedProbe.cleanup();
         }
-      } finally {
-        await preparedProbe.cleanup();
+      }
+    }
+
+    return {
+      adapterType: ctx.adapterType,
+      status: summarizeStatus(checks),
+      checks,
+      testedAt: new Date().toISOString(),
+    };
+  } finally {
+    if (managedRemoteCleanupCommand) {
+      if (managedRemoteProviderStarted && (!managedRemoteProviderStopped || !managedRemoteRestoreSucceeded)) {
+        checks.push({ code: "codex_managed_remote_env_retained", level: "info", message: "Private remote run state retained: provider stop or workspace/auth recovery is unconfirmed." });
+      } else {
+        try {
+          const cleaned = await runAdapterExecutionTargetShellCommand(runId, target, managedRemoteCleanupCommand, { cwd, env: {}, timeoutSec: 15 });
+          if (cleaned.exitCode !== 0 || cleaned.timedOut || cleaned.signal) throw new Error("cleanup failed");
+          checks.push({ code: "codex_managed_remote_env_cleaned", level: "info", message: "Private remote run state cleanup completed." });
+        } catch {
+          checks.push({ code: "codex_managed_remote_env_cleanup_failed", level: "info", message: "Private remote run state cleanup failed; remaining state retained. This does not change the connection result." });
+        }
       }
     }
   }
-
-  return {
-    adapterType: ctx.adapterType,
-    status: summarizeStatus(checks),
-    checks,
-    testedAt: new Date().toISOString(),
-  };
 }
