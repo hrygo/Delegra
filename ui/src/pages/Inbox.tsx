@@ -1062,7 +1062,10 @@ function StreamlinedInbox({
 
   const { data: heartbeatRuns, isLoading: isRunsLoading } = useQuery({
     queryKey: [...queryKeys.heartbeats(selectedCompanyId!), "limit", INBOX_HEARTBEAT_RUN_LIMIT],
-    queryFn: () => heartbeatsApi.list(selectedCompanyId!, undefined, INBOX_HEARTBEAT_RUN_LIMIT, { summary: true }),
+    queryFn: () => heartbeatsApi.list(selectedCompanyId!, undefined, INBOX_HEARTBEAT_RUN_LIMIT, {
+      summary: true,
+      suppressResolvedFailures: true,
+    }),
     enabled: !!selectedCompanyId,
     refetchOnWindowFocus: false,
     staleTime: INBOX_HOT_PATH_STALE_MS,
@@ -1347,10 +1350,9 @@ function StreamlinedInbox({
   const failedRuns = useMemo(
     () =>
       getLatestFailedRunsByAgent(heartbeatRuns ?? []).filter(
-        (r) => !isInboxEntityDismissed(dismissedAtByKey, `run:${r.id}`, r.createdAt)
-          && issueById.get(readIssueIdFromRun(r) ?? "")?.interruption?.state !== "resolved",
+        (r) => !isInboxEntityDismissed(dismissedAtByKey, `run:${r.id}`, r.createdAt),
       ),
-    [heartbeatRuns, dismissedAtByKey, issueById],
+    [heartbeatRuns, dismissedAtByKey],
   );
   const approvalsToRender = useMemo(() => {
     let filtered = getApprovalsForTab(approvals ?? [], tab, allApprovalFilter, currentUserId);
