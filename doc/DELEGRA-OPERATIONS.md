@@ -48,6 +48,23 @@ Without Git, it checks the working directory only. It rejects authentication
 overrides inside that scope. Before workspace resolution it checks explicit
 configuration arguments, then checks files after the task workspace is known.
 
+## Managed agent configuration checks
+
+An ordinary environment-variable edit keeps the selected AI connection and
+does not start a provider probe. Binding comparison normalizes both saved and
+requested values, including values read back from PostgreSQL JSONB.
+Changes to the model, harness, provider, engine, connection, or execution
+environment still require the applicable validation. A failed check leaves
+the saved configuration unchanged.
+
+Adoption checks and independent environment tests resolve the same prospective
+configuration. The selected environment supplies the base variables. Agent
+variables take precedence, followed by managed authentication. Both paths
+validate the execution target before reading its secrets. When a target is
+unavailable, metadata-only checks still report missing environment bindings
+without resolving secret values. Missing bindings and unauthorized secrets
+still fail; secret values stay out of responses.
+
 ## Deployment and rollback
 
 Keep service configuration, instance data, and source revisions separate.

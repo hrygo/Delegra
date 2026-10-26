@@ -156,6 +156,85 @@ async function runPnpm(cwd: string, args: string[]) {
   await execFileAsync("pnpm", args, { cwd });
 }
 
+function isolatedProvisionPath(binDir: string) {
+  return [binDir, "/usr/bin", "/bin"].join(path.delimiter);
+}
+
+function isolatedProvisionEnvironment(binDir: string): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    PATH: isolatedProvisionPath(binDir),
+    SHELL: "/bin/sh",
+  };
+}
+
+async function withIsolatedProvisionEnvironment<T>(binDir: string, run: () => Promise<T>): Promise<T> {
+  const previousPath = process.env.PATH;
+  const previousShell = process.env.SHELL;
+  process.env.PATH = isolatedProvisionPath(binDir);
+  process.env.SHELL = "/bin/sh";
+  try {
+    return await run();
+  } finally {
+    if (previousPath === undefined) {
+      delete process.env.PATH;
+    } else {
+      process.env.PATH = previousPath;
+    }
+    if (previousShell === undefined) {
+      delete process.env.SHELL;
+    } else {
+      process.env.SHELL = previousShell;
+    }
+  }
+}
+
+async function linkProvisionTestNode(binDir: string) {
+  await fs.symlink(process.execPath, path.join(binDir, "node"));
+}
+
+function findExecutableOnPath(name: string) {
+  for (const directory of (process.env.PATH ?? "").split(path.delimiter)) {
+    if (!directory) continue;
+    const candidate = path.join(directory, name);
+    if (existsSync(candidate)) return candidate;
+  }
+  throw new Error(`Could not find ${name} on the current PATH`);
+}
+
+function quoteShellArgument(value: string) {
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+async function writeInstallDelegatingPnpmShim(binDir: string) {
+  const realPnpmPath = findExecutableOnPath("pnpm");
+  const shimPath = path.join(binDir, "pnpm");
+  await fs.writeFile(
+    shimPath,
+    [
+      "#!/bin/sh",
+      'if [ "$1" = "paperclipai" ] && [ "$2" = "--help" ]; then',
+      "  exit 1",
+      "fi",
+      `exec ${quoteShellArgument(realPnpmPath)} "$@"`,
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  await fs.chmod(shimPath, 0o755);
+}
+
+async function withIsolatedInstallProvisionEnvironment<T>(run: () => Promise<T>): Promise<T> {
+  const binDir = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-worktree-provision-bin-"));
+  try {
+    await linkProvisionTestNode(binDir);
+    await writeInstallDelegatingPnpmShim(binDir);
+    return await withIsolatedProvisionEnvironment(binDir, run);
+  } finally {
+    await fs.rm(binDir, { recursive: true, force: true });
+  }
+}
+
 async function writeRegisteredSourceConfig(baseCwd: string, instanceId = "source-instance") {
   const configDir = path.join(baseCwd, ".paperclip");
   await fs.mkdir(configDir, { recursive: true });
@@ -1951,6 +2030,7 @@ process.stderr.write(${JSON.stringify(stderr)}, () => { process.exitCode = ${cod
     await writeRegisteredSourceConfig(repoRoot, "worktree-base-source");
     const previousCwd = process.cwd();
     const previousPath = process.env.PATH;
+    const previousShell = process.env.SHELL;
     const previousConfig = process.env.PAPERCLIP_CONFIG;
     const previousHome = process.env.PAPERCLIP_HOME;
     const previousInstanceId = process.env.PAPERCLIP_INSTANCE_ID;
@@ -1970,7 +2050,10 @@ process.stderr.write(${JSON.stringify(stderr)}, () => { process.exitCode = ${cod
     // Keep this server-side fixture on provision-worktree.sh's config writer path;
     // CLI/database seeding is covered by the CLI worktree tests.
     await fs.symlink(process.execPath, path.join(isolatedBin, "node"));
-    process.env.PATH = `${isolatedBin}${path.delimiter}/usr/bin${path.delimiter}/bin`;
+    await fs.writeFile(path.join(isolatedBin, "pnpm"), "#!/bin/sh\nexit 1\n", "utf8");
+    await fs.chmod(path.join(isolatedBin, "pnpm"), 0o755);
+    process.env.PATH = isolatedProvisionPath(isolatedBin);
+    process.env.SHELL = "/bin/sh";
 
     await fs.mkdir(sharedConfigDir, { recursive: true });
     await fs.writeFile(
@@ -2138,6 +2221,11 @@ process.stderr.write(${JSON.stringify(stderr)}, () => { process.exitCode = ${cod
       } else {
         process.env.PATH = previousPath;
       }
+      if (previousShell === undefined) {
+        delete process.env.SHELL;
+      } else {
+        process.env.SHELL = previousShell;
+      }
       for (const [key, value] of [
         ["PAPERCLIP_CONFIG", previousConfig],
         ["PAPERCLIP_HOME", previousHome],
@@ -2218,7 +2306,7 @@ process.stderr.write(${JSON.stringify(stderr)}, () => { process.exitCode = ${cod
     await runGit(repoRoot, ["add", "."]);
     await runGit(repoRoot, ["commit", "-m", "Add pnpm workspace fixture"]);
 
-    const workspace = await realizeExecutionWorkspace({
+    const workspace = await withIsolatedInstallProvisionEnvironment(() => realizeExecutionWorkspace({
       base: {
         baseCwd: repoRoot,
         source: "project_primary",
@@ -2244,7 +2332,7 @@ process.stderr.write(${JSON.stringify(stderr)}, () => { process.exitCode = ${cod
         name: "Codex Coder",
         companyId: "company-1",
       },
-    });
+    }));
 
     expect((await fs.lstat(path.join(workspace.cwd, "node_modules"))).isSymbolicLink()).toBe(false);
     expect((await fs.lstat(path.join(workspace.cwd, "server", "node_modules"))).isSymbolicLink()).toBe(false);
@@ -2299,7 +2387,7 @@ process.stderr.write(${JSON.stringify(stderr)}, () => { process.exitCode = ${cod
     await runGit(repoRoot, ["add", "package.json", "pnpm-lock.yaml", "scripts/provision-worktree.sh"]);
     await runGit(repoRoot, ["commit", "-m", "Add minimal provision fixture"]);
 
-    const workspace = await realizeExecutionWorkspace({
+    const workspace = await withIsolatedInstallProvisionEnvironment(() => realizeExecutionWorkspace({
       base: {
         baseCwd: repoRoot,
         source: "project_primary",
@@ -2325,7 +2413,7 @@ process.stderr.write(${JSON.stringify(stderr)}, () => { process.exitCode = ${cod
         name: "Codex Coder",
         companyId: "company-1",
       },
-    });
+    }));
 
     await expect(fs.readFile(path.join(workspace.cwd, ".paperclip", "config.json"), "utf8")).resolves.toContain(
       "\"database\"",
@@ -2347,6 +2435,7 @@ process.stderr.write(${JSON.stringify(stderr)}, () => { process.exitCode = ${cod
       await fs.mkdir(path.join(worktreeRoot, "node_modules"), { recursive: true });
       await fs.mkdir(path.join(worktreeRoot, "ui"), { recursive: true });
       await fs.mkdir(fakeBin, { recursive: true });
+      await linkProvisionTestNode(fakeBin);
       await fs.copyFile(provisionWorktreeScriptPath, scriptPath);
       await fs.chmod(scriptPath, 0o755);
       await fs.writeFile(
@@ -2394,8 +2483,7 @@ process.stderr.write(${JSON.stringify(stderr)}, () => { process.exitCode = ${cod
       const runScript = () => execFileAsync(scriptPath, [], {
         cwd: worktreeRoot,
         env: {
-          ...process.env,
-          PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+          ...isolatedProvisionEnvironment(fakeBin),
           PAPERCLIP_WORKSPACE_BASE_CWD: baseRoot,
           PAPERCLIP_WORKSPACE_CWD: worktreeRoot,
         },
@@ -2588,6 +2676,7 @@ process.stderr.write(${JSON.stringify(stderr)}, () => { process.exitCode = ${cod
       await writeRegisteredSourceConfig(baseRoot);
       await fs.mkdir(worktreeRoot, { recursive: true });
       await fs.mkdir(fakeBin, { recursive: true });
+      await linkProvisionTestNode(fakeBin);
       await fs.copyFile(provisionWorktreeScriptPath, scriptPath);
       await fs.chmod(scriptPath, 0o755);
       await fs.writeFile(
@@ -2634,8 +2723,7 @@ process.stderr.write(${JSON.stringify(stderr)}, () => { process.exitCode = ${cod
       const result = await execFileAsync(scriptPath, [], {
         cwd: worktreeRoot,
         env: {
-          ...process.env,
-          PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+          ...isolatedProvisionEnvironment(fakeBin),
           PAPERCLIP_WORKSPACE_BASE_CWD: baseRoot,
           PAPERCLIP_WORKSPACE_CWD: worktreeRoot,
         },

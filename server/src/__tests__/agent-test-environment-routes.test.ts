@@ -1030,6 +1030,8 @@ describe("agent test-environment route", () => {
         expect.objectContaining({ code: "environment_target_unsupported", level: "warn" }),
         expect.objectContaining({ code: "environment_env_binding_missing", level: "error" }),
       ]);
+      expect(mockSecretService.resolveEnvBindings).not.toHaveBeenCalled();
+      expect(mockSecretService.resolveAdapterConfigForRuntime).not.toHaveBeenCalled();
     });
   });
 
