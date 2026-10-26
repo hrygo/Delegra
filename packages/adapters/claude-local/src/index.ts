@@ -69,6 +69,7 @@ Core fields:
 - promptTemplate (string, optional): run prompt template
 - maxTurnsPerRun (number, optional): max turns for one run
 - dangerouslySkipPermissions (boolean, optional, default true): allow non-interactive Claude runs to proceed without approval prompts. Local and remote targets receive --dangerously-skip-permissions for all built-in and connected tools. Managed sandbox targets also identify themselves to Claude so root container launches support bypass. Non-sandbox root processes must run Claude as a non-root user; Paperclip does not silently downgrade the requested mode.
+- claudeSafetyPolicy (object, optional): closed opt-in { version: 1, profile: "workspace-build" | "candidate-review" }. Requires local engine="cli", Claude Code >=2.1.310, dangerouslySkipPermissions=false, chrome disabled, and empty args/extraArgs. Unknown policy keys/versions fail closed. Legacy configurations remain unchanged.
 - command (string, optional): defaults to "claude"
 - extraArgs (string[], optional): additional CLI args
 - env (object, optional): KEY=VALUE environment variables
@@ -93,6 +94,9 @@ Operational fields:
 - graceSec (number, optional): SIGTERM grace period in seconds
 
 Notes:
+- Safety profile workspace-build keeps Bash, Read/Glob/Grep and Edit/Write for offline builds under Claude's own sandbox (macOS Seatbelt or the CLI's supported platform sandbox). Sandbox failure and unsandboxed retries are forbidden. candidate-review exposes only Read/Glob/Grep. These profiles disable user/project/local settings and automatic skill discovery; selected full skill sources are explicitly readable, with their resolved sources, prompt-cache parent and actual Git metadata write-denied. Managed policy settings still apply.
+- Safety profiles intentionally enable no runtime MCP, browser or network tools. Sandboxed Bash has an empty strict network allowlist, no Unix-socket or local-binding allowance. The Claude provider connection is unchanged; this is command sandboxing, not a network sandbox around the provider process. Final text is saved by the host; no native finish tool is implied. Selected skills are described with exact Read paths. Additional network/special-tool needs require a separately designed and admitted policy.
+- Test and execute use the same safety-policy builder and minimum CLI version. A successful hello probe establishes only provider readiness, not positive/negative tool-boundary or product qualification. Qualify workspace writes, outside-write denial, Git/prompt/skill protection and network denial on the actual task checkout before assigning build work.
 - Claude Opus 5.5 uses model ID \`claude-opus-5-5\` and requires Claude Code v2.1.280 or later.
 - Claude Sonnet 5.5 uses model ID \`claude-sonnet-5-5\` and requires Claude Code v2.1.284 or later.
 - filesystemScope and networkScope are spawn-level confinement and are orthogonal to Claude permission flags. Both require Bubblewrap on the host and explicit engine="cli"; default or explicit ACP is rejected because ACP confinement is not yet supported. networkScope="allowlist" injects HTTP_PROXY/HTTPS_PROXY for the CLI while its private network namespace blocks direct sockets, so every required provider/API hostname must be listed explicitly.

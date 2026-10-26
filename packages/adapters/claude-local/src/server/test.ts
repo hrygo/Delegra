@@ -3,6 +3,8 @@ import type {
   AdapterEnvironmentTestContext,
   AdapterEnvironmentTestResult,
 } from "@paperclipai/adapter-utils";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   asString,
   asBoolean,
@@ -10,6 +12,8 @@ import {
   asStringArray,
   parseObject,
   ensurePathInEnv,
+  readPaperclipRuntimeSkillEntries,
+  isPaperclipSkillSourceMissing,
 } from "@paperclipai/adapter-utils/server-utils";
 import {
   ensureAdapterExecutionTargetCommandResolvable,
@@ -43,6 +47,9 @@ import {
   logSandboxProbeDiagnostic,
 } from "./probe-diagnostics.js";
 import { buildLocalAdapterTestProbeEnv } from "./probe-env.js";
+import { buildClaudeSafetyPolicy, parseClaudeSafetyPolicy, CLAUDE_SAFETY_MINIMUM_VERSION } from "./safety-policy.js";
+import { prepareClaudePromptBundle } from "./prompt-cache.js";
+import { resolveClaudeDesiredSkillNames } from "./skills.js";
 
 function summarizeStatus(checks: AdapterEnvironmentCheck[]): AdapterEnvironmentTestResult["status"] {
   if (checks.some((check) => check.level === "error")) return "fail";
@@ -65,8 +72,17 @@ function localExecutablesMatch(
 export async function testEnvironment(
   ctx: AdapterEnvironmentTestContext,
 ): Promise<AdapterEnvironmentTestResult> {
+  const config = parseObject(ctx.config);
+  let safetyPolicyConfig;
+  try {
+    safetyPolicyConfig = parseClaudeSafetyPolicy(config);
+    if (safetyPolicyConfig && ctx.executionTarget?.kind === "remote") throw new Error("claudeSafetyPolicy v1 supports local CLI targets only");
+    if (safetyPolicyConfig && !claudeCommandLooksLike(asString(config.command, "claude"))) throw new Error("claudeSafetyPolicy requires the Claude CLI");
+  } catch (error) {
+    return { adapterType: "claude_local", status: "fail", checks: [{ code: "claude_safety_policy_invalid", level: "error", message: error instanceof Error ? error.message : "Invalid safety policy" }], testedAt: new Date().toISOString() };
+  }
   const engineSelection = await resolveClaudeExecutionEngineForRun({
-    config: parseObject(ctx.config),
+    config,
     executionTarget: ctx.executionTarget,
   });
   if (engineSelection.unavailableReason) {
@@ -86,7 +102,6 @@ export async function testEnvironment(
   }
 
   const checks: AdapterEnvironmentCheck[] = [];
-  const config = parseObject(ctx.config);
   let command = asString(config.command, "claude");
   const target = ctx.executionTarget ?? null;
   const targetIsRemote = target?.kind === "remote";
@@ -247,11 +262,13 @@ export async function testEnvironment(
     );
   let configuredModelIsCompatible = true;
   const configuredModel = resolveClaudeModel(config.model, considerHostEnv ? { ...process.env, ...env } : env);
-  const minimumCliVersion =
+  const modelMinimumCliVersion =
     claudeCommandLooksLike(command, "claude") &&
     (!hasBedrock || isBedrockModelId(configuredModel))
     ? minimumClaudeCliVersionForModel(configuredModel)
     : null;
+  const minimumCliVersion = safetyPolicyConfig && (!modelMinimumCliVersion || claudeCliVersionAtLeast(CLAUDE_SAFETY_MINIMUM_VERSION, modelMinimumCliVersion))
+    ? CLAUDE_SAFETY_MINIMUM_VERSION : modelMinimumCliVersion;
   const versionProbeCommand = localProbe?.command ?? (targetIsRemote ? command : null);
   const versionProbeMatchesRuntime = targetIsRemote || localExecutablesMatch(
     localProbe?.command ?? null,
@@ -295,13 +312,13 @@ export async function testEnvironment(
       checks.push({
         code: "claude_cli_version_incompatible",
         level: "error",
-        message: `${configuredModel} requires Claude Code ${minimumCliVersion} or newer on the CLI lane.`,
+        message: `${safetyPolicyConfig ? "claudeSafetyPolicy" : configuredModel} requires Claude Code ${minimumCliVersion} or newer on the CLI lane.`,
         detail: detectedCliVersion
           ? `Detected Claude Code ${detectedCliVersion}.`
           : "Could not determine the installed Claude Code version.",
         hint: targetIsSandbox && command === "claude"
           ? "Paperclip could not prepare a compatible Claude runtime. Retry connecting."
-          : "Upgrade Claude Code or restore the default ACP lane, then retry the Test.",
+          : safetyPolicyConfig ? "Upgrade Claude Code, then retry the Test." : "Upgrade Claude Code or restore the default ACP lane, then retry the Test.",
       });
     }
   }
@@ -361,7 +378,7 @@ export async function testEnvironment(
       }
 
       const args = ["--print", "-", "--output-format", "stream-json", "--verbose"];
-      if (config.managedAiConnection) args.push("--setting-sources", "user");
+      if (config.managedAiConnection && !safetyPolicyConfig) args.push("--setting-sources", "user");
       args.push(...buildClaudeProbePermissionArgs({
         dangerouslySkipPermissions,
         targetIsRemote,
@@ -375,6 +392,21 @@ export async function testEnvironment(
       if (effectiveEffort) args.push("--effort", effectiveEffort);
       if (maxTurns > 0) args.push("--max-turns", String(maxTurns));
       if (extraArgs.length > 0) args.push(...extraArgs);
+      let safetyDirective = "";
+      if (safetyPolicyConfig) {
+        try {
+          const entries = await readPaperclipRuntimeSkillEntries(config, path.dirname(fileURLToPath(import.meta.url)));
+          const selected = new Set(resolveClaudeDesiredSkillNames(config, entries));
+          const skills = entries.filter(entry => selected.has(entry.key) && !isPaperclipSkillSourceMissing(entry));
+          const bundle = await prepareClaudePromptBundle({ companyId: ctx.companyId, skills, instructionsContents: null, onLog: async () => {} });
+          const policy = await buildClaudeSafetyPolicy({ config, cwd, promptBundleDir: bundle.addDir, selectedSkills: skills });
+          args.push("--add-dir", bundle.addDir, ...policy!.args);
+          safetyDirective = policy!.skillReadDirective;
+        } catch (error) {
+          checks.push({ code: "claude_safety_policy_invalid", level: "error", message: error instanceof Error ? error.message : "Could not construct safety policy" });
+          return { adapterType: "claude_local", status: "fail", checks, testedAt: new Date().toISOString() };
+        }
+      }
 
       // Sandbox bridges still add lease warmup and transport overhead, but
       // the standard-2 Cloudflare tier now probes fast enough that a 90s
@@ -399,7 +431,7 @@ export async function testEnvironment(
           env: probeEnv,
           timeoutSec: helloProbeTimeoutSec,
           graceSec: 5,
-          stdin: "Respond with hello.",
+          stdin: ["Respond with hello.", safetyDirective].filter(Boolean).join("\n\n"),
           onLog: async () => {},
         },
       );

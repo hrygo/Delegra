@@ -94,6 +94,7 @@ import {
   minimumClaudeCliVersionForModel,
 } from "./cli-capabilities.js";
 import { prepareCompatibleClaudeCommand } from "./sandbox-cli-version.js";
+import { buildClaudeSafetyPolicy, parseClaudeSafetyPolicy, CLAUDE_SAFETY_MINIMUM_VERSION } from "./safety-policy.js";
 import { resolveClaudeDesiredSkillNames } from "./skills.js";
 import { isBedrockModelId } from "./models.js";
 import { prepareClaudePromptBundle } from "./prompt-cache.js";
@@ -408,6 +409,7 @@ export async function runClaudeLogin(input: {
 
 export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExecutionResult> {
   const providerStop = createProviderStoppedBoundary(ctx.onProviderStopped);
+  const safetyPolicyConfig = parseClaudeSafetyPolicy(ctx.config);
   const engineSelection = await resolveClaudeExecutionEngineForRun(ctx);
   if (engineSelection.unavailableReason) {
     return {
@@ -431,6 +433,9 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     legacyRemoteExecution: ctx.executionTransport?.remoteExecution,
   });
   const executionTargetIsRemote = adapterExecutionTargetIsRemote(executionTarget);
+  if (safetyPolicyConfig && executionTargetIsRemote) {
+    throw new Error("claudeSafetyPolicy v1 supports local CLI targets only");
+  }
   const executionTargetIsSandbox = executionTarget?.kind === "remote" && executionTarget.transport === "sandbox";
 
   const promptTemplate = asString(
@@ -565,7 +570,17 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     instructionsContents: combinedInstructionsContents,
     onLog,
   });
-  const runtimeMcpServers = ctx.runtimeMcp?.getServers() ?? [];
+  const safetyPolicy = await buildClaudeSafetyPolicy({
+    config, cwd: effectiveExecutionCwd, promptBundleDir: promptBundle.addDir,
+    selectedSkills: mountableSkillEntries, remote: executionTargetIsRemote,
+  });
+  if (safetyPolicy) {
+    if (!claudeCommandLooksLike(command, "claude")) throw new Error("claudeSafetyPolicy requires the Claude CLI");
+    instructionsPathDirective = [instructionsPathDirective, safetyPolicy.skillReadDirective].filter(Boolean).join("\n\n");
+  }
+  // Closed offline profiles intentionally expose no runtime MCP, including
+  // tool connections assigned to the agent. Final text is received by the host.
+  const runtimeMcpServers = safetyPolicy ? [] : ctx.runtimeMcp?.getServers() ?? [];
   const runtimeMcpIdentity = JSON.stringify(
     runtimeMcpServers.map(({ name, url, connectionId }) => ({ name, url, connectionId })),
   );
@@ -782,6 +797,9 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     runtimeSessionId.length > 0 &&
     isValidUuid &&
     hasMatchingPromptBundle &&
+    (safetyPolicy
+      ? runtimeSessionParams.claudeSafetyPolicyIdentity === safetyPolicy.identity
+      : !runtimeSessionParams.claudeSafetyPolicyIdentity) &&
     // Each CLI invocation loads --mcp-config, including --resume invocations.
     // Refreshing tools does not invalidate the saved conversation.
     hasMatchingSessionCwd &&
@@ -844,7 +862,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     attemptInstructionsFilePath: string | undefined,
   ) => {
     const args = ["--print", "--output-format", "stream-json", "--verbose"];
-    if (config.managedAiConnection) args.push("--setting-sources", "user");
+    if (config.managedAiConnection && !safetyPolicy) args.push("--setting-sources", "user");
     if (resumeSessionId) args.push("--resume", resumeSessionId);
     args.push(...buildClaudeExecutionPermissionArgs({
       dangerouslySkipPermissions,
@@ -871,6 +889,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     }
     args.push("--add-dir", effectivePromptBundleAddDir);
     if (extraArgs.length > 0) args.push(...extraArgs);
+    if (safetyPolicy) args.push(...safetyPolicy.args);
     return args;
   };
 
@@ -1165,6 +1184,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         cwd,
         promptBundleKey: promptBundle.bundleKey,
         mcpServerIdentity: runtimeMcpIdentity,
+        ...(safetyPolicy ? { claudeSafetyPolicyIdentity: safetyPolicy.identity } : {}),
         ...(executionTargetIsRemote
           ? {
               remoteExecution: adapterExecutionTargetSessionIdentity(runtimeExecutionTarget),
@@ -1294,9 +1314,11 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   };
 
   try {
-    const minimumCliVersion = passesConfiguredModel && claudeCommandLooksLike(command, "claude")
+    const modelMinimumCliVersion = passesConfiguredModel && claudeCommandLooksLike(command, "claude")
       ? minimumClaudeCliVersionForModel(model)
       : null;
+    const minimumCliVersion = safetyPolicyConfig && (!modelMinimumCliVersion || claudeCliVersionAtLeast(CLAUDE_SAFETY_MINIMUM_VERSION, modelMinimumCliVersion))
+      ? CLAUDE_SAFETY_MINIMUM_VERSION : modelMinimumCliVersion;
     if (minimumCliVersion) {
       const prepared = await prepareCompatibleClaudeCommand({
         runId,
@@ -1327,8 +1349,8 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
           ? `detected ${detectedCliVersion}`
           : "could not determine the installed version";
         const errorMessage =
-          `${model} requires Claude Code ${minimumCliVersion} or newer on the CLI lane; ${detected}. ` +
-          "Upgrade Claude Code or restore the default ACP lane before retrying.";
+          `${safetyPolicy ? "claudeSafetyPolicy" : model} requires Claude Code ${minimumCliVersion} or newer on the CLI lane; ${detected}. ` +
+          (safetyPolicy ? "Upgrade Claude Code before retrying this profile." : "Upgrade Claude Code or restore the default ACP lane before retrying.");
         await onLog("stderr", `[paperclip] ${errorMessage}\n`);
         return {
           exitCode: 1,
