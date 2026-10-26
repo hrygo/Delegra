@@ -113,6 +113,8 @@ export type RuntimeRequestResolution =
 
 export interface HeartbeatRunListOptions {
   summary?: boolean;
+  /** Drops failed runs whose task interruption is already resolved. */
+  suppressResolvedFailures?: boolean;
 }
 
 export interface ProviderTraceInspection {
@@ -132,6 +134,7 @@ export const heartbeatsApi = {
     if (agentId) searchParams.set("agentId", agentId);
     if (limit) searchParams.set("limit", String(limit));
     if (options.summary) searchParams.set("summary", "true");
+    if (options.suppressResolvedFailures) searchParams.set("suppressResolvedFailures", "true");
     const qs = searchParams.toString();
     return api.get<HeartbeatRun[]>(
       `/companies/${companyId}/heartbeat-runs${qs ? `?${qs}` : ""}`,
