@@ -264,3 +264,5 @@ export { companyObservability } from "./company_observability.js";
 
 export * from "./prompt_injection_prevention.js";
 export { workflows } from "./workflows.js";
+
+export { modelReferenceRates } from "./model_reference_rates.js";
