@@ -5,8 +5,8 @@
     "deploy": "deploy"
   },
   "currentDeployment": {
-    "tag": "deploy/v2026.1024.0-canary.7-r7",
-    "commit": "64b20f7ccdb4a30539b8425ec8beba29396da24f",
+    "tag": "deploy/v2026.1024.0-canary.7-r6",
+    "commit": "c59e0854ccb382273f7cacce9154aeb32021f633",
     "base": "canary/v2026.1024.0-canary.7",
     "patches": [
       "managed-codex-project-auth",
@@ -14,8 +14,7 @@
       "managed-claude-host-auth-boundary",
       "portable-test-baselines",
       "fork-review-workflow-token",
-      "inbox-badge-resolved-failed-runs",
-      "model-public-reference-pricing"
+      "inbox-badge-resolved-failed-runs"
     ]
   },
   "base": {
@@ -167,15 +166,16 @@
     {
       "id": "model-public-reference-pricing",
       "kind": "fork-only",
-      "status": "active",
+      "status": "retired",
       "commits": [
-        "695050687671d22e6c72869807902cecf32558b3"
+        "695050687671d22e6c72869807902cecf32558b3",
+        "12bed175ab2627358051efb3c3a3e378097a5311"
       ],
       "owner": "hrygo",
       "reviewBy": "2026-11-30",
       "verifiedAt": "2026-10-26",
       "retireWhen": "The accepted upstream stable base supplies an equivalent company-level reference-rate editor and a separate estimate report for gateway and subscription usage.",
-      "notes": "Operator-requested scenario pricing on the pinned Delegra deployment baseline. Keep the implementation generic and instance alias mapping outside tracked source. This deployment patch does not assert upstream product approval; an upstream submission requires a separate roadmap discussion. It changes no invoices, receipts, subscription fees or budget enforcement. Public rates are explicitly selected and unknown local costs stay unknown."
+      "notes": "Withdrawn at the operator request on 2026-10-26. The second commit reverses the reference-rate API, shared estimator, Providers editor, and related feature documentation from PR #17. Preserve the executed SQL migration, journal, snapshots, and schema as inert compatibility history. The running service and database were restored to the pre-r7 r6 baseline. A full billing proposal remains local until upstream scope review; no new billing feature is approved or implemented."
     }
   ]
 }

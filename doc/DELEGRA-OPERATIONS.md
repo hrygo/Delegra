@@ -68,6 +68,17 @@ for rollback. Restore that configuration and restart the service if acceptance
 fails. A later upgrade with schema changes may require a compatible database
 restore; source rollback alone is not a general migration rollback.
 
+The 2026-10-26 pricing rollback restored
+`deploy/v2026.1024.0-canary.7-r6` (`c59e0854c`). The controller reports that
+revision through `/api/health`. The operator authorized discarding post-r7
+changes, so the database uses the verified pre-r7 snapshot. The former r7
+database and a separate dump remain available as recovery points outside Git.
+PR #17's reference-rate API and Providers editor are withdrawn. Keep its SQL
+migration, journal, snapshots, and schema in source to preserve executable
+migration history; they have no active pricing API or UI. Future deployment
+from this branch may create the unused table again. Complete billing design
+files remain on a local-only branch pending upstream scope agreement.
+
 ## Remote native Codex over SSH
 
 Remote Codex agents use the same `paperclip_runner` Codex app-server harness as
