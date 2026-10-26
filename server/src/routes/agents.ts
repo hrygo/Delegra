@@ -37,6 +37,7 @@ import { assertAiConnectionCreateAccess, canInstallSharedAiConnectionForNewAgent
 import { isAiConnectionCompatible } from "@paperclipai/shared";
 import { applyConnectorSkills, resolveConnectorAssignments, annotateConnectorSkills, isConnectorSkill } from "../services/connector-runtime.js";
 import { getExecutionBlocker } from "../services/execution-blocker.js";
+import { excludeResolvedFailedRuns } from "../services/heartbeat/inbox-visibility.js";
 import { canRetryStoppedRun } from "../services/cancelled-native-startup.js";
 import { getNativeReviewAssignment, readNativeReviewAssignmentContext, type NativeReviewAssignmentContext } from "../services/native-runtime/native-review-participant.js";
 import { paperclipRunnerTransitionConfig, normalizeLegacyRunnerProvider, isPaperclipRunnerProvider } from "@paperclipai/adapter-utils";
@@ -6875,9 +6876,14 @@ export function agentRoutes(
       ? Math.max(1, Math.min(HEARTBEAT_RUN_LIST_MAX_LIMIT, parseInt(limitParam, 10) || HEARTBEAT_RUN_LIST_DEFAULT_LIMIT))
       : HEARTBEAT_RUN_LIST_DEFAULT_LIMIT;
     const summary = req.query.summary === "true" || req.query.summary === "1";
+    const suppressResolvedFailures =
+      req.query.suppressResolvedFailures === "true" || req.query.suppressResolvedFailures === "1";
     const runs = await heartbeat.list(companyId, agentId, limit, { summary });
-    const readDecisions = await getHeartbeatRunReadDecisions(db, access, req.actor, runs);
-    res.json(await runRedactions.redactForRuns(companyId, runs.map((run, index) =>
+    const visibleRuns = suppressResolvedFailures
+      ? await excludeResolvedFailedRuns(db, companyId, runs)
+      : runs;
+    const readDecisions = await getHeartbeatRunReadDecisions(db, access, req.actor, visibleRuns);
+    res.json(await runRedactions.redactForRuns(companyId, visibleRuns.map((run, index) =>
       readDecisions[index] ? run : redactHeartbeatRunListRow(run)),
       req.actor.type === "board" ? getActorInfo(req).actorId : null));
   });

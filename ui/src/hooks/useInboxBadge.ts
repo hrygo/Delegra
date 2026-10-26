@@ -252,7 +252,10 @@ export function useInboxBadge(companyId: string | null | undefined) {
 
   const { data: heartbeatRuns = [] } = useQuery({
     queryKey: [...queryKeys.heartbeats(companyId!), "limit", INBOX_BADGE_HEARTBEAT_RUN_LIMIT],
-    queryFn: () => heartbeatsApi.list(companyId!, undefined, INBOX_BADGE_HEARTBEAT_RUN_LIMIT, { summary: true }),
+    queryFn: () => heartbeatsApi.list(companyId!, undefined, INBOX_BADGE_HEARTBEAT_RUN_LIMIT, {
+      summary: true,
+      suppressResolvedFailures: true,
+    }),
     enabled: !!companyId,
     refetchOnWindowFocus: false,
     staleTime: INBOX_BADGE_HOT_PATH_STALE_MS,

@@ -140,6 +140,27 @@
       "verifiedAt": "2026-10-25",
       "retireWhen": "The accepted upstream review workflow supports forks without an upstream private App key and reads review scripts from the trusted PR base commit.",
       "notes": "Preserves Dependency Review, all quality gates, and the current permission set. Forks use the built-in workflow token; the upstream repository keeps its App token. Signed Actions comments are updated across retries."
+    },
+    {
+      "id": "inbox-badge-resolved-failed-runs",
+      "kind": "upstream-backport",
+      "status": "active",
+      "upstreamPr": "paperclipai/paperclip#17683",
+      "upstreamBase": "1a3f604097d81fb653b271af4c7c3614d2b032a7",
+      "upstreamHead": "248d55c5d49de82316b3a7304a0da2fb4ae08f50",
+      "upstreamCommits": [
+        "baeb0301923fb193337770368c09253a0a9e9fa9",
+        "248d55c5d49de82316b3a7304a0da2fb4ae08f50"
+      ],
+      "commits": [
+        "ec6eb1fa7a931101fb90f9325cc2f6d9de7a0d9d",
+        "809e48e757e723a3ee51547b3cdece6b1332a421"
+      ],
+      "owner": "hrygo",
+      "reviewBy": "2026-11-30",
+      "verifiedAt": "2026-10-26",
+      "retireWhen": "The accepted stable base contains both commits from paperclipai/paperclip#17683 or patch-equivalent changes.",
+      "notes": "Makes the inbox failed-run list and the sidebar badge apply one resolved-interruption rule. The run list accepts suppressResolvedFailures, and issue status changes refresh the filtered run query. Deploy and upstream commits have matching patch IDs."
     }
   ]
 }
