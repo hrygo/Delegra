@@ -20,6 +20,14 @@ const save = () =>
   writeFileSync(statePath, JSON.stringify(state), { mode: 0o600 });
 const send = (value) => process.stdout.write(`${JSON.stringify(value)}\n`);
 
+const recordLaunchPolicyRequest = (method, params) => {
+  (state.launchPolicyRequests ??= []).push({
+    pid: process.pid, method, cwd: params.cwd,
+    permissions: params.permissions, includeLayers: params.includeLayers, limit: params.limit,
+  });
+  save();
+};
+
 function finish(turnId) {
   const turn = state.turns[turnId];
   turn.burstStartedAtMs = Date.now();
@@ -76,15 +84,24 @@ createInterface({ input: process.stdin }).on("line", (line) => {
   if (id === undefined) return;
   if (method === "initialize") {
     send({ id, result: { user: { sessionId: "final-burst-fixture" } } });
+  } else if (method === "permissionProfile/list") {
+    recordLaunchPolicyRequest(method, params);
+    send({ id, result: { data: [], nextCursor: null } });
+  } else if (method === "config/read") {
+    recordLaunchPolicyRequest(method, params);
+    send({ id, result: { config: {} } });
   } else if (
     ["thread/start", "thread/resume", "thread/read"].includes(method)
   ) {
+    if (method !== "thread/read") recordLaunchPolicyRequest(method, params);
     save();
     send({
       id,
       result: {
         model: "fixture-no-model",
         modelProvider: "fixture-no-provider",
+        ...(typeof params.permissions === "string"
+          ? { activePermissionProfile: { id: params.permissions } } : {}),
         thread: {
           id: state.threadId,
           sessionId: "final-burst-fixture",
