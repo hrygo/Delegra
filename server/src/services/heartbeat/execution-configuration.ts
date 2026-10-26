@@ -1,4 +1,5 @@
 import { agentHarnessType } from "@paperclipai/shared";
+import { parseClaudeSafetyPolicy } from "@paperclipai/adapter-claude-local/server";
 import { observabilitySecretValues } from "@paperclipai/adapter-utils/agent-observability";
 import { agentObservabilityService, unavailableAgentObservability, type ResolvedAgentObservability } from "../agent-observability.js";
 import { agentObservabilityLaunch } from "../agent-observability-launch.js";
@@ -243,6 +244,10 @@ export async function prepareHeartbeatExecutionConfiguration(db: Db, input: Hear
   const prepareSkills = async () => {
 
     try {
+      // Use the adapter's closed validator so an invalid opt-in cannot fall
+      // back to the legacy operational/feedback skill set.
+      const includeLegacySkills = agent.adapterType !== "paperclip_runner"
+        && !(agent.adapterType === "claude_local" && parseClaudeSafetyPolicy(effectiveResolvedConfig));
       const versionSelections = hasStoredVersions
         ? new Map(Object.entries(storedVersions).filter((entry): entry is [string, string | null] => entry[1] === null || typeof entry[1] === "string"))
         : skillVersionSelectionMap(runtimeSkillPreference.desiredSkillEntries, {
@@ -252,15 +257,15 @@ export async function prepareHeartbeatExecutionConfiguration(db: Db, input: Hear
         versionSelections, snapshotLatest: true,
         ...(hasStoredVersions && run.contextSnapshot?.skillSelectionSnapshot === true
           ? { onlyKeys: new Set(Object.keys(storedVersions)) }
-          : { selectionConfig: effectiveResolvedConfig, includeLegacy: agent.adapterType !== "paperclip_runner" }),
+          : { selectionConfig: effectiveResolvedConfig, includeLegacy: includeLegacySkills }),
       }, async entries => {
         const available = hasStoredVersions ? entries.filter(entry => Object.prototype.hasOwnProperty.call(storedVersions, entry.key)) : entries;
         const availableKeys = new Set(available.map(entry => entry.key));
         const desiredKeys = hasStoredVersions && run.contextSnapshot?.skillSelectionSnapshot === true
           ? Object.keys(storedVersions)
-          : agent.adapterType === "paperclip_runner"
-            ? resolvePaperclipDesiredSkillNames(effectiveResolvedConfig, available)
-            : resolveLegacyPaperclipDesiredSkillNames(effectiveResolvedConfig, available);
+          : includeLegacySkills
+            ? resolveLegacyPaperclipDesiredSkillNames(effectiveResolvedConfig, available)
+            : resolvePaperclipDesiredSkillNames(effectiveResolvedConfig, available);
         const selectedKeys = new Set(desiredKeys.filter(key => availableKeys.has(key)));
         const resolved = available.filter(entry => selectedKeys.has(entry.key));
         // Optional assignments can outlive project membership. Drop inaccessible

@@ -15,6 +15,7 @@ import { HttpError } from "../errors.js";
 import { heartbeatService } from "../services/heartbeat.js";
 import { bindHeartbeatRunnerHomeMode, prepareHeartbeatExecutionConfiguration, type HeartbeatExecutionConfigurationInput } from "../services/heartbeat/execution-configuration.js";
 import { aiRuntimeConnectionBindingSchema } from "@paperclipai/shared";
+import { PAPERCLIP_OPERATIONAL_SKILL_KEY, PAPERCLIP_FEEDBACK_SKILL_KEYS, readPaperclipSkillSyncPreference } from "@paperclipai/adapter-utils/server-utils";
 import { secretService } from "../services/secrets.js";
 import { instanceSettingsService } from "../services/instance-settings.js";
 import { aiConnectionService } from "../services/ai-connections.js";
@@ -80,21 +81,22 @@ describePostgres("heartbeat execution configuration through adapter dispatch", (
     process.env.PAPERCLIP_HOME = home;
     heartbeat = heartbeatService(db);
     // Exercise real preparation for a managed-capable adapter without calling a provider.
-    registerServerAdapter({
-      type: adapterType, supportsLocalAgentJwt: false,
+    for (const type of [adapterType, "claude_local"]) registerServerAdapter({
+      type, supportsLocalAgentJwt: false,
       execute: async input => {
         captured.set(input.runId, input);
         await db.update(issues).set({ status: "in_review" }).where(eq(issues.id, String(input.context.issueId)));
         await inspect.get(input.agent.id)?.(input);
         return { exitCode: 0, signal: null, timedOut: false, resultJson: {} };
       },
-      testEnvironment: async () => ({ adapterType, status: "pass", checks: [], testedAt: new Date().toISOString() }),
+      testEnvironment: async () => ({ adapterType: type, status: "pass", checks: [], testedAt: new Date().toISOString() }),
     });
   }, 30_000);
   afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); skillFailures.clear(); });
   afterAll(async () => {
     await heartbeat?.drainActiveRunExecutions();
     unregisterServerAdapter(adapterType);
+    unregisterServerAdapter("claude_local");
     await db?.$client.end({ timeout: 0 });
     await temporary?.cleanup();
     if (oldHome === undefined) delete process.env.PAPERCLIP_HOME; else process.env.PAPERCLIP_HOME = oldHome;
@@ -237,6 +239,134 @@ describePostgres("heartbeat execution configuration through adapter dispatch", (
       onFailureSecretsResolved: () => {}, onManagedAiRuntimeAcquired: () => {}, onIdentityRedactorPrepared: () => {},
     }) };
   }
+
+  async function engineeringSkills(companyId: string) {
+    const service = companySkillService(db);
+    return Promise.all(["Plan", "Implement", "Verify", "Review"].map(name =>
+      service.createLocalSkill(companyId, { name: name + " engineering workflow", markdown: "# " + name + "\nPreserve this explicitly selected workflow.\n" })));
+  }
+
+  it.each(["workspace-build", "candidate-review"] as const)(
+    "preserves only explicit skills through %s production preparation",
+    async profile => {
+      for (const selection of ["empty", "engineering"] as const) {
+        const f = await seed();
+        expect((await instanceSettingsService(db).get()).experimental.enableBetaSkills).toBe(false);
+        const selected = selection === "engineering" ? await engineeringSkills(f.companyId) : [];
+        const keys = selected.map(skill => skill.key).sort();
+        const input = await configuration(f, {
+          engine: "cli", dangerouslySkipPermissions: false, claudeSafetyPolicy: { version: 1, profile },
+          paperclipSkillSync: { desiredSkills: keys },
+        }, {}, "claude_local");
+        const result = await input.prepare();
+        expect(result.prepared).toBe(true);
+        if (!result.prepared) throw new Error("Unexpected fixture preparation deferral");
+        expect(result.runtimeSkillEntries.map(skill => skill.key).sort()).toEqual(keys);
+        expect((result.runtimeConfig.paperclipRuntimeSkills as Array<{ key: string }>).map(skill => skill.key).sort()).toEqual(keys);
+        expect(readPaperclipSkillSyncPreference(result.runtimeConfig).desiredSkills.sort()).toEqual(keys);
+        for (const entry of result.runtimeSkillEntries) {
+          expect(await readFile(path.join(entry.source, "SKILL.md"), "utf8")).toContain("Preserve this explicitly selected workflow.");
+        }
+        const [saved] = await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, input.run.id));
+        expect(saved.contextSnapshot).toMatchObject({
+          skillSelectionSnapshot: true,
+          skillVersions: Object.fromEntries(selected.map(skill => [skill.key, skill.currentVersionId])),
+        });
+        expect(Object.keys(saved.contextSnapshot!.skillVersions as object).sort()).toEqual(keys);
+      }
+    },
+  );
+
+  it.each(["codex_local", "claude_local"] as const)(
+    "retains legacy fallback and every selected engineering workflow for untyped %s",
+    async type => {
+      for (const selection of ["default", "engineering"] as const) {
+        const f = await seed();
+        const selected = selection === "engineering" ? await engineeringSkills(f.companyId) : [];
+        const input = await configuration(f, selected.length
+          ? { paperclipSkillSync: { desiredSkills: selected.map(skill => skill.key) } } : {}, {}, type);
+        const result = await input.prepare();
+        expect(result.prepared).toBe(true);
+        if (!result.prepared) throw new Error("Unexpected fixture preparation deferral");
+        const expected = [PAPERCLIP_OPERATIONAL_SKILL_KEY, ...PAPERCLIP_FEEDBACK_SKILL_KEYS, ...selected.map(skill => skill.key)].sort();
+        expect(result.runtimeSkillEntries.map(skill => skill.key).sort()).toEqual(expected);
+        expect(readPaperclipSkillSyncPreference(result.runtimeConfig).desiredSkills.sort()).toEqual(expected);
+      }
+    },
+  );
+
+  it.each(["workspace-build", "candidate-review"].flatMap(profile =>
+    ["empty", "selected"].map(selection => ({ profile, selection }))))(
+    "restores frozen $selection skills for typed Claude $profile after selection and bytes change",
+    async ({ profile, selection }) => {
+      const f = await seed();
+      expect((await instanceSettingsService(db).get()).experimental.enableBetaSkills).toBe(false);
+      const service = companySkillService(db);
+      const original = await service.createLocalSkill(f.companyId, { name: "Frozen workflow", markdown: "# Frozen\nOriginal admitted bytes.\n" });
+      const policy = { engine: "cli", dangerouslySkipPermissions: false, claudeSafetyPolicy: { version: 1, profile } };
+      const frozenKeys = selection === "selected" ? [original.key] : [];
+      const initial = await configuration(f, { ...policy, paperclipSkillSync: { desiredSkills: frozenKeys } }, {}, "claude_local");
+      const first = await initial.prepare();
+      expect(first.prepared).toBe(true);
+      if (!first.prepared) throw new Error("Unexpected fixture preparation deferral");
+      const firstBytes = await Promise.all(first.runtimeSkillEntries.map(entry => readFile(path.join(entry.source, "SKILL.md"), "utf8")));
+      const [saved] = await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, initial.run.id));
+      const frozenVersions = selection === "selected" ? { [original.key]: original.currentVersionId } : {};
+      expect(saved.contextSnapshot).toMatchObject({ skillSelectionSnapshot: true, skillVersions: frozenVersions });
+      expect(Object.keys(saved.contextSnapshot!.skillVersions as object)).toEqual(frozenKeys);
+
+      await service.updateFile(f.companyId, original.id, "SKILL.md", "# Frozen\nChanged current bytes.\n");
+      expect((await service.getById(f.companyId, original.id))!.currentVersionId).not.toBe(original.currentVersionId);
+      const newlySelected = await service.createLocalSkill(f.companyId, { name: "Later workflow" });
+      const currentKeys = selection === "selected" ? [newlySelected.key] : [original.key, newlySelected.key];
+      expect(currentKeys).not.toEqual(frozenKeys);
+      const resumed = await configuration(f, { ...policy, paperclipSkillSync: { desiredSkills: currentKeys } },
+        { skillSelectionSnapshot: true, skillVersions: saved.contextSnapshot!.skillVersions }, "claude_local");
+      const result = await resumed.prepare();
+      expect(result.prepared).toBe(true);
+      if (!result.prepared) throw new Error("Unexpected fixture preparation deferral");
+      expect(result.runtimeSkillEntries.map(entry => entry.key)).toEqual(frozenKeys);
+      expect(Object.fromEntries(result.runtimeSkillEntries.map(entry => [entry.key, entry.versionId]))).toEqual(frozenVersions);
+      expect(readPaperclipSkillSyncPreference(result.runtimeConfig).desiredSkills).toEqual(frozenKeys);
+      expect((result.runtimeConfig.paperclipRuntimeSkills as Array<{ key: string }>).map(entry => entry.key)).toEqual(frozenKeys);
+      expect(await Promise.all(result.runtimeSkillEntries.map(entry => readFile(path.join(entry.source, "SKILL.md"), "utf8")))).toEqual(firstBytes);
+      if (selection === "selected") expect(firstBytes[0]).toContain("Original admitted bytes.");
+      const [recovered] = await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, resumed.run.id));
+      expect(recovered.contextSnapshot).toMatchObject({ skillSelectionSnapshot: true, skillVersions: frozenVersions });
+    },
+  );
+
+  it("keeps native preparation selected-only with every explicit engineering workflow", async () => {
+    const f = await seed();
+    const selected = await engineeringSkills(f.companyId);
+    const keys = selected.map(skill => skill.key).sort();
+    const input = await configuration(f, { paperclipSkillSync: { desiredSkills: keys } });
+    const result = await input.prepare();
+    expect(result.prepared).toBe(true);
+    if (!result.prepared) throw new Error("Unexpected fixture preparation deferral");
+    expect(result.runtimeSkillEntries.map(skill => skill.key).sort()).toEqual(keys);
+    expect(readPaperclipSkillSyncPreference(result.runtimeConfig).desiredSkills.sort()).toEqual(keys);
+  });
+
+  it.each([
+    { name: "unknown profile", change: { claudeSafetyPolicy: { version: 1, profile: "unrestricted" } } },
+    { name: "unsupported version", change: { claudeSafetyPolicy: { version: 2, profile: "workspace-build" } } },
+    { name: "unknown policy key", change: { claudeSafetyPolicy: { version: 1, profile: "workspace-build", allowAll: true } } },
+    { name: "null policy", change: { claudeSafetyPolicy: null } },
+    { name: "incompatible engine", change: { engine: "acp" } },
+    { name: "permission bypass", change: { dangerouslySkipPermissions: true } },
+  ])("fails closed before adapter dispatch for typed Claude $name", async ({ change }) => {
+    const f = await seed();
+    await db.update(agents).set({ adapterType: "claude_local", adapterConfig: {
+      engine: "cli", dangerouslySkipPermissions: false,
+      claudeSafetyPolicy: { version: 1, profile: "candidate-review" }, ...change,
+    } }).where(eq(agents.id, f.agentId));
+    const { finished, input } = await execute(f);
+    expect(finished.status).toBe("failed");
+    expect(finished.error).toContain("claudeSafetyPolicy");
+    expect(input).toBeUndefined();
+    expect(finished.contextSnapshot?.skillVersions).toBeUndefined();
+  });
 
   it.each(["fresh", "saved empty"])("prepares a %s native skill selection while another run holds the company cache lock", async kind => {
     const f = await seed();
