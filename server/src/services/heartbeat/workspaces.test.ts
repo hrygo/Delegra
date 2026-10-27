@@ -182,6 +182,30 @@ describe("heartbeat workspace module", () => {
     }
   });
 
+  it("explains a configured cwd whose parent volume does not exist here", async () => {
+    const remoteCwd = path.join(testRoot, "target-only-home", "workspaces");
+    const mkdir = vi.spyOn(fs, "mkdir").mockRejectedValue(
+      Object.assign(new Error("ENOENT: no such file or directory"), { code: "ENOENT" }),
+    );
+    try {
+      await expect(createHeartbeatWorkspaceResolver(databaseWithResults().db).resolveWorkspaceForRun(
+        { ...agent(), adapterType: "codex_local", adapterConfig: { cwd: remoteCwd } },
+        {}, null,
+        { executionEnvironmentDriver: "ssh" },
+      )).rejects.toMatchObject({
+        code: "workspace_validation_failed",
+        message: expect.stringContaining("remoteWorkspacePath"),
+        resultJson: { workspaceValidation: {
+          reason: "configured_workspace_unavailable",
+          resolvedCwd: remoteCwd,
+          environmentDriver: "ssh",
+        } },
+      });
+    } finally {
+      mkdir.mockRestore();
+    }
+  });
+
   it("still creates a local anchor workspace", async () => {
     const localCwd = path.join(testRoot, "local-anchor");
     const result = await createHeartbeatWorkspaceResolver(databaseWithResults().db).resolveWorkspaceForRun(
