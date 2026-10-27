@@ -9,23 +9,22 @@
     "commit": "8cfb6d7f6e0610eb15e07480d0d892807015f944",
     "base": "canary/v2026.1024.0-canary.7",
     "patches": [
-      "budget-allow-unknown-usage",
-      "claude-max-turns-auth-classification",
-      "codex-remote-trust-bypass",
-      "codex-structured-launch-policy",
-      "company-cli-fixture-isolation",
+      "managed-codex-project-auth",
+      "native-ssh-macos-process-identity",
+      "managed-claude-host-auth-boundary",
+      "portable-test-baselines",
       "fork-review-workflow-token",
       "inbox-badge-resolved-failed-runs",
       "managed-agent-validation-environment",
-      "managed-claude-host-auth-boundary",
+      "workspace-test-host-isolation",
+      "company-cli-fixture-isolation",
+      "codex-structured-launch-policy",
       "managed-claude-task-safety",
-      "managed-codex-project-auth",
       "managed-ssh-run-environment",
-      "native-ssh-macos-process-identity",
       "optional-ssh-file-error-contract",
-      "portable-test-baselines",
+      "budget-allow-unknown-usage",
       "remote-anchor-workspace-error",
-      "workspace-test-host-isolation"
+      "claude-max-turns-auth-classification"
     ]
   },
   "base": {
@@ -351,6 +350,19 @@
       "verifiedAt": "2026-10-28",
       "retireWhen": "The accepted stable base adds --skip-git-repo-check for every remote execution target, not only the sandbox transport.",
       "notes": "SSH remote workspaces are staged from the controller and can hold no git checkout at all (probe tasks, project-less issues), where Codex refuses the cwd with 'Not inside a trusted directory'. The bypass belongs to the transport instead of depending on an operator reminder in adapterConfig.extraArgs; buildCodexExecArgs keeps an operator copy authoritative, so the flag is never duplicated."
+    },
+    {
+      "id": "remote-anchor-workspace-enoent",
+      "kind": "fork-only",
+      "status": "active",
+      "commits": [
+        "1f73c0e96f100973c9b84886447afce1b8a8fcb6"
+      ],
+      "owner": "hrygo",
+      "reviewBy": "2026-11-30",
+      "verifiedAt": "2026-10-28",
+      "retireWhen": "The accepted stable base reports an uncreatable controller anchor path for every errno, or refuses a remote environment's remoteWorkspacePath as adapterConfig.cwd.",
+      "notes": "resolveAnchorWorkspaceForRun converted EACCES/EPERM into a workspace-validation message but let ENOENT escape as a bare setup error. A target-host path such as /home/<remote-user>/... on a macOS controller hits ENOENT because the parent volume does not exist, so operators saw an unexplained mkdir failure. The guard now covers ENOENT and names the SSH environment's remoteWorkspacePath as the likely source."
     }
   ]
 }
