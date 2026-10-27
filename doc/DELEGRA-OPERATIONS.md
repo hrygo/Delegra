@@ -124,7 +124,37 @@ does not complete a missing provider receipt or establish that a provider stoppe
 
 ## Deployment and rollback
 
-The current deployment is `deploy/v2026.1024.0-canary.7-r11`
+The current deployment is `deploy/v2026.1024.0-canary.7-r12`
+(`8cfb6d7f6e0610eb15e07480d0d892807015f944`). It replaced r11 on 2026-10-28. The
+release was installed without a restart on 2026-10-27 at 21:40 Asia/Shanghai,
+and the supervisor started it at 02:13 on 2026-10-28. An operator restart at
+06:53 adopted the active `paperclip_runner` run and reported the same commit.
+The controller health reported `ok` and commit `8cfb6d7f6`. [PR
+#29](https://github.com/hrygo/Delegra/pull/29) passed all 48 CI checks and the
+`Delegra branch policy` gate. The 16 active patch IDs are recorded in
+`currentDeployment` in [`.delegra/patches.json`](../.delegra/patches.json).
+
+This release carries two backports of upstream PR
+[#17865](https://github.com/paperclipai/paperclip/pull/17865). The first keeps a
+run that stopped on the CLI's structured `error_max_turns` result out of the
+login lane, so a quoted upstream `401` can no longer mark the shared AI
+connection unhealthy. The second makes an AI repair card match a connection on
+`config.ai.provider` instead of the transport catalog slug, so a custom gateway
+connection can resolve the card. Live proof on the running release: a pending
+repair card completed against the gateway connection whose catalog slug is
+`local`, with no workaround and no manual metadata edit.
+
+r11 is the source rollback release. r12 has no schema, migration, or database
+change relative to r11, and the switch performed no schema migration. Preserve
+the current database and the existing service configuration.
+
+Do not hot-patch a compiled `dist` file inside an installed release. The adapter
+packages export TypeScript sources (`./src/...`) and the service runs under
+`tsx`, so the runtime never loads the edited `dist` copy. An earlier r11
+`parse.js` hotfix had no effect for this reason; ship the fix through a release
+tag instead.
+
+The previous deployment was `deploy/v2026.1024.0-canary.7-r11`
 (`4c833df7b063e45359339a80e61c28ed3493b07e`, tree
 `80e1f63041bc8a0dcdd805948ff0c7906386b951`). It replaced r10 on
 2026-10-27 at 11:52 Asia/Shanghai. The controller health reported `ok` and the
