@@ -295,6 +295,25 @@
       "verifiedAt": "2026-10-27",
       "retireWhen": "The accepted stable base applies an explicit allow-unpriced policy consistently to terminal pending usage, operator resume and final native dispatch recovery checks.",
       "notes": "The local operator allows unavailable costs to be valued as zero for budget admission. Keep unknown and pending accounting evidence, actual charges, held reservations and manual pauses. Open native recovery still gates new work; final dispatch checks other recoveries in the same scope and UTC window. No receipt completion, hold release, schema change or default-policy change. Focused real PostgreSQL regressions and independent review cover admission, operator resume, final-dispatch interleaving and UTC month boundaries; full repository checks and live rollout are separate evidence."
+    },
+    {
+      "id": "remote-anchor-workspace-error",
+      "kind": "upstream-pr",
+      "status": "active",
+      "upstreamPr": "paperclipai/paperclip#17859",
+      "upstreamBase": "2d72f2c4c0b2f119db3b94ea75bd8ee8b70ed959",
+      "upstreamHead": "8349ba0aa868b4f70125705dd1a729078e083ef7",
+      "upstreamCommits": [
+        "8349ba0aa868b4f70125705dd1a729078e083ef7"
+      ],
+      "commits": [
+        "ea5dc2f6f2e3e16018728f01922a1297d3babdf5"
+      ],
+      "owner": "hrygo",
+      "reviewBy": "2026-11-30",
+      "verifiedAt": "2026-10-27",
+      "retireWhen": "The accepted stable base reports an uncreatable configured anchor cwd as workspace_validation_failed with reason configured_workspace_unavailable.",
+      "notes": "A configured cwd that belongs to a remote target previously reached the operator as a bare EACCES during anchor workspace materialization. The resolver keeps creation and translates EACCES/EPERM into an explained workspace validation failure; successful paths are unchanged."
     }
   ]
 }
