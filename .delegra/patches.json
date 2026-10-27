@@ -314,6 +314,27 @@
       "verifiedAt": "2026-10-27",
       "retireWhen": "The accepted stable base reports an uncreatable configured anchor cwd as workspace_validation_failed with reason configured_workspace_unavailable.",
       "notes": "A configured cwd that belongs to a remote target previously reached the operator as a bare EACCES during anchor workspace materialization. The resolver keeps creation and translates EACCES/EPERM into an explained workspace validation failure; successful paths are unchanged."
+    },
+    {
+      "id": "claude-max-turns-auth-classification",
+      "kind": "upstream-pr",
+      "status": "active",
+      "upstreamPr": "paperclipai/paperclip#17865",
+      "upstreamBase": "0cb3fc7db591ba23e21fbbc70042bc44ec7d6f20",
+      "upstreamHead": "e65b60e99af4473b4796f2625232a3fda4c0391d",
+      "upstreamCommits": [
+        "190270e4d71cf9cd85037581067c51571452d8be",
+        "e65b60e99af4473b4796f2625232a3fda4c0391d"
+      ],
+      "commits": [
+        "3604f60bc9874918b04d9402ff5a8c1c88ce5322",
+        "306ce1f78e137cfa1aefe93104c2fc2353be1e77"
+      ],
+      "owner": "hrygo",
+      "reviewBy": "2026-11-30",
+      "verifiedAt": "2026-10-27",
+      "retireWhen": "The first stable tag that contains paperclipai/paperclip#17865.",
+      "notes": "A Claude run that stopped on the structured error_max_turns result was still classified from auth text in its own stdout. The adapter then marked the shared AI connection unhealthy and blocked every agent on it. The gate now lets the structured stop win while the scoped token-failure markers keep the real login lane. The repair card now matches AI intents on config.ai.provider instead of the transport catalog slug, so a custom gateway connection can resolve the block. The running r11 release carries a temporary hotfix of parse.js until this patch is deployed; remove that hotfix when a release includes the patch."
     }
   ]
 }
