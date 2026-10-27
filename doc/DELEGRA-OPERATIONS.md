@@ -117,6 +117,11 @@ entry for the installed native package, preserving the per-run cache projection;
 do not repair this by installing a different global pnpm or rewriting a previous
 toolchain revision.
 
+An operator can explicitly select `unpricedUsagePolicy=allow` to value unknown
+costs as zero for budget admission. See [Costs and Budgets](../docs/guides/board-operator/costs-and-budgets.md)
+for the remaining accounting, reservation and recovery boundaries. This policy
+does not complete a missing provider receipt or establish that a provider stopped.
+
 ## Deployment and rollback
 
 The current deployment is `deploy/v2026.1024.0-canary.7-r10`
@@ -141,10 +146,11 @@ skill selections through the normal board API. Full configuration readback
 confirmed 75 explicit skill references. Models, effort, connections, execution
 environments, environment variables and unrelated adapter fields were unchanged.
 No agent was resumed, and no run was active before or after this configuration
-update. Live model, tool and finalization qualification, and the real product
-slice remain pending behind the unpriced Responses gate. Deployment health and
-configuration readback do not establish pilot acceptance. Copilot v59 live
-qualification remains pending.
+update. At that configuration checkpoint, live model, tool and finalization
+qualification, and the real product slice remained pending. Later qualification
+uses the current operator cost policy and observed execution recovery state.
+Deployment health and configuration readback do not establish pilot acceptance.
+Copilot v59 live qualification remains pending.
 
 The earlier 2026-10-27 environment repair installed
 `deploy/v2026.1024.0-canary.7-r8` (`ec00bcd4c001502dde7f24ee7f72825efff495b8`),

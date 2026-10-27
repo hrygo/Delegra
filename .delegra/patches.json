@@ -281,6 +281,19 @@
       "verifiedAt": "2026-10-27",
       "retireWhen": "The accepted stable base normalizes confirmed remote optional-file absence without swallowing permission, transport, timeout or local SSH setup errors.",
       "notes": "The managed routed home can legitimately have no auth.json. One bounded metadata probe maps only proven absence to ENOENT, preserving successful provider output and host authentication. Synthetic POSIX/transport regressions pass; no credential contents or data migration."
+    },
+    {
+      "id": "budget-allow-unknown-usage",
+      "kind": "fork-only",
+      "status": "active",
+      "commits": [
+        "38e2a2fc86b85e5ac97d0765443a20d1471cb4e4"
+      ],
+      "owner": "hrygo",
+      "reviewBy": "2026-11-30",
+      "verifiedAt": "2026-10-27",
+      "retireWhen": "The accepted stable base applies an explicit allow-unpriced policy consistently to terminal pending usage, operator resume and final native dispatch recovery checks.",
+      "notes": "The local operator allows unavailable costs to be valued as zero for budget admission. Keep unknown and pending accounting evidence, actual charges, held reservations and manual pauses. Open native recovery still gates new work; final dispatch checks other recoveries in the same scope and UTC window. No receipt completion, hold release, schema change or default-policy change. Focused real PostgreSQL regressions and independent review cover admission, operator resume, final-dispatch interleaving and UTC month boundaries; full repository checks and live rollout are separate evidence."
     }
   ]
 }
