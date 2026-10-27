@@ -48,6 +48,8 @@ Paperclip enforces budgets automatically:
 
 An auto-paused agent can be resumed by increasing its budget or waiting for the next calendar month.
 
+For a budget policy, `unpricedUsagePolicy` defaults to `block`: unpriced usage or a completed run awaiting accounting can stop new work. With `allow`, unknown amounts do not independently cause a budget hard stop and are treated as zero for budget decisions. Pending accounting and unknown receipts remain visible and are not marked complete. Known spend still counts, held reservations still consume capacity, and native recovery and manual pause gates still apply. A later receipt can add actual charges and trigger the limit; allowing unknown amounts can therefore understate current spend.
+
 ## Viewing Costs
 
 ### Dashboard

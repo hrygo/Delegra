@@ -9,6 +9,7 @@ import {
   budgetIncidents,
   budgetPolicies,
   budgetReservations,
+  browserUseRuns,
   companies,
   costEvents,
   createDb,
@@ -568,6 +569,64 @@ describeEmbeddedPostgres("run-dispatch postgres adapter", () => {
     } finally { race.mockRestore(); }
   });
 
+  it("blocks provider handoff when another native run opens recovery after admission", async () => {
+    const { companyId, agentId } = await seedCompanyAndAgent();
+    const runId = await seedRun({ companyId, agentId, status: "running" });
+    await budgetService(db).upsertPolicy(companyId, { scopeType: "company", scopeId: companyId,
+      windowKind: "lifetime", amount: 100, unpricedUsagePolicy: "allow" }, null);
+    const reservation = await reserveRunBudget(db, companyId, runId, null);
+    const issueId = randomUUID();
+    await seedIssue({ companyId, issueId, status: "in_progress", assigneeAgentId: agentId });
+    const otherRunId = await seedRun({ companyId, agentId, status: "running" });
+    const transaction = db.transaction.bind(db);
+    let phase = 0, inserted = false;
+    const insertRecovery = async () => {
+      inserted = true;
+      await db.update(heartbeatRuns).set({ status: "cancelled", finishedAt: new Date(), runtimeMode: "native",
+        nativeIssueId: issueId, costAccountingPending: true }).where(eq(heartbeatRuns.id, otherRunId));
+      await db.insert(nativeRunFinalizations).values({ companyId, issueId, runId: otherRunId, phase: "recovering" });
+    };
+    // The browser exposure query is the last read in computeObservedSpends.
+    // Commit recovery after its snapshot, before the final handoff check.
+    const race = vi.spyOn(db, "transaction").mockImplementation(async (callback, config) => {
+      const current = ++phase;
+      return transaction(async tx => {
+        if (current !== 2) return callback(tx);
+        const wrapped = new Proxy(tx, { get(target, property) {
+          if (property !== "select") { const value = Reflect.get(target, property); return typeof value === "function" ? value.bind(target) : value; }
+          return (...args: Parameters<typeof tx.select>) => {
+            const selection = tx.select(...args);
+            return new Proxy(selection, { get(selectTarget, key) {
+              const value = Reflect.get(selectTarget, key);
+              if (key !== "from") return typeof value === "function" ? value.bind(selectTarget) : value;
+              return (table: Parameters<typeof selection.from>[0]) => {
+                const query = selection.from(table);
+                if (table !== browserUseRuns) return query;
+                const chain = (builder: object): object => new Proxy(builder, { get(queryTarget, method) {
+                  const member = Reflect.get(queryTarget, method);
+                  if (typeof member !== "function") return member;
+                  if (method === "where") return (...whereArgs: unknown[]) =>
+                    Promise.resolve(member.apply(queryTarget, whereArgs)).then(async result => { await insertRecovery(); return result; });
+                  return (...methodArgs: unknown[]) => chain(member.apply(queryTarget, methodArgs));
+                } });
+                return chain(query);
+              };
+            } });
+          };
+        } });
+        return callback(wrapped as typeof tx);
+      }, config);
+    });
+    const dispatch = vi.fn(async () => "must not run");
+    try {
+      expect(await createPostgresRunDispatchAdapter(db).dispatchResolvedInteractionIfCurrent({ companyId, runId,
+        reservationId: reservation.id, expectedStatus: "running", now: new Date(), dispatch })).toMatchObject({
+          dispatched: false, admissionBlockReason: "New work must wait while a native run recovers its unfinished accounting" });
+      expect(inserted).toBe(true);
+      expect(dispatch).not.toHaveBeenCalled();
+    } finally { race.mockRestore(); }
+  });
+
   it("performs the post-admission capacity check in a PostgreSQL read-only transaction", async () => {
     const { companyId, agentId } = await seedCompanyAndAgent();
     const runId = await seedRun({ companyId, agentId, status: "running" });
@@ -835,6 +894,18 @@ describeEmbeddedPostgres("run-dispatch postgres adapter", () => {
       leaseOwner: owner, leaseExpiresAt: new Date(Date.now() + 60_000) });
     return { companyId, agentId, issueId, runId, owner, reservation };
   }
+
+  it("dispatches the original running native recovery under its valid lease and allow policy", async () => {
+    const f = await seedRecoveryAdmission();
+    await budgetService(db).upsertPolicy(f.companyId, { scopeType: "company", scopeId: f.companyId,
+      windowKind: "lifetime", amount: 100, unpricedUsagePolicy: "allow" }, null);
+    const dispatch = vi.fn(async () => "recovered");
+    const gate = await createPostgresRunDispatchAdapter(db).dispatchResolvedInteractionIfCurrent({ companyId: f.companyId,
+      runId: f.runId, reservationId: f.reservation.id, recoveryLeaseOwner: f.owner, expectedStatus: "running", now: new Date(), dispatch });
+    expect(gate.dispatched).toBe(true);
+    if (gate.dispatched) expect(await gate.resultPromise).toBe("recovered");
+    expect(dispatch).toHaveBeenCalledOnce();
+  });
 
   it.each(["reservation", "dispatch"] as const)("orders recovery %s behind a coordinator before taking finalization's issue and run locks", async boundary => {
     const f = await seedRecoveryAdmission();

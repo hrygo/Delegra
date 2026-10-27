@@ -11,6 +11,7 @@ import {
   companies,
   costEvents,
   heartbeatRuns,
+  nativeRunFinalizations,
   projects,
 } from "@paperclipai/db";
 import type {
@@ -184,9 +185,13 @@ function unpricedUsageBlocks(policy: PolicyRow, observed: ObservedSpend) {
     && (observed.unpricedEventCount > 0 || observed.unknownBrowserRunCount > 0);
 }
 
+function pendingAccountingBlocks(policy: PolicyRow, observed: ObservedSpend) {
+  return policy.unpricedUsagePolicy !== "allow" && observed.pendingRunCount > observed.recoveringRunCount;
+}
+
 function observedBlocks(policy: PolicyRow, observed: Awaited<ReturnType<typeof computeObservedSpend>>) {
   if (!policy.isActive || !policy.hardStopEnabled || policy.amount <= 0) return false;
-  return compareCents(observed.totalExact, policy.amount) >= 0 || (observed.pendingRunCount - observed.recoveringRunCount) > 0 || unpricedUsageBlocks(policy, observed);
+  return compareCents(observed.totalExact, policy.amount) >= 0 || pendingAccountingBlocks(policy, observed) || unpricedUsageBlocks(policy, observed);
 }
 export async function policyBlocks(db: Db, policy: PolicyRow) {
   if (!policy.isActive || !policy.hardStopEnabled || policy.amount <= 0) return false;
@@ -211,10 +216,25 @@ export async function recheckAdmittedRunBudgetReadOnly(db: Db, input: {
     const policies = await db.select().from(budgetPolicies).where(and(eq(budgetPolicies.companyId, input.companyId),
       eq(budgetPolicies.isActive, true), eq(budgetPolicies.hardStopEnabled, true), eq(budgetPolicies.metric, "billed_cents"),
       sql`${budgetPolicies.amount} > 0`, budgetPoliciesForRun(input.companyId, input.agentId, input.projectId)));
-    const observations = await computeObservedSpends(db, policies);
+    const asOf = new Date();
+    const observations = await computeObservedSpends(db, policies, asOf);
     for (const [index, policy] of policies.entries()) {
       const observed = observations[index];
       if (observedBlocks(policy, observed)) return "Applicable budget no longer permits provider work";
+      // Recheck other open recoveries at handoff, independently of the earlier
+      // aggregate. The current run's own recovery is protected by its lease.
+      const [otherRecovery] = await db.select({ id: heartbeatRuns.id }).from(heartbeatRuns)
+        .innerJoin(nativeRunFinalizations, and(eq(nativeRunFinalizations.companyId, heartbeatRuns.companyId),
+          eq(nativeRunFinalizations.runId, heartbeatRuns.id)))
+        .where(and(eq(heartbeatRuns.companyId, input.companyId), sql`${heartbeatRuns.id} <> ${input.runId}`,
+          eq(heartbeatRuns.runtimeMode, "native"), eq(heartbeatRuns.costAccountingPending, true),
+          inArray(heartbeatRuns.status, ["succeeded", "failed", "timed_out", "cancelled", "interrupted"]),
+          isNull(nativeRunFinalizations.resultId), sql`${nativeRunFinalizations.phase} <> 'terminal_failure'`,
+          policy.scopeType === "agent" ? eq(heartbeatRuns.agentId, policy.scopeId) : undefined,
+          policy.scopeType === "project" ? sql`${heartbeatRuns.usageJson}->'ledgerScope'->>'projectId' = ${policy.scopeId}` : undefined,
+          policy.windowKind === "calendar_month_utc" ? sql`coalesce(${heartbeatRuns.finishedAt}, ${asOf.toISOString()}::timestamptz) >= ${observed.windowStart.toISOString()}::timestamptz
+            and coalesce(${heartbeatRuns.finishedAt}, ${asOf.toISOString()}::timestamptz) < ${observed.windowEnd.toISOString()}::timestamptz` : undefined)).limit(1);
+      if (otherRecovery) return "New work must wait while a native run recovers its unfinished accounting";
       const capacity = compareCents(addCents(observed.ledgerCents, observed.effectiveHeldCents), policy.amount);
       if (capacity > 0 || (compareCents(reservation.amountCents, 0) === 0 && capacity >= 0))
         return "Available budget is reserved by unfinished runs";
@@ -586,10 +606,10 @@ export function budgetServiceInTransaction(db: Db, publications: ActivityPublica
         await createIncidentIfNeeded(policy, "hard", observed);
         await pauseAndCancelScopeForBudget(policy, !scope.budgetHeld);
         const title = scopeType === "company" ? "Company" : scopeType === "agent" ? "Agent" : "Project";
-        if (observed.pendingRunCount > 0) {
+        if (compareCents(observed.totalExact, policy.amount) < 0 && pendingAccountingBlocks(policy, observed)) {
           return { scopeType, scopeId, scopeName: scope.name, reason: `${title} cannot start work while completed runs await accounting.` };
         }
-        if (unpricedUsageBlocks(policy, observed)) {
+        if (compareCents(observed.totalExact, policy.amount) < 0 && unpricedUsageBlocks(policy, observed)) {
           return { scopeType, scopeId, scopeName: scope.name, reason: `${title} cannot start work because recorded usage has no reliable price.` };
         }
         return { scopeType, scopeId, scopeName: scope.name, reason: scopeType === "project"
@@ -917,7 +937,7 @@ export function budgetServiceInTransaction(db: Db, publications: ActivityPublica
         if (unpricedUsageBlocks(policy, observed)) {
           throw unprocessable("Resolve unpriced usage or explicitly allow it in the budget policy before resuming");
         }
-        if (observed.pendingRunCount > 0) throw unprocessable("Completed runs must finish accounting before resuming");
+        if (pendingAccountingBlocks(policy, observed) || observed.recoveringRunCount > 0) throw unprocessable("Completed runs must finish accounting before resuming");
         if (compareCents(observed.totalExact, nextAmount) >= 0) {
           throw unprocessable("New budget must exceed current observed spend");
         }

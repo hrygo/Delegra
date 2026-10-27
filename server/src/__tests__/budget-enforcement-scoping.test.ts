@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { and, eq, sql } from "drizzle-orm";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { agents, budgetPolicies, budgetReservations, companies, costEvents, createDb, heartbeatRuns, projects, type Db } from "@paperclipai/db";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { agents, budgetIncidents, budgetPolicies, budgetReservations, companies, costEvents, createDb, heartbeatRuns, issues, nativeRunFinalizations, projects, type Db } from "@paperclipai/db";
 import { getEmbeddedPostgresTestSupport, startEmbeddedPostgresTestDatabase } from "./helpers/embedded-postgres.js";
-import { budgetService, computeObservedSpend } from "../services/budgets.js";
+import { budgetService, computeObservedSpend, recheckAdmittedRunBudgetReadOnly } from "../services/budgets.js";
 import { reserveRunBudget } from "../services/budget-reservations.js";
 import { accountRunCost } from "../services/run-cost-accounting.js";
 import { persistUsageReceipt, type UsageReceiptEnvelope } from "../services/usage-receipts.js";
@@ -231,6 +231,78 @@ const support = await getEmbeddedPostgresTestSupport();
     expect(await accountRunCost(db, f.runId)).toBe(false);
     expect((await f.readRun()).costAccountingPending).toBe(true);
     expect(await db.select().from(costEvents).where(and(eq(costEvents.companyId, f.companyId), eq(costEvents.heartbeatRunId, f.runId)))).toHaveLength(0);
+  });
+
+  it("allows missing terminal accounting under allow while preserving holds and enforcing known spend", async () => {
+    const f = await fixture({ scope: "project", reservationCents: "60" });
+    await db.insert(budgetReservations).values({ companyId: f.companyId, runId: f.runId, agentId: f.agentId,
+      projectId: f.projectId, amountCents: "50", providerStartedAt: new Date() });
+    await db.update(heartbeatRuns).set({ status: "cancelled", finishedAt: new Date() }).where(eq(heartbeatRuns.id, f.runId));
+    const service = budgetService(db);
+    expect(await service.getInvocationBlock(f.companyId, f.agentId, { projectId: f.projectId })).toMatchObject({ reason: expect.stringContaining("await accounting") });
+    await db.update(budgetPolicies).set({ unpricedUsagePolicy: "allow" }).where(eq(budgetPolicies.id, f.policy.id));
+    expect(await service.getInvocationBlock(f.companyId, f.agentId, { projectId: f.projectId })).toBeNull();
+    expect((await service.overview(f.companyId)).policies[0]).toMatchObject({ pendingRunCount: 1, status: "ok" });
+    expect((await f.readRun()).costAccountingPending).toBe(true);
+    expect((await f.readRun()).usageJson?.accountingReceiptReady).toBe(false);
+    expect((await db.select().from(budgetReservations).where(eq(budgetReservations.runId, f.runId)))[0].state).toBe("held");
+    await expect(reserveRunBudget(db, f.companyId, await f.queuedRun(), f.projectId)).rejects.toThrow("reserved");
+    await db.insert(costEvents).values({ companyId: f.companyId, agentId: f.agentId, projectId: f.projectId,
+      provider: "test", model: "test", billingType: "metered_api", costStatus: "reported", costCents: 100, occurredAt: new Date() });
+    expect(await service.getInvocationBlock(f.companyId, f.agentId, { projectId: f.projectId })).toMatchObject({ reason: "Project cannot start work because its budget hard-stop is still exceeded." });
+  });
+
+  it("allows an operator budget raise with unknown terminal accounting and retains manual pauses", async () => {
+    const f = await fixture({ scope: "project" });
+    await db.update(heartbeatRuns).set({ status: "cancelled", finishedAt: new Date() }).where(eq(heartbeatRuns.id, f.runId));
+    const service = budgetService(db);
+    await service.getInvocationBlock(f.companyId, f.agentId, { projectId: f.projectId });
+    const [incident] = await db.select().from(budgetIncidents).where(eq(budgetIncidents.policyId, f.policy.id));
+    await expect(service.resolveIncident(f.companyId, incident.id, { action: "raise_budget_and_resume", amount: 200 }, "board"))
+      .rejects.toThrow("finish accounting");
+    await db.update(budgetPolicies).set({ unpricedUsagePolicy: "allow" }).where(eq(budgetPolicies.id, f.policy.id));
+    expect(await service.resolveIncident(f.companyId, incident.id, { action: "raise_budget_and_resume", amount: 200 }, "board"))
+      .toMatchObject({ status: "resolved" });
+    await db.update(projects).set({ pauseReason: "manual", pausedAt: new Date() }).where(eq(projects.id, f.projectId));
+    expect(await service.getInvocationBlock(f.companyId, f.agentId, { projectId: f.projectId })).toMatchObject({ reason: expect.stringContaining("paused") });
+    expect((await db.select().from(projects).where(eq(projects.id, f.projectId)))[0].pauseReason).toBe("manual");
+    expect((await f.readRun()).costAccountingPending).toBe(true);
+  });
+
+  it("preserves native recovery admission and final dispatch gates under allow", async () => {
+    const f = await fixture({ scope: "project" });
+    await db.update(budgetPolicies).set({ unpricedUsagePolicy: "allow" }).where(eq(budgetPolicies.id, f.policy.id));
+    const [issue] = await db.insert(issues).values({ companyId: f.companyId, title: "Recovery" }).returning();
+    await db.update(heartbeatRuns).set({ status: "cancelled", finishedAt: new Date(), runtimeMode: "native", nativeIssueId: issue.id }).where(eq(heartbeatRuns.id, f.runId));
+    await db.insert(nativeRunFinalizations).values({ companyId: f.companyId, runId: f.runId, issueId: issue.id, phase: "recovering" });
+    const nextRunId = await f.queuedRun();
+    const [reservation] = await db.insert(budgetReservations).values({ companyId: f.companyId, runId: nextRunId,
+      agentId: f.agentId, projectId: f.projectId, amountCents: "0" }).returning();
+    expect(await budgetService(db).getInvocationBlock(f.companyId, f.agentId, { projectId: f.projectId })).toMatchObject({ reason: expect.stringContaining("native run recovers") });
+    expect(await recheckAdmittedRunBudgetReadOnly(db, { companyId: f.companyId, agentId: f.agentId, projectId: f.projectId,
+      runId: nextRunId, reservationId: reservation.id })).toContain("native run recovers");
+
+  });
+
+  it("uses one UTC month timestamp for a recovering run without finishedAt", async () => {
+    const f = await fixture({ scope: "project" });
+    await db.update(budgetPolicies).set({ unpricedUsagePolicy: "allow", windowKind: "calendar_month_utc" }).where(eq(budgetPolicies.id, f.policy.id));
+    const [issue] = await db.insert(issues).values({ companyId: f.companyId, title: "Month boundary recovery" }).returning();
+    await db.update(heartbeatRuns).set({ status: "cancelled", finishedAt: null, runtimeMode: "native", nativeIssueId: issue.id }).where(eq(heartbeatRuns.id, f.runId));
+    await db.insert(nativeRunFinalizations).values({ companyId: f.companyId, runId: f.runId, issueId: issue.id, phase: "recovering" });
+    const nextRunId = await f.queuedRun();
+    const [reservation] = await db.insert(budgetReservations).values({ companyId: f.companyId, runId: nextRunId,
+      agentId: f.agentId, projectId: f.projectId, amountCents: "0" }).returning();
+    // The database transaction clock remains in the actual month while the
+    // application evaluates the first instant of the next UTC month.
+    const actual = new Date();
+    const nextMonth = new Date(Date.UTC(actual.getUTCFullYear(), actual.getUTCMonth() + 1, 1));
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(nextMonth);
+    try {
+      expect(await recheckAdmittedRunBudgetReadOnly(db, { companyId: f.companyId, agentId: f.agentId, projectId: f.projectId,
+        runId: nextRunId, reservationId: reservation.id })).toContain("native run recovers");
+    } finally { vi.useRealTimers(); }
   });
 
   it.each(["pre-provider release", "stale pending marker"])("releases accounting-induced holds after %s", async kind => {
