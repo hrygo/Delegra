@@ -349,7 +349,7 @@
       "reviewBy": "2026-11-30",
       "verifiedAt": "2026-10-28",
       "retireWhen": "The accepted stable base adds --skip-git-repo-check for every remote execution target, not only the sandbox transport.",
-      "notes": "SSH remote workspaces are staged from the controller and can hold no git checkout at all (probe tasks, project-less issues), where Codex refuses the cwd with 'Not inside a trusted directory'. The bypass belongs to the transport instead of depending on an operator reminder in adapterConfig.extraArgs; buildCodexExecArgs keeps an operator copy authoritative, so the flag is never duplicated."
+      "notes": "SSH remote workspaces are staged from the controller and can hold no git checkout at all (probe tasks, project-less issues), where Codex refuses the cwd with 'Not inside a trusted directory'. On 2026-10-28 this failed 15 runs across two agents until the flag was added by hand to extraArgs. The bypass now belongs to the transport; buildCodexExecArgs keeps an operator copy authoritative, so the flag is never duplicated."
     },
     {
       "id": "remote-anchor-workspace-enoent",
