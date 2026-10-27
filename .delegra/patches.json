@@ -5,8 +5,8 @@
     "deploy": "deploy"
   },
   "currentDeployment": {
-    "tag": "deploy/v2026.1024.0-canary.7-r11",
-    "commit": "4c833df7b063e45359339a80e61c28ed3493b07e",
+    "tag": "deploy/v2026.1024.0-canary.7-r12",
+    "commit": "8cfb6d7f6e0610eb15e07480d0d892807015f944",
     "base": "canary/v2026.1024.0-canary.7",
     "patches": [
       "managed-codex-project-auth",
@@ -22,7 +22,9 @@
       "managed-claude-task-safety",
       "managed-ssh-run-environment",
       "optional-ssh-file-error-contract",
-      "budget-allow-unknown-usage"
+      "budget-allow-unknown-usage",
+      "remote-anchor-workspace-error",
+      "claude-max-turns-auth-classification"
     ]
   },
   "base": {
