@@ -924,6 +924,14 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     const runtimeExecutionTarget = overrideAdapterExecutionTargetRemoteCwd(executionTarget, effectiveExecutionCwd);
     const executionTargetIsSandbox =
       runtimeExecutionTarget?.kind === "remote" && runtimeExecutionTarget.transport === "sandbox";
+    // An SSH remote workspace is staged from the controller and may hold no git
+    // checkout at all (a probe task, or a project-less issue). Codex refuses a
+    // cwd outside a trusted directory, and the remote host cannot be trusted
+    // ahead of time, so the bypass belongs to the transport rather than to an
+    // operator remembering `extraArgs`. buildCodexExecArgs keeps an operator
+    // copy authoritative, so the flag is never duplicated.
+    const executionTargetIsSshRemote =
+      runtimeExecutionTarget?.kind === "remote" && runtimeExecutionTarget.transport === "ssh";
     const restoreRemoteWorkspace = preparedExecutionTargetRuntime
       ? () => preparedExecutionTargetRuntime.restoreWorkspace((line) => onLog("stdout", line))
       : null;
@@ -1285,9 +1293,9 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         }
         return notes;
       })();
-      if (executionTargetIsSandbox) {
+      if (executionTargetIsSandbox || executionTargetIsSshRemote) {
         commandNotes.push(
-          "Added --skip-git-repo-check for sandbox execution because Codex requires an explicit trust bypass in headless remote workspaces.",
+          "Added --skip-git-repo-check for remote execution because Codex requires an explicit trust bypass outside a trusted local checkout.",
         );
       }
       if (preparedRuntimeConfig.notes.length > 0) {
@@ -1320,7 +1328,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         forceSaferInvocation ? { ...config, fastMode: false } : config,
         {
           resumeSessionId,
-          skipGitRepoCheck: executionTargetIsSandbox,
+          skipGitRepoCheck: executionTargetIsSandbox || executionTargetIsSshRemote,
           networkAccess: env.PAPERCLIP_RUNNER_NETWORK_ACCESS !== "disabled",
         },
       );

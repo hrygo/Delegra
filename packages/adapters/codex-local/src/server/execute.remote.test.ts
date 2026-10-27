@@ -265,7 +265,7 @@ describe("codex remote execution", () => {
     const call = runChildProcess.mock.calls[0] as unknown as
       | [string, string, string[], { env: Record<string, string>; remoteExecution?: { remoteCwd: string } | null }]
       | undefined;
-    expect(call?.[2]).not.toContain("--skip-git-repo-check");
+    expect(call?.[2]).toContain("--skip-git-repo-check");
     expect(call?.[3].env.CODEX_HOME).toBe(`${managedRemoteWorkspace}/.paperclip-runtime/codex/home`);
     expect(call?.[3].env.PAPERCLIP_WORKSPACE_CWD).toBe(managedRemoteWorkspace);
     expect(call?.[3].env.PAPERCLIP_WORKSPACE_WORKTREE_PATH).toBeUndefined();
@@ -472,6 +472,7 @@ describe("codex remote execution", () => {
     expect(call?.[2].slice(call[2].indexOf("exec"))).toEqual([
       "exec",
       "--json",
+      "--skip-git-repo-check",
       "--dangerously-bypass-approvals-and-sandbox",
       "-",
     ]);
@@ -545,6 +546,7 @@ describe("codex remote execution", () => {
     expect(call?.[2].slice(call[2].indexOf("exec"))).toEqual([
       "exec",
       "--json",
+      "--skip-git-repo-check",
       "--dangerously-bypass-approvals-and-sandbox",
       "resume",
       "session-123",
@@ -626,6 +628,7 @@ describe("codex remote execution", () => {
     expect(call?.[2].slice(call[2].indexOf("exec"))).toEqual([
       "exec",
       "--json",
+      "--skip-git-repo-check",
       "--dangerously-bypass-approvals-and-sandbox",
       "resume",
       "session-123",
