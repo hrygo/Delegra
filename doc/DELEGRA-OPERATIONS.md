@@ -124,14 +124,45 @@ does not complete a missing provider receipt or establish that a provider stoppe
 
 ## Deployment and rollback
 
-The current deployment is `deploy/v2026.1024.0-canary.7-r10`
+The current deployment is `deploy/v2026.1024.0-canary.7-r11`
+(`4c833df7b063e45359339a80e61c28ed3493b07e`, tree
+`80e1f63041bc8a0dcdd805948ff0c7906386b951`). It replaced r10 on
+2026-10-27 at 11:52 Asia/Shanghai. The controller health reported `ok` and the
+expected commit. [PR #26](https://github.com/hrygo/Delegra/pull/26) passed all
+50 CI checks. The isolated release build preserved the source and lockfiles and
+packaged macOS ARM64 and Linux ARM64 Runner artifacts. The 14 active patch IDs
+are recorded in `currentDeployment` in
+[`.delegra/patches.json`](../.delegra/patches.json).
+
+A fresh database backup passed gzip integrity before the switch. No restore
+drill was run. The switch performed no schema migration or database restore.
+r10 is the source rollback release. Preserve the current database and the
+existing service configuration. Drain structured-policy sessions before a
+rollback to the older controller and Runner pair, and retain their checkpoints
+for recovery with compatible artifacts.
+
+At activation, an admission evaluation for the QA role on the SpeechNexus
+project returned no block while a cancelled legacy run still had pending
+accounting. The operator kept `unpricedUsagePolicy=allow` on both project
+policies. Known spend, held reservations, native recovery gates, and manual
+pauses still apply. The evaluation was read-only against the running release.
+
+The operator changed the A, B, and integration-assistant roles from OpenAI
+`gpt-6.1-sol` to CLIProxyAPI `opencode-go-ds-flash` through the board API. The
+remaining roles already used non-OpenAI models: C and QA use
+`opencode-go-ds-flash`, the evidence role uses `paperclip/omlx-sage-a1.5`, and
+the reviewer and retired Gemini roles use Claude models. Saved configuration
+readback matched. No agent was resumed, and no run was active before or after
+this configuration update.
+
+The previous deployment was `deploy/v2026.1024.0-canary.7-r10`
 (`216f99e05907d150fa3057c1e2732188408f6baa`, tree
 `8e98f28c2f232b6d12d735351f0931f138bb5cc3`). It replaced r8 on
 2026-10-27 at 07:48 Asia/Shanghai. The controller health reported `ok` and the
 expected commit. [PR #24](https://github.com/hrygo/Delegra/pull/24) passed
 independent source review and all 50 CI checks. The isolated release build
 preserved the source and lockfiles and packaged macOS ARM64 and Linux ARM64
-Runner artifacts. The 13 active patch IDs are recorded in `currentDeployment`
+Runner artifacts. The 13 active patch IDs were recorded in `currentDeployment`
 in [`.delegra/patches.json`](../.delegra/patches.json).
 
 A fresh database backup passed gzip integrity and SHA256 checks before the
