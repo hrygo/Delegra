@@ -124,35 +124,40 @@ does not complete a missing provider receipt or establish that a provider stoppe
 
 ## Deployment and rollback
 
-The current deployment is `deploy/v2026.1024.0-canary.7-r12`
-(`8cfb6d7f6e0610eb15e07480d0d892807015f944`). It replaced r11 on 2026-10-28. The
-release was installed without a restart on 2026-10-27 at 21:40 Asia/Shanghai,
-and the supervisor started it at 02:13 on 2026-10-28. An operator restart at
-06:53 adopted the active `paperclip_runner` run and reported the same commit.
-The controller health reported `ok` and commit `8cfb6d7f6`. [PR
-#29](https://github.com/hrygo/Delegra/pull/29) passed all 48 CI checks and the
-`Delegra branch policy` gate. The 16 active patch IDs are recorded in
+The current deployment is `deploy/v2026.1024.0-canary.7-r13`
+(`de2d1690f783bd6340eb6f1d7e37f25072c28851`). It replaced r12 on 2026-10-28 at
+09:48 Asia/Shanghai through `delegra service restart --instance delegra --wait`,
+which drained active work before the cutover and then adopted the native runs
+that restarted with the new process. The controller health reported `ok` and
+commit `de2d1690f78`. The release contains 20 active patch IDs, recorded in
 `currentDeployment` in [`.delegra/patches.json`](../.delegra/patches.json).
 
-This release carries two backports of upstream PR
-[#17865](https://github.com/paperclipai/paperclip/pull/17865). The first keeps a
-run that stopped on the CLI's structured `error_max_turns` result out of the
-login lane, so a quoted upstream `401` can no longer mark the shared AI
-connection unhealthy. The second makes an AI repair card match a connection on
-`config.ai.provider` instead of the transport catalog slug, so a custom gateway
-connection can resolve the card. Live proof on the running release: a pending
-repair card completed against the gateway connection whose catalog slug is
-`local`, with no workaround and no manual metadata edit.
+r13 adds four patches on top of r12, all covered by merge commits that passed
+the `Delegra branch policy` gate:
 
-r11 is the source rollback release. r12 has no schema, migration, or database
-change relative to r11, and the switch performed no schema migration. Preserve
-the current database and the existing service configuration.
+- `codex-remote-trust-bypass` ([PR #31](https://github.com/hrygo/Delegra/pull/31))
+  passes `--skip-git-repo-check` for every remote execution target, not only the
+  sandbox transport, so an SSH workspace staged without a git checkout no longer
+  fails with `Not inside a trusted directory`.
+- `remote-anchor-workspace-enoent` (same PR) also reports `ENOENT` from
+  `resolveAnchorWorkspaceForRun` as a workspace validation failure and names the
+  bound SSH environment's `remoteWorkspacePath`, instead of surfacing a bare
+  `mkdir` error.
+- `native-failure-finalize-without-result`
+  ([PR #33](https://github.com/hrygo/Delegra/pull/33)) stops calling
+  `finalizeNativeRun` on a `terminal_failure` coordinator that has no persisted
+  result, which used to throw `native_result_missing` on every failed native run
+  and log a retry that could never progress.
+- `opencode-go-routing-session`
+  ([PR #32](https://github.com/hrygo/Delegra/pull/32)) forwards the harness
+  routing session to an OpenCode Go gateway as `x-opencode-session`, with the
+  run's normalized session id as the fallback, so a projected custom provider no
+  longer answers `Request is missing x-opencode-session`.
 
-Do not hot-patch a compiled `dist` file inside an installed release. The adapter
-packages export TypeScript sources (`./src/...`) and the service runs under
-`tsx`, so the runtime never loads the edited `dist` copy. An earlier r11
-`parse.js` hotfix had no effect for this reason; ship the fix through a release
-tag instead.
+r13 has no schema, migration, or database change relative to r12, and the switch
+performed no schema migration. The shim backup taken during the switch is
+`~/.local/bin/delegra.bak-r12-20261028-094716`, and r12 is the source rollback
+release.
 
 The previous deployment was `deploy/v2026.1024.0-canary.7-r11`
 (`4c833df7b063e45359339a80e61c28ed3493b07e`, tree
