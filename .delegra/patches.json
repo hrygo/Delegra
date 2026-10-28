@@ -408,6 +408,19 @@
       "verifiedAt": "2026-10-28",
       "retireWhen": "The accepted stable base gives the workspace-build safety profile a documented package-registry allowlist or an equivalent dependency-provisioning path.",
       "notes": "The workspace-build sandbox used an empty strict allowlist, so a guest checkout without node_modules could not install its locked dependencies and spent the whole turn budget on offline workarounds. A DEL-85 build consumed 150 turns, ended in error_max_turns, and (before claude-max-turns-auth-classification) was misread as an auth failure that poisoned the shared AI connection. The profile now admits only registry.npmjs.org and registry.npmmirror.com; candidate-review keeps an empty allowlist, and Unix sockets and local binding stay denied. Verified by a real claude_local run inside the sandbox: curl https://registry.npmjs.org/ returned 200."
+    },
+    {
+      "id": "switch-agent-models-skill",
+      "kind": "fork-only",
+      "status": "active",
+      "commits": [
+        "febd3f223d275ca42a8261321c60509cec496329"
+      ],
+      "owner": "hrygo",
+      "reviewBy": "2026-11-30",
+      "verifiedAt": "2026-10-28",
+      "retireWhen": "The accepted stable base ships the switch-agent-models catalog skill from upstream PR #17988.",
+      "notes": "Optional catalog skill that lists how each agent resolves its model, plans a bulk change, validates it against the bound connection or the gateway, writes it with a snapshot, and rolls it back. Upstream work lives on PR paperclipai/paperclip#17988; this entry is a fork-only port rather than a patch-equivalent backport because deploy trails that branch's base by 231 upstream commits, where a full merge conflicts in 23 unrelated files. Only the skill surface was carried over and the catalog manifest was regenerated on this branch. Model routing follows aiRoutingModel() and managedProviderRouting(): OpenCode takes openrouter/ or paperclip/, Pi always takes <provider>/, and other harnesses keep the bare upstream id. Verified with the catalog manifest build and validate, a clean skills-catalog typecheck, 18 Python regression tests, and the shipped-catalog and stale-manifest suites."
     }
   ]
 }
