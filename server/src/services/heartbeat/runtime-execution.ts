@@ -1103,12 +1103,14 @@ export async function executeHeartbeatRuntime(db: Db, input: HeartbeatRuntimeExe
       );
     }
     if (nativeRuntimeResolution.kind === "native") {
-      const proposedResult = await db
-        .select({ resultId: nativeRunFinalizations.resultId })
+      const coordinatorState = await db
+        .select({ resultId: nativeRunFinalizations.resultId, failureCode: nativeRunFinalizations.failureCode })
         .from(nativeRunFinalizations)
         .where(eq(nativeRunFinalizations.runId, run.id))
         .limit(1)
-        .then((rows) => rows[0]?.resultId ?? null);
+        .then((rows) => rows[0] ?? null);
+      const proposedResult = coordinatorState?.resultId ?? null;
+      const coordinatorFailureCode = coordinatorState?.failureCode ?? null;
       if (proposedResult && nativeWorkspaceSync) {
         const workspaceFailureMessage =
           adapterErr instanceof Error ? adapterErr.message : "";
@@ -1137,20 +1139,37 @@ export async function executeHeartbeatRuntime(db: Db, input: HeartbeatRuntimeExe
             : "workspace_sync_out_failed",
         );
       }
-      try {
-        await measureRunPhase("execution.native_finalize", () => finalizeNativeRun({
-          db,
-          runId: run.id,
-          workspaceFinalizeStatus: "failed",
-        }));
-        await dispatchPendingNativeStatusWakeups({
-          companyId: run.companyId,
-        });
-      } catch (finalizeErr) {
-        logger.warn(
-          { err: finalizeErr, runId: run.id },
-          "native result could not be marked workspace_failed; the reconciliation loop will retry persisted results",
+      if (!proposedResult) {
+        // The coordinator reached terminal_failure before any result existed, so
+        // there is no result row to finalize: finalizeNativeRun would throw
+        // native_result_missing, and the old warning claimed a retry that could
+        // never make progress. The run is already failed; record why the
+        // workspace status stays unset instead.
+        logger.info(
+          { runId: run.id, failureCode: coordinatorFailureCode },
+          "native run failed before a result was persisted; workspace finalization has nothing to mark",
         );
+      } else {
+        try {
+          await measureRunPhase("execution.native_finalize", () => finalizeNativeRun({
+            db,
+            runId: run.id,
+            workspaceFinalizeStatus: "failed",
+          }));
+          await dispatchPendingNativeStatusWakeups({
+            companyId: run.companyId,
+          });
+        } catch (finalizeErr) {
+          logger.warn(
+            {
+              err: finalizeErr,
+              runId: run.id,
+              // A swallowed Error object hides the cause from the log sink.
+              reason: finalizeErr instanceof Error ? finalizeErr.message : String(finalizeErr),
+            },
+            "native result could not be marked workspace_failed; the reconciliation loop will retry persisted results",
+          );
+        }
       }
     }
     throw adapterErr;
