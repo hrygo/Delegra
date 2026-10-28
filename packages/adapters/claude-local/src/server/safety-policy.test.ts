@@ -24,21 +24,24 @@ describe("closed Claude safety policy v1", () => {
   it.each([{ dangerouslySkipPermissions: true }, { dangerouslySkipPermissions: undefined }, { extraArgs: ["--settings", "{}"] }, { args: ["--plugin-dir", "/tmp/plugin"] }, { engine: "acp" }])("rejects bypass and argument conflicts", change => {
     expect(() => parseClaudeSafetyPolicy({ ...config(), ...change })).toThrow(/claudeSafetyPolicy/);
   });
-  it("constructs fail-closed offline Bash and protects actual bundle/common git paths", async () => {
+  it("constructs fail-closed sandboxed Bash with only the registry allowlist", async () => {
     const f = await fixture(); const result = await buildClaudeSafetyPolicy({ config: config(), cwd: f.cwd, promptBundleDir: f.bundle, selectedSkills: [] });
     expect(result?.args).toContain("--setting-sources="); expect(result?.args).not.toContain("--dangerously-skip-permissions");
     const args = result!.args; const settings = JSON.parse(args[args.indexOf("--settings") + 1]!);
-    expect(settings.sandbox).toMatchObject({ enabled: true, failIfUnavailable: true, allowUnsandboxedCommands: false, autoAllowBashIfSandboxed: true, excludedCommands: [], network: { strictAllowlist: true, allowedDomains: [], allowLocalBinding: false } });
+    expect(settings.sandbox).toMatchObject({ enabled: true, failIfUnavailable: true, allowUnsandboxedCommands: false, autoAllowBashIfSandboxed: true, excludedCommands: [], network: { strictAllowlist: true, allowLocalBinding: false, allowAllUnixSockets: false } });
+    expect(settings.sandbox.network.allowedDomains).toEqual(["registry.npmjs.org", "registry.npmmirror.com"]);
     expect(result!.protectedWriteRoots).toEqual(settings.sandbox.filesystem.denyWrite);
     expect(settings.sandbox.filesystem.allowWrite).toEqual([]);
     expect(settings.sandbox.filesystem.denyWrite).toEqual(expect.arrayContaining([path.dirname(f.bundle), f.common, path.join(f.cwd, ".git")]));
     expect(args[args.indexOf("--tools") + 1]).toContain("Bash");
     expect(args).toContain("--strict-mcp-config"); expect(args[args.indexOf("--mcp-config") + 1]).toBe('{"mcpServers":{}}');
   });
-  it("gives candidate review only read tools and final text", async () => {
+  it("gives candidate review only read tools, no egress and final text", async () => {
     const f = await fixture(); const result = await buildClaudeSafetyPolicy({ config: config("candidate-review"), cwd: f.cwd, promptBundleDir: f.bundle, selectedSkills: [] });
     expect(result!.args[result!.args.indexOf("--tools") + 1]).toBe("Read,Glob,Grep");
     expect(result!.args[result!.args.indexOf("--permission-mode") + 1]).toBe("dontAsk");
+    const args = result!.args; const settings = JSON.parse(args[args.indexOf("--settings") + 1]!);
+    expect(settings.sandbox.network.allowedDomains).toEqual([]);
   });
   it("keeps only selected full skill sources readable and write-denied", async () => {
     const f = await fixture(); const source = path.join(f.root, "skill"); await mkdir(source); await writeFile(path.join(source, "SKILL.md"), "selected skill"); await writeFile(path.join(source, "reference.md"), "full reference");

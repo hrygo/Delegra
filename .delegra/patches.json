@@ -392,7 +392,20 @@
       "reviewBy": "2026-11-30",
       "verifiedAt": "2026-10-28",
       "retireWhen": "The accepted stable base sends x-opencode-session from its OpenCode provider proxy for the OpenCode Go endpoint.",
-      "notes": "OpenCode Go answers 400 MissingSessionID when a request omits x-opencode-session, free and paid models alike. Paperclip projects a managed gateway connection into OpenCode as a custom openai-compatible provider, so the provider proxy dropped the harness headers and no routing session reached the gateway. The proxy now passes an explicit x-opencode-session through unchanged, maps the header names OpenCode actually sends for a projected provider (x-opencode-session-id, x-session-affinity) on the Go endpoint, and falls back to the run's normalized session id. DEL-113 reproduced the failure before the fix; a local echo server confirmed opencode 1.18.34 sends x-opencode-session-id and x-session-affinity, and never x-opencode-session, for a provider whose id does not start with 'opencode'. Upstream contribution: paperclipai/paperclip#17970 (branch fix/opencode-go-routing-session)."
+      "notes": "OpenCode Go answers 400 MissingSessionID when a request omits x-opencode-session, free and paid models alike. Paperclip projects a managed gateway connection into OpenCode as a custom openai-compatible provider, so the provider proxy dropped the harness headers and no routing session reached the gateway. The proxy now passes an explicit x-opencode-session through unchanged, maps the header names OpenCode actually sends for a projected provider (x-opencode-session-id, x-session-affinity) on the Go endpoint, and falls back to the run's normalized session id. DEL-113 reproduced the failure before the fix; a local echo server confirmed opencode 1.18.34 sends x-opencode-session-id and x-session-affinity, and never x-opencode-session, for a provider whose id does not start with 'opencode'."
+    },
+    {
+      "id": "claude-build-registry-egress",
+      "kind": "fork-only",
+      "status": "active",
+      "commits": [
+        "007484fde5777c86f682a22ed80284d7b135337e"
+      ],
+      "owner": "hrygo",
+      "reviewBy": "2026-11-30",
+      "verifiedAt": "2026-10-28",
+      "retireWhen": "The accepted stable base gives the workspace-build safety profile a documented package-registry allowlist or an equivalent dependency-provisioning path.",
+      "notes": "The workspace-build sandbox used an empty strict allowlist, so a guest checkout without node_modules could not install its locked dependencies and spent the whole turn budget on offline workarounds. A DEL-85 build consumed 150 turns, ended in error_max_turns, and (before claude-max-turns-auth-classification) was misread as an auth failure that poisoned the shared AI connection. The profile now admits only registry.npmjs.org and registry.npmmirror.com; candidate-review keeps an empty allowlist, and Unix sockets and local binding stay denied. Verified by a real claude_local run inside the sandbox: curl https://registry.npmjs.org/ returned 200."
     }
   ]
 }
