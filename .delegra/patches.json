@@ -337,6 +337,32 @@
       "verifiedAt": "2026-10-27",
       "retireWhen": "The first stable tag that contains paperclipai/paperclip#17865.",
       "notes": "A Claude run that stopped on the structured error_max_turns result was still classified from auth text in its own stdout. The adapter then marked the shared AI connection unhealthy and blocked every agent on it. The gate now lets the structured stop win while the scoped token-failure markers keep the real login lane. The repair card now matches AI intents on config.ai.provider instead of the transport catalog slug, so a custom gateway connection can resolve the block. The running r11 release carries a temporary hotfix of parse.js until this patch is deployed; remove that hotfix when a release includes the patch."
+    },
+    {
+      "id": "codex-remote-trust-bypass",
+      "kind": "fork-only",
+      "status": "active",
+      "commits": [
+        "ca2f2edda152d4db196d8a0419c55bfef99c30f9"
+      ],
+      "owner": "hrygo",
+      "reviewBy": "2026-11-30",
+      "verifiedAt": "2026-10-28",
+      "retireWhen": "The accepted stable base adds --skip-git-repo-check for every remote execution target, not only the sandbox transport.",
+      "notes": "SSH remote workspaces are staged from the controller and can hold no git checkout at all (probe tasks, project-less issues), where Codex refuses the cwd with 'Not inside a trusted directory'. On 2026-10-28 this failed 15 runs across two agents until the flag was added by hand to extraArgs. The bypass now belongs to the transport; buildCodexExecArgs keeps an operator copy authoritative, so the flag is never duplicated."
+    },
+    {
+      "id": "remote-anchor-workspace-enoent",
+      "kind": "fork-only",
+      "status": "active",
+      "commits": [
+        "1f73c0e96f100973c9b84886447afce1b8a8fcb6"
+      ],
+      "owner": "hrygo",
+      "reviewBy": "2026-11-30",
+      "verifiedAt": "2026-10-28",
+      "retireWhen": "The accepted stable base reports an uncreatable controller anchor path for every errno, or refuses a remote environment's remoteWorkspacePath as adapterConfig.cwd.",
+      "notes": "resolveAnchorWorkspaceForRun converted EACCES/EPERM into a workspace-validation message but let ENOENT escape as a bare setup error. A target-host path such as /home/<remote-user>/... on a macOS controller hits ENOENT because the parent volume does not exist, so operators saw an unexplained mkdir failure. The guard now covers ENOENT and names the SSH environment's remoteWorkspacePath as the likely source."
     }
   ]
 }

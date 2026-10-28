@@ -3661,11 +3661,18 @@ export function createHeartbeatWorkspaceResolver(db: Db) {
       // target host (for example /Users/<remote-user>) fails here with EACCES,
       // which otherwise reaches the operator as an unexplained permission
       // error. Every successful path stays unchanged.
-      if (configuredCwd && (code === "EACCES" || code === "EPERM")) {
+      if (configuredCwd && (code === "EACCES" || code === "EPERM" || code === "ENOENT")) {
         throw new WorkspaceValidationFailure(
           `Configured workspace "${cwd}" cannot be created on the controller (${code}). ` +
             "adapterConfig.cwd must name a directory the controller can create, because a copy-based " +
-            "environment stages that directory to the target. Use an isolated task directory or a local path, then retry.",
+            "environment stages that directory to the target. Use an isolated task directory or a local path, then retry." +
+            // ENOENT means a parent volume of the path does not exist here at
+            // all, which is the usual shape of a target-host path such as
+            // `/home/<remote-user>/...` on a macOS controller. Name that cause
+            // instead of leaving an operator with a bare mkdir error.
+            (code === "ENOENT"
+              ? " This path's parent directory does not exist on the controller, which is typical for a path copied from an SSH target host; a remote environment's `remoteWorkspacePath` is not a controller path."
+              : ""),
           {
             workspaceValidation: {
               reason: "configured_workspace_unavailable",
