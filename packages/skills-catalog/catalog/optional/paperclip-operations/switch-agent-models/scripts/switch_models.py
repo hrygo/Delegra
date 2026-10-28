@@ -11,6 +11,7 @@ import json
 import os
 import re
 import sys
+import tempfile
 import unicodedata
 import urllib.error
 import urllib.request
@@ -19,6 +20,7 @@ from datetime import datetime, timezone
 SUFFIX_RE = re.compile(r"\((max|high|medium|low)\)$")
 UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE)
 CONNECTION_PREFIX = "paperclip/"
+CONNECTION_PREFIXES = ("paperclip/", "openrouter/")
 DEFAULT_SNAPSHOT_DIR = "~/.paperclip/model-switch-snapshots"
 CONNECTION = "connection"
 PROVIDER = "provider"
@@ -132,17 +134,29 @@ def list_agents(company_id: str) -> list[dict]:
     return data
 
 
-def connection_model_ids(company_id: str) -> set[str]:
+def connection_catalog(company_id: str) -> list[dict]:
+    """Each connection with its routing kind and the model ids it lists."""
     status, data = request("GET", f"/api/companies/{company_id}/ai-connections")
     if status != 200 or not isinstance(data, dict):
-        return set()
-    ids: set[str] = set()
+        return []
+    catalog: list[dict] = []
     for connection in data.get("connections", []):
         routing = connection.get("routing") or {}
-        for model in routing.get("models") or []:
-            if model.get("id"):
-                ids.add(model["id"])
+        models = {model["id"] for model in routing.get("models") or [] if model.get("id")}
+        catalog.append({"id": connection.get("id"), "kind": routing.get("kind"), "models": models})
+    return catalog
+
+
+def connection_model_ids(catalog: list[dict]) -> set[str]:
+    ids: set[str] = set()
+    for connection in catalog:
+        ids |= connection["models"]
     return ids
+
+
+def bound_connection(agent: dict, catalog: list[dict]) -> dict | None:
+    bound = (binding_of(agent) or {}).get("connectionId")
+    return next((item for item in catalog if bound and item["id"] == bound), None)
 
 
 def current_model(agent: dict) -> str:
@@ -194,32 +208,52 @@ def with_suffix(model: str, suffix: str) -> str:
     return model + suffix
 
 
-def target_model(agent: dict, args) -> tuple[str | None, str]:
+def strip_prefix(value: str) -> str:
+    for prefix in CONNECTION_PREFIXES:
+        if value.startswith(prefix):
+            return value[len(prefix):]
+    return value
+
+
+def target_model(agent: dict, args, catalog: list[dict] | None = None) -> tuple[str | None, str]:
     """Return (model, note). None means this agent was not given a usable target."""
     suffix = "" if args.drop_suffix else suffix_of(current_model(agent))
     if kind_of(agent) == CONNECTION:
         source = args.connection_model or args.model
         if not source:
             return None, "needs --connection-model"
-        bare = source[len(CONNECTION_PREFIX):] if source.startswith(CONNECTION_PREFIX) else source
-        # aiRoutingModel() adds the prefix for the OpenCode harness only; Codex
-        # and Claude store the bare connection model id.
-        model = CONNECTION_PREFIX + bare if harness_of(agent) == "opencode_local" else bare
+        bare = strip_prefix(source)
+        harness = harness_of(agent)
+        connection = bound_connection(agent, catalog or [])
+        binding = binding_of(agent)
+        if binding and harness in ("opencode_local", "pi_local") and (not connection or not connection.get("kind")):
+            return None, "cannot determine bound connection route"
+        route = connection.get("kind") if connection else None
+        if harness == "opencode_local":
+            model = f"{'openrouter' if route == 'openrouter' else 'paperclip'}/{bare}"
+        elif harness == "pi_local" and route == "openrouter":
+            model = f"openrouter/{bare}"
+        else:
+            model = bare
         return with_suffix(model, suffix), ""
     if not args.model:
         return None, "needs --model"
     return with_suffix(args.model, suffix), ""
 
 
-def validate(agent: dict, model: str, company_id: str, gateway: list[str] | None) -> tuple[bool, str]:
+def validate(agent: dict, model: str, catalog: list[dict], gateway: list[str] | None) -> tuple[bool, str]:
     if kind_of(agent) == CONNECTION:
-        ids = connection_model_ids(company_id)
+        binding = binding_of(agent)
+        connection = bound_connection(agent, catalog)
+        if binding and not connection:
+            return True, "unverified (bound connection unavailable)"
+        ids = connection["models"] if connection else connection_model_ids(catalog)
         if not ids:
             return True, "unverified (no connection models)"
-        bare = SUFFIX_RE.sub("", model[len(CONNECTION_PREFIX):] if model.startswith(CONNECTION_PREFIX) else model)
+        bare = SUFFIX_RE.sub("", strip_prefix(model))
         if bare in ids:
             return True, "connection model"
-        return False, f"{bare} is in no connection"
+        return False, f"{bare} is not in the bound connection" if binding else f"{bare} is in no connection"
     if gateway is None:
         return True, "unverified (no gateway)"
     bare = SUFFIX_RE.sub("", model)
@@ -319,12 +353,13 @@ def build_plan(args) -> tuple[dict, list[dict], list[dict]]:
     if not chosen:
         fail("nothing selected: pass --select or --all")
     gateway = gateway_model_ids(args)
+    catalog = connection_catalog(company["id"]) if any(kind_of(agent) == CONNECTION for agent in chosen) else []
     rows, entries = [], []
     for agent in chosen:
-        model, note = target_model(agent, args)
+        model, note = target_model(agent, args, catalog)
         status = note
         if model is not None:
-            ok, status = validate(agent, model, company["id"], gateway)
+            ok, status = validate(agent, model, catalog, gateway)
             if not ok and args.force:
                 status = f"{status} (forced)"
             elif not ok:
@@ -365,27 +400,36 @@ def snapshot_path(directory: str | None) -> str:
 
 def write_snapshot(path: str, snapshot: dict) -> None:
     """Replace the snapshot atomically so a crash cannot leave it truncated."""
-    temp = f"{path}.tmp"
-    with open(temp, "w", encoding="utf-8") as handle:
-        json.dump(snapshot, handle, ensure_ascii=False, indent=2)
-        handle.flush()
-        os.fsync(handle.fileno())
-    os.chmod(temp, 0o600)
-    os.replace(temp, path)
+    descriptor, temp = tempfile.mkstemp(prefix=".model-switch-", dir=os.path.dirname(os.path.abspath(path)))
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            json.dump(snapshot, handle, ensure_ascii=False, indent=2)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp, path)
+    finally:
+        if os.path.exists(temp):
+            os.unlink(temp)
 
 
 def create_snapshot(path: str, snapshot: dict) -> str:
-    """Reserve the snapshot name exclusively, then write it."""
-    for attempt in range(10):
-        candidate = path if attempt == 0 else f"{path[: -len('.json')]}-{attempt}.json"
-        try:
-            descriptor = os.open(candidate, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-        except FileExistsError:
-            continue
-        os.close(descriptor)
-        write_snapshot(candidate, snapshot)
-        return candidate
-    fail("cannot create a unique snapshot file")
+    """Publish a complete private snapshot without replacing another run's file."""
+    descriptor, temp = tempfile.mkstemp(prefix=".model-switch-", dir=os.path.dirname(os.path.abspath(path)))
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            json.dump(snapshot, handle, ensure_ascii=False, indent=2)
+            handle.flush()
+            os.fsync(handle.fileno())
+        for attempt in range(100):
+            candidate = path if attempt == 0 else f"{path[: -len('.json')]}-{attempt}.json"
+            try:
+                os.link(temp, candidate)
+                return candidate
+            except FileExistsError:
+                continue
+        fail("cannot create a unique snapshot file")
+    finally:
+        os.unlink(temp)
 
 
 def cmd_apply(args) -> int:
@@ -420,13 +464,17 @@ def cmd_apply(args) -> int:
     }
     path = create_snapshot(snapshot_path(args.snapshot_dir), snapshot)
 
+    print(f"\nsnapshot: {path}", flush=True)
     failures = 0
     for index, entry in enumerate(entries):
         agent = entry["agent"]
+        snapshot["agents"][index]["attempted"] = True
+        write_snapshot(path, snapshot)
         status, data = request("PATCH", f"/api/agents/{agent['id']}", {"adapterConfig": {"model": entry["after"]}})
         written = ((data or {}).get("adapterConfig") or {}).get("model") if isinstance(data, dict) else None
         if status == 200 and written == entry["after"]:
             snapshot["agents"][index]["applied"] = True
+            write_snapshot(path, snapshot)
             print(f"ok    {agent.get('name')}: {current_model(agent) or '-'} -> {entry['after']}")
             continue
         failures += 1
@@ -462,28 +510,46 @@ def cmd_rollback(args) -> int:
             snapshot = json.load(handle)
     except OSError as error:
         fail(f"cannot read snapshot: {error}")
+    if snapshot.get("apiUrl") and snapshot["apiUrl"].rstrip("/") != api_base():
+        fail("snapshot belongs to a different API URL")
+    agents = {agent["id"]: agent for agent in list_agents(snapshot["companyId"])}
     failures = 0
     for entry in snapshot.get("agents", []):
+        if not entry.get("applied") and not entry.get("attempted"):
+            print(f"skip  {entry.get('name')}: not attempted")
+            continue
         if "before" not in entry:
             print(f"skip  {entry.get('name')}: snapshot records no previous model")
             continue
         before = entry.get("before")
-        label = before if before else "(harness default)"
+        label = before if before else "(unset)"
+        agent = agents.get(entry["id"])
+        if not agent:
+            failures += 1
+            print(f"FAIL  {entry.get('name')}: agent not found", file=sys.stderr)
+            continue
+        found = current_model(agent) or None
+        if found == before:
+            print(f"skip  {entry.get('name')}: already restored")
+            continue
+        if found != entry.get("after"):
+            failures += 1
+            print(f"FAIL  {entry.get('name')}: model changed since apply; refusing to overwrite", file=sys.stderr)
+            continue
         if not args.yes:
             print(f"would restore {entry.get('name')}: {entry.get('after')} -> {label}")
             continue
-        # None asks the harness for its default model instead of leaving the
-        # value that apply wrote in place.
         status, data = request("PATCH", f"/api/agents/{entry['id']}", {"adapterConfig": {"model": before}})
-        written = ((data or {}).get("adapterConfig") or {}).get("model") if isinstance(data, dict) else None
-        if status == 200:
-            print(f"ok    {entry.get('name')} -> {written if written else '(harness default)'}")
+        config = data.get("adapterConfig") if isinstance(data, dict) else None
+        written = config.get("model") if isinstance(config, dict) else None
+        if status == 200 and isinstance(config, dict) and written == before:
+            print(f"ok    {entry.get('name')} -> {label}")
         else:
             failures += 1
-            print(f"FAIL  {entry.get('name')}: HTTP {status} {brief(data)}", file=sys.stderr)
+            print(f"FAIL  {entry.get('name')}: HTTP {status}, expected {before!r}, got {written!r}: {brief(data)}", file=sys.stderr)
     if not args.yes:
         print("\ndry run: pass --yes to restore")
-        return 0
+        return 2 if failures else 0
     return 0 if not failures else 2
 
 

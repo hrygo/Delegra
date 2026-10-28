@@ -27,7 +27,7 @@ usage() {
 }
 
 absolute_dir() {
-  python3 -c 'import os, sys; print(os.path.abspath(sys.argv[1]))' "$1"
+  python3 -c 'import os, sys; print(os.path.realpath(os.path.abspath(sys.argv[1])))' "$1"
 }
 
 add_home() {
@@ -74,6 +74,23 @@ python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)' 2>/dev
   exit 1
 }
 
+# Refuse overlapping paths before touching any destination. Do not follow the
+# final symlink: replacing or uninstalling a link must not remove its target.
+python3 - "$SRC" ${CANON:+"$CANON"} ${TARGETS[@]+"${TARGETS[@]}"} <<'PY' || exit 1
+import os, sys
+src = os.path.realpath(sys.argv[1])
+paths = list(dict.fromkeys(sys.argv[2:]))
+def overlaps(a, b):
+    return os.path.commonpath((a, b)) in (a, b)
+for dest in paths:
+    if overlaps(src, dest):
+        sys.exit(f"unsafe destination overlaps source: {dest}")
+for i, dest in enumerate(paths):
+    for other in paths[i + 1:]:
+        if overlaps(dest, other):
+            sys.exit(f"overlapping destinations: {dest} and {other}")
+PY
+
 same_copy() {
   [ -d "$1" ] && [ ! -L "$1" ] && diff -rq "$SRC" "$1" >/dev/null 2>&1
 }
@@ -81,10 +98,27 @@ same_copy() {
 install_physical() {
   local dest="$1"
   if [ "$DRY" = 1 ]; then echo "would install to $dest"; return 0; fi
-  mkdir -p -- "$dest" || { echo "cannot create $dest" >&2; return 1; }
-  cp -R "$SRC"/. "$dest"/ || { echo "cannot copy into $dest" >&2; return 1; }
-  rm -rf -- "$dest/scripts/__pycache__"
-  chmod +x "$dest/scripts/switch_models.py" "$dest/install.sh" 2>/dev/null || true
+  local stage
+  mkdir -p -- "$(dirname "$dest")" || { echo "cannot create parent of $dest" >&2; return 1; }
+  stage="$(mktemp -d "$(dirname "$dest")/.${SLUG}.XXXXXX")" || { echo "cannot stage $dest" >&2; return 1; }
+  if ! cp -R "$SRC"/. "$stage"/ || ! rm -rf -- "$stage/scripts/__pycache__"; then
+    echo "cannot stage copy for $dest" >&2
+    rm -rf -- "$stage" || echo "cannot clean up $stage" >&2
+    return 1
+  fi
+  chmod +x "$stage/scripts/switch_models.py" "$stage/install.sh" 2>/dev/null || true
+  if [ -L "$dest" ] || [ -d "$dest" ]; then
+    if ! rm -rf -- "$dest"; then
+      echo "cannot remove $dest" >&2
+      rm -rf -- "$stage" || echo "cannot clean up $stage" >&2
+      return 1
+    fi
+  fi
+  if ! mv -- "$stage" "$dest"; then
+    echo "cannot install to $dest" >&2
+    rm -rf -- "$stage" || echo "cannot clean up $stage" >&2
+    return 1
+  fi
   echo "installed: $dest"
 }
 
@@ -100,10 +134,12 @@ remove_one() {
   local dest="$1"
   if [ -L "$dest" ] || [ -d "$dest" ]; then
     [ "$DRY" = 1 ] && { echo "would remove $dest"; return 0; }
-    rm -rf -- "$dest" && echo "removed $dest"
+    rm -rf -- "$dest" || { echo "cannot remove $dest" >&2; return 1; }
+    echo "removed $dest"
   else
     echo "not installed: $dest"
   fi
+  return 0
 }
 
 handle() {
@@ -112,7 +148,7 @@ handle() {
   if [ "$UNINSTALL" = 1 ]; then
     [ "$FORCE" = 1 ] || { echo "refusing to remove $dest without --force" >&2; return 1; }
     remove_one "$dest"
-    return 0
+    return $?
   fi
 
   local want_link=""
@@ -126,17 +162,21 @@ handle() {
       return 0
     fi
     [ "$FORCE" = 1 ] || { echo "already a link elsewhere: $dest (pass --force to replace)" >&2; return 1; }
-    [ "$DRY" = 1 ] || rm -f -- "$dest"
   elif [ -d "$dest" ]; then
     if [ -z "$want_link" ] && same_copy "$dest"; then
       echo "up to date: $dest"
       return 0
     fi
     [ "$FORCE" = 1 ] || { echo "already installed and different: $dest (pass --force to replace)" >&2; return 1; }
-    [ "$DRY" = 1 ] || rm -rf -- "$dest"
+  elif [ -e "$dest" ]; then
+    echo "destination is not a directory or link: $dest" >&2
+    return 1
   fi
 
   if [ -n "$want_link" ]; then
+    if [ "$DRY" != 1 ] && { [ -L "$dest" ] || [ -d "$dest" ]; }; then
+      rm -rf -- "$dest" || { echo "cannot remove $dest" >&2; return 1; }
+    fi
     link_copy "$dest" "$want_link"
   else
     install_physical "$dest"
@@ -144,8 +184,11 @@ handle() {
 }
 
 failed=0
-if [ -n "$CANON" ] && [ "$UNINSTALL" != 1 ]; then
-  handle "$CANON" || failed=1
+if [ -n "$CANON" ]; then
+  if ! handle "$CANON"; then
+    echo "canonical install failed; no other target was changed" >&2
+    exit 1
+  fi
 fi
 for dest in "${TARGETS[@]+"${TARGETS[@]}"}"; do
   [ "$dest" = "$CANON" ] && continue

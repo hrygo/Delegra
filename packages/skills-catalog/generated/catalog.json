@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "packageName": "@paperclipai/skills-catalog",
   "packageVersion": "0.3.1",
-  "generatedAt": "2026-10-28T09:14:58.847Z",
+  "generatedAt": "2026-10-28T10:32:11.101Z",
   "skills": [
     {
       "id": "paperclipai:bundled:docs:doc-maintenance",
@@ -589,8 +589,8 @@
         {
           "path": "SKILL.md",
           "kind": "skill",
-          "sizeBytes": 6716,
-          "sha256": "3ae917b6d459dc2dcd3942b142d875e31408fc552774e0f92dedbae4944529fe"
+          "sizeBytes": 7113,
+          "sha256": "a465a5558e8c82b8d84a672a6049c8fe74fbfdef4e542adba5b95d9fdbd9bba4"
         },
         {
           "path": "examples/mixed-company-switch.md",
@@ -607,23 +607,23 @@
         {
           "path": "install.sh",
           "kind": "other",
-          "sizeBytes": 5175,
-          "sha256": "dfbc177b8a2aad7399eb32455783e4c9ebf69c2343655f6b40f6feb6c1a498b2"
+          "sizeBytes": 6759,
+          "sha256": "6783cf3e16ce3051ec52aee1d7ae567ba4b034f52637987523c108b520ce6cf7"
         },
         {
           "path": "references/model-resolution.md",
           "kind": "reference",
-          "sizeBytes": 3240,
-          "sha256": "dad307d51f57978dd69794dcf02f4700c9b1dee0d68458cb5e8e0b25829c5a79"
+          "sizeBytes": 3659,
+          "sha256": "7a4155b9b4aee9c8fb8f79c2b03d918f1fb9bc6f2a10f40b0b1f662aa84e2b76"
         },
         {
           "path": "scripts/switch_models.py",
           "kind": "script",
-          "sizeBytes": 20986,
-          "sha256": "f00a1fbbdf7c0d00f343fbd39730f97e4fbeb6358cf30082c8e54ab851aff66d"
+          "sizeBytes": 24056,
+          "sha256": "cbe39a4e0fb9ad98fb0b31bee6a98afd2c481e46112aefe6fe9b5ccff15dbf6c"
         }
       ],
-      "contentHash": "sha256:bea53b1499356eed30f5c74f6fa292761d5de29de4e2306595c49876b218aaf7"
+      "contentHash": "sha256:9de129b9f36c512bd3b56a6103bee1153f03b59ec433712bdd4dc803a753d9fa"
     },
     {
       "id": "paperclipai:optional:product:design-critique",

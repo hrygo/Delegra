@@ -41,14 +41,14 @@ An agent stores its model in `adapterConfig.model`. A bound AI connection decide
 
 | Agent | How it resolves | Write |
 | --- | --- | --- |
-| `runtimeConfig.aiConnection` is set | Paperclip projects that company AI connection into the agent's harness | the connection model id: `paperclip/<id>` for the OpenCode harness, the bare `<id>` for Codex and Claude |
+| `runtimeConfig.aiConnection` is set | Paperclip projects that company AI connection into the agent's harness | `paperclip/<id>` or `openrouter/<id>` for OpenCode depending on the route; `openrouter/<id>` for Pi on OpenRouter; bare `<id>` for other harnesses |
 | no binding | the agent's own provider resolves it — a local CLI config, a gateway alias, or a direct provider id | the exact string that provider accepts |
 
 A record written before bindings existed still counts as connection-backed when its value starts with `paperclip/`.
 
 Two consequences:
 
-- `aiRoutingModel()` adds the `paperclip/` prefix for the OpenCode harness only. Writing `paperclip/x` to a Codex or Claude connection agent, or a prefix-less id to an OpenCode one, saves and then fails on the next turn.
+- `aiRoutingModel()` prefixes OpenCode connection models with `openrouter/` or `paperclip/` according to the bound route. Pi uses `openrouter/` for OpenRouter; Codex and Claude use bare model IDs. A saved value is not proof that the next run will resolve it correctly.
 - The trailing `(max)`, `(high)`, `(medium)`, or `(low)` on some existing models is a reasoning hint. The script preserves the suffix the agent already has, appends it only when the new value has none, and strips it from validation lookups. Pass `--drop-suffix` to remove it.
 
 ## Workflow
@@ -84,7 +84,7 @@ Validation is best-effort and never invents a source:
 
 | Agent kind | Checked against | If the source is missing |
 | --- | --- | --- |
-| connection | `GET /api/companies/{id}/ai-connections` model ids | reported as unverified |
+| connection | the bound connection's model IDs from `GET /api/companies/{id}/ai-connections` | reported as unverified; OpenCode and Pi targets are blocked when the bound route cannot be determined |
 | provider | `GET {gateway}/v1/models` when `--gateway-url` or `PAPERCLIP_GATEWAY_URL` is set | reported as unverified |
 
 `--gateway-url` and `--gateway-key` belong to `plan` and `apply`; they override `PAPERCLIP_GATEWAY_URL` and `PAPERCLIP_GATEWAY_KEY`.
@@ -95,7 +95,7 @@ Unverified is not an error by default: many installs run CLI agents against a pr
 
 - `plan` writes nothing and needs no confirmation.
 - `apply` needs `--yes`; it writes a snapshot before the first change, then compares each PATCH response to the requested model. Every apply gets its own snapshot file, so two runs in the same second cannot overwrite each other.
-- `rollback` restores an unset model by sending `null`, which returns the agent to its harness default instead of leaving the value apply wrote.
+- On rollback, verify the saved state against the API response. An unset model may be normalized to a concrete default by the server, so do not claim an exact restoration when the returned value differs.
 - Only `adapterConfig.model` changes. Status, budget, permissions, instructions, and connections stay as they are.
 - Report the snapshot path and the rollback command with the result. A switch the user cannot undo is not a finished switch.
 
@@ -124,6 +124,6 @@ When several tools read the same home tree, keep one real copy and link the rest
 
 That writes `~/.agents/skills/switch-agent-models` and points the other homes at it. A copy per home also works, but the copies drift apart; `--canonical` keeps one source of truth.
 
-`--force` replaces a different copy, `--dry-run` prints the plan, and `--uninstall --force` removes it.
+`--force` replaces a different copy, `--dry-run` prints the plan, and `--uninstall --force` removes it. To update or remove an installed copy, run the installer from a separate source directory: it refuses to overwrite or delete its own source.
 
 Read [references/model-resolution.md](references/model-resolution.md) for the resolution rules and failure signatures, and [examples/](examples/) for two complete walkthroughs.
