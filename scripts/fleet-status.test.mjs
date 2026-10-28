@@ -53,14 +53,14 @@ function row(overrides = {}) {
   ].join(FIELD_SEPARATOR);
 }
 
-function drive({ rows, mode = "text", scopeMulti = 0, extra = "" }) {
+function drive({ rows, mode = "text", scopeMulti = 0, scopeNames = ["Testco"], extra = "" }) {
   const driver = [
     "set -u",
     'source "$SCRIPT"',
     "reset_counters",
     'ROWS="$FIXTURE"',
-    'SCOPE_NAMES="Testco"',
-    'SCOPE_NAME_LIST=("Testco")',
+    `SCOPE_NAMES=${JSON.stringify(scopeNames.join(", "))}`,
+    `SCOPE_NAME_LIST=(${scopeNames.map((name) => JSON.stringify(name)).join(" ")})`,
     `SCOPE_MULTI=${scopeMulti}`,
     'GENERATED_AT="2026-01-01 00:00:00"',
     'GENERATED_AT_ISO="2026-01-01T00:00:00+0000"',
@@ -601,4 +601,18 @@ test("watch mode retries after a failure instead of stopping", () => {
   const written = readFileSync(out, "utf8");
   try { unlinkSync(out); } catch {}
   assert.match(written, /panel unavailable; retrying in 1s/);
+});
+
+test("the JSON scope keeps a company name with a pipe as one entry", () => {
+  // End to end: the name travels from the scope query through the array into
+  // the JSON document. A helper-level assertion would not catch a renderer
+  // that splits the display string again.
+  const run = drive({
+    rows: [row({ company: "Research|Ops" })],
+    mode: "json",
+    scopeNames: ["Research|Ops"],
+  });
+  assert.equal(run.status, 0, run.stderr);
+  const doc = JSON.parse(run.stdout);
+  assert.deepEqual(doc.scope.companies, ["Research|Ops"]);
 });
