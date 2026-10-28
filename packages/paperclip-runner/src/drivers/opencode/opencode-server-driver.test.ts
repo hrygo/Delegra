@@ -34,6 +34,9 @@ import { localIntegrityBoundaryGolden } from "../../../test-support/local-integr
 import type { PrpEvent } from "../../protocol/replay-contract.js";
 import {
   OpenCodeServerDriver,
+  harnessRoutingSessionId,
+  isOpenCodeGoBaseUrl,
+  openCodeGoProviderHeaders,
   openCodeServerDriverInternals,
 } from "./opencode-server-driver.js";
 
@@ -654,13 +657,13 @@ describe("OpenCodeServerDriver", () => {
   });
 
   it.each(["gateway-key", ""])("forwards selected-model streams without exposing the reusable key and revokes the proxy on close (%s)", async key => {
-    const received: Array<{ path: string; authorization?: string; body: unknown }> = [];
+    const received: Array<{ path: string; authorization?: string; body: unknown; session?: string }> = [];
     const upstream = createHttpServer((request, response) => {
       void (async () => {
         const chunks = [];
         for await (const chunk of request) chunks.push(Buffer.from(chunk));
         const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-        received.push({ path: request.url!, authorization: request.headers.authorization, body });
+        received.push({ path: request.url!, authorization: request.headers.authorization, body, session: request.headers["x-opencode-session"] as string | undefined });
         response.writeHead(200, { "content-type": "text/event-stream", "x-provider-private-header": "private" });
         response.write('data: {"choices":[]}\n\n');
         if (body.messages[0].content !== "hold") response.end('data: [DONE]\n\n');
@@ -691,7 +694,7 @@ describe("OpenCodeServerDriver", () => {
       const result = await fetch(url, { method: "POST", headers, body: JSON.stringify(payload) });
       expect(result.headers.get("x-provider-private-header")).toBeNull();
       expect(await result.text()).toBe('data: {"choices":[]}\n\ndata: [DONE]\n\n');
-      expect(received).toEqual([{ path: "/custom/v1/chat/completions", authorization: key ? `Bearer ${key}` : undefined, body: payload }]);
+      expect(received).toEqual([{ path: "/custom/v1/chat/completions", authorization: key ? `Bearer ${key}` : undefined, body: payload, session: undefined }]);
       const pending = await fetch(url, { method: "POST", headers, body: JSON.stringify({ ...payload, messages: [{ role: "user", content: "hold" }] }) });
       const pendingText = pending.text().then(() => "unexpected completion", () => "aborted");
       await session.close({ reason: "test" });
@@ -702,6 +705,45 @@ describe("OpenCodeServerDriver", () => {
       await session?.close({ reason: "test" });
       await new Promise<void>(resolve => { upstream.close(() => resolve()); upstream.closeAllConnections(); });
     }
+  });
+
+  it("adds the OpenCode Go routing session header only for the Go endpoint", () => {
+    expect(isOpenCodeGoBaseUrl("https://opencode.ai/zen/go/v1")).toBe(true);
+    expect(isOpenCodeGoBaseUrl("https://opencode.ai/zen/go/v1/")).toBe(true);
+    expect(isOpenCodeGoBaseUrl("https://opencode.ai/zen/v1")).toBe(false);
+    expect(isOpenCodeGoBaseUrl("https://opencode.ai.evil.test/zen/go/v1")).toBe(false);
+    expect(isOpenCodeGoBaseUrl("https://gateway.example/v1")).toBe(false);
+    expect(isOpenCodeGoBaseUrl("not a url")).toBe(false);
+    expect(openCodeGoProviderHeaders("https://opencode.ai/zen/go/v1", "session-1")).toEqual({
+      "x-opencode-session": "session-1",
+    });
+    // OpenCode's own conversation identity wins so a resumed session keeps it.
+    expect(openCodeGoProviderHeaders("https://opencode.ai/zen/go/v1", "session-1", "ses_open")).toEqual({
+      "x-opencode-session": "ses_open",
+    });
+    expect(openCodeGoProviderHeaders("https://opencode.ai/zen/go/v1", "session-1", "  ")).toEqual({
+      "x-opencode-session": "session-1",
+    });
+    expect(openCodeGoProviderHeaders("https://opencode.ai/zen/go/v1", "")).toEqual({});
+    expect(openCodeGoProviderHeaders("https://gateway.example/v1", "session-1", "ses_open")).toEqual({});
+  });
+
+  it("reads the harness routing identity under the header name the harness sends", () => {
+    // A local echo of opencode 1.18.34 on a projected paperclip provider sends
+    // these three headers and never sends x-opencode-session.
+    expect(harnessRoutingSessionId({
+      "x-opencode-session-id": "ses_open",
+      "x-session-affinity": "ses_open",
+      "x-session-id": "ses_open",
+    })).toBe("ses_open");
+    expect(harnessRoutingSessionId({
+      "x-session-affinity": "ses_affinity",
+      "x-session-id": "ses_affinity",
+    })).toBe("ses_affinity");
+    expect(harnessRoutingSessionId({ "x-opencode-session": "ses_explicit", "x-session-affinity": "ses_other" })).toBe("ses_explicit");
+    expect(harnessRoutingSessionId({ "x-session-affinity": ["ses_first", "ses_second"] })).toBe("ses_first");
+    expect(harnessRoutingSessionId({ "x-session-affinity": "  " })).toBeUndefined();
+    expect(harnessRoutingSessionId({})).toBeUndefined();
   });
 
   it.each([["HTTP_PROXY", "file"], ["ALL_PROXY", "directory"]] as const)("uses the runtime's %s, %s trust, and NO_PROXY without changing global transport", async (proxySetting, trust) => {
