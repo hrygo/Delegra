@@ -750,6 +750,75 @@ describe("OpenCodeServerDriver", () => {
     }
   });
 
+  it("forwards the OpenCode session header the shim receives to the provider upstream", async () => {
+    const received: Array<Record<string, string | string[] | undefined>> = [];
+    const upstream = createHttpServer((request, response) => {
+      received.push(request.headers);
+      request.resume();
+      response.writeHead(200, { "content-type": "application/json" }).end('{"choices":[]}');
+    });
+    await new Promise<void>(resolve => upstream.listen(0, "127.0.0.1", resolve));
+    const address = upstream.address();
+    if (!address || typeof address === "string") throw new Error("Missing upstream fixture address");
+    const root = await mkdtemp(join(tmpdir(), "paperclip-opencode-session-header-"));
+    roots.push(root);
+    try {
+      const driver = new OpenCodeServerDriver({
+        model: "paperclip/team/model-alias", runtimeDirectory: root, command: fixture,
+        environment: {
+          PATH: process.env.PATH,
+          PAPERCLIP_AI_PROVIDER_URL: `http://127.0.0.1:${address.port}/v1`,
+          PAPERCLIP_AI_PROVIDER_KEY: "fixture-key",
+        },
+      });
+      const session = await driver.openSession({ runId: "session-header", normalizedSessionId: "session-header", workingDirectory: root });
+      try {
+        const config = JSON.parse(await readFile(join(root, "session-header", "config", "opencode", "opencode.json"), "utf8"));
+        const response = await fetch(`${config.provider.paperclip.options.baseURL}/chat/completions`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${config.provider.paperclip.options.apiKey}`,
+            "Content-Type": "application/json",
+            "x-opencode-session": "opencode-session-fixture",
+          },
+          body: JSON.stringify({ model: "team/model-alias", messages: [] }),
+        });
+        expect(response.status).toBe(200);
+        expect(received).toHaveLength(1);
+        expect(received[0]?.["x-opencode-session"]).toBe("opencode-session-fixture");
+
+        const withoutHeader = await fetch(`${config.provider.paperclip.options.baseURL}/chat/completions`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${config.provider.paperclip.options.apiKey}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ model: "team/model-alias", messages: [] }),
+        });
+        // A custom provider id makes the harness send session affinity instead
+        // of the provider-specific header, so the shim maps it.
+        expect(withoutHeader.status).toBe(200);
+        expect(received).toHaveLength(2);
+        expect(received[1]?.["x-opencode-session"]).toBeUndefined();
+
+        const withAffinity = await fetch(`${config.provider.paperclip.options.baseURL}/chat/completions`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${config.provider.paperclip.options.apiKey}`,
+            "Content-Type": "application/json",
+            "x-session-affinity": "affinity-session-fixture",
+          },
+          body: JSON.stringify({ model: "team/model-alias", messages: [] }),
+        });
+        expect(withAffinity.status).toBe(200);
+        expect(received).toHaveLength(3);
+        expect(received[2]?.["x-opencode-session"]).toBe("affinity-session-fixture");
+      } finally { await session.close({ reason: "test" }); }
+    } finally {
+      await new Promise<void>(resolve => { upstream.close(() => resolve()); upstream.closeAllConnections(); });
+    }
+  });
+
   it("starts an authenticated isolated server, creates a session, streams usage, aborts, and cleans up", async () => {
     await chmod(fixture, 0o755);
     const root = await mkdtemp(join(tmpdir(), "paperclip-opencode-driver-"));

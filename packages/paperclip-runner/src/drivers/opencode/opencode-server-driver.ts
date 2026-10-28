@@ -2197,6 +2197,22 @@ async function startOpenCodeProviderProxy(baseUrl: string, key: string, model: s
         chunks.push(Buffer.from(chunk));
       }
       const body = Buffer.concat(chunks);
+      // OpenCode Go routes on `x-opencode-session`. The harness only adds that
+      // header when its provider id starts with "opencode"; for a custom
+      // provider id (this shim) it sends `x-session-affinity` instead, and the
+      // shim rebuilt the upstream request from an allowlist, so the provider
+      // saw "Request is missing x-opencode-session and cannot be routed
+      // efficiently". Prefer the harness's own header, then fall back to the
+      // session affinity every harness request carries.
+      const openCodeSessionHeader = request.headers["x-opencode-session"];
+      const sessionAffinityHeader =
+        request.headers["x-session-affinity"] ?? request.headers["x-session-id"];
+      const openCodeSession =
+        typeof openCodeSessionHeader === "string" && openCodeSessionHeader.length > 0
+          ? openCodeSessionHeader
+          : typeof sessionAffinityHeader === "string" && sessionAffinityHeader.length > 0
+            ? sessionAffinityHeader
+            : undefined;
       let payload: Record<string, unknown>;
       try { payload = JSON.parse(body.toString("utf8")); }
       catch { response.writeHead(400).end(); return; }
@@ -2208,7 +2224,13 @@ async function startOpenCodeProviderProxy(baseUrl: string, key: string, model: s
         const outgoing = (upstreamUrl.protocol === "https:" ? requestHttps : requestHttp)(upstreamUrl, {
           method: "POST",
           agent,
-          headers: { ...(isOpenRouterUrl(baseUrl) ? OPENROUTER_ATTRIBUTION_HEADERS : {}), "Content-Type": "application/json", "Content-Length": body.length, ...(key ? { Authorization: `Bearer ${key}` } : {}) },
+          headers: {
+            ...(isOpenRouterUrl(baseUrl) ? OPENROUTER_ATTRIBUTION_HEADERS : {}),
+            "Content-Type": "application/json",
+            "Content-Length": body.length,
+            ...(key ? { Authorization: `Bearer ${key}` } : {}),
+            ...(openCodeSession ? { "x-opencode-session": openCodeSession } : {}),
+          },
           signal: AbortSignal.any([controller.signal, AbortSignal.timeout(600_000)]),
         }, resolve);
         outgoing.once("error", reject);
