@@ -25,6 +25,7 @@ import { nativeRuntimeContextFixture } from "../native-runtime/runtime-context.t
 import { createHeartbeatRunState } from "./run-state.js";
 import { buildEffectiveRunSessionConfigMetadata } from "./workspaces.js";
 import { revokeHeartbeatRunGatewayTokens } from "./run-preparation.js";
+import { logger } from "../../middleware/logger.js";
 import { executeHeartbeatRuntime, type HeartbeatRuntimeExecutionInput } from "./runtime-execution.js";
 
 // Keep real accounting, workspace barriers, and task-session persistence. Providers
@@ -237,6 +238,31 @@ describe.skipIf(!support.supported)("heartbeat runtime execution boundary", () =
     expect(input.effects.onNativeSessionResumeScheduled).toHaveBeenCalledOnce();
     expect(await finalizations()).toHaveLength(0);
     expectCleanup(input);
+  });
+
+  it("skips workspace finalization when the native run failed before any result existed", async () => {
+    // 696 of 697 failed native runs in the live database end in
+    // terminal_failure with a null result id. finalizeNativeRun then throws
+    // native_result_missing, which the old catch turned into a warning that
+    // promised a retry no reconciliation could ever make progress on.
+    const info = vi.spyOn(logger, "info");
+    const warn = vi.spyOn(logger, "warn");
+    try {
+      const { input, run } = await fixture(true);
+      await db.update(heartbeatRuns).set({ nativeIssueId: input.task.issueId }).where(eq(heartbeatRuns.id, run.id));
+      await db.insert(nativeRunFinalizations).values({ companyId: run.companyId, issueId: input.task.issueId!, runId: run.id, phase: "terminal_failure", failureCode: "native_turn_failed" });
+      const error = new Error("provider turn failed");
+      vi.mocked(executePaperclipNativeSession).mockRejectedValueOnce(error);
+      await expect(executeHeartbeatRuntime(db, input)).rejects.toBeDefined();
+      expect(info.mock.calls.some(([, message]) => String(message).includes("nothing to mark"))).toBe(true);
+      expect(warn.mock.calls.some(([, message]) => String(message).includes("could not be marked"))).toBe(false);
+      const [coordinator] = await db.select().from(nativeRunFinalizations).where(eq(nativeRunFinalizations.runId, run.id));
+      expect(coordinator).toMatchObject({ phase: "terminal_failure", failureCode: "native_turn_failed" });
+      expectCleanup(input);
+    } finally {
+      info.mockRestore();
+      warn.mockRestore();
+    }
   });
 
   it("records native restoration inside the workspace finalization operation", async () => {

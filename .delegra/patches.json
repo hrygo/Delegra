@@ -363,6 +363,19 @@
       "verifiedAt": "2026-10-28",
       "retireWhen": "The accepted stable base reports an uncreatable controller anchor path for every errno, or refuses a remote environment's remoteWorkspacePath as adapterConfig.cwd.",
       "notes": "resolveAnchorWorkspaceForRun converted EACCES/EPERM into a workspace-validation message but let ENOENT escape as a bare setup error. A target-host path such as /home/<remote-user>/... on a macOS controller hits ENOENT because the parent volume does not exist, so operators saw an unexplained mkdir failure. The guard now covers ENOENT and names the SSH environment's remoteWorkspacePath as the likely source."
+    },
+    {
+      "id": "native-failure-finalize-without-result",
+      "kind": "fork-only",
+      "status": "active",
+      "commits": [
+        "5d6c8536dbc7849db9160be2067084069b22fa56"
+      ],
+      "owner": "hrygo",
+      "reviewBy": "2026-11-30",
+      "verifiedAt": "2026-10-28",
+      "retireWhen": "The accepted stable base stops calling finalizeNativeRun on a coordinator that has no persisted result, or records the terminal workspace failure without one.",
+      "notes": "696 of 697 failed native runs in this instance end in a terminal_failure coordinator with a null result id. runtime-execution then called finalizeNativeRun(workspaceFinalizeStatus: \"failed\"), which throws native_result_missing, and the catch logged 'the reconciliation loop will retry persisted results' for a retry that cannot ever progress (the Error object itself never reached the log sink either). The failure path now skips the call when no result exists, logs the coordinator failure code instead, and includes the error message in the remaining warning."
     }
   ]
 }
