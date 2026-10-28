@@ -5,26 +5,30 @@
     "deploy": "deploy"
   },
   "currentDeployment": {
-    "tag": "deploy/v2026.1024.0-canary.7-r12",
-    "commit": "8cfb6d7f6e0610eb15e07480d0d892807015f944",
+    "tag": "deploy/v2026.1024.0-canary.7-r13",
+    "commit": "de2d1690f783bd6340eb6f1d7e37f25072c28851",
     "base": "canary/v2026.1024.0-canary.7",
     "patches": [
-      "managed-codex-project-auth",
-      "native-ssh-macos-process-identity",
-      "managed-claude-host-auth-boundary",
-      "portable-test-baselines",
+      "budget-allow-unknown-usage",
+      "claude-max-turns-auth-classification",
+      "codex-remote-trust-bypass",
+      "codex-structured-launch-policy",
+      "company-cli-fixture-isolation",
       "fork-review-workflow-token",
       "inbox-badge-resolved-failed-runs",
       "managed-agent-validation-environment",
-      "workspace-test-host-isolation",
-      "company-cli-fixture-isolation",
-      "codex-structured-launch-policy",
+      "managed-claude-host-auth-boundary",
       "managed-claude-task-safety",
+      "managed-codex-project-auth",
       "managed-ssh-run-environment",
+      "native-failure-finalize-without-result",
+      "native-ssh-macos-process-identity",
+      "opencode-go-routing-session",
       "optional-ssh-file-error-contract",
-      "budget-allow-unknown-usage",
+      "portable-test-baselines",
+      "remote-anchor-workspace-enoent",
       "remote-anchor-workspace-error",
-      "claude-max-turns-auth-classification"
+      "workspace-test-host-isolation"
     ]
   },
   "base": {
