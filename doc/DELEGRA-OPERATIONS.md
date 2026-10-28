@@ -324,6 +324,11 @@ and retries on the next interval. It clears the screen only when stdout
 is a terminal, so redirecting a `--watch` run to a file yields plain frames
 instead of one escape sequence per frame.
 
+`--watch` stops when its output pipe closes (for example
+`fleet-status.sh --watch 1 | head -n 1`). The closed write is detected as
+SIGPIPE and the watcher exits instead of keeping the database busy after the
+reader leaves.
+
 An idle agent with no unfinished work exits `0`. Free capacity is the healthy
 case, not an item to action; the panel still lists it so work can be handed out.
 A scope that matches no company, that matches only archived companies, or whose

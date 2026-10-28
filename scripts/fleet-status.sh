@@ -421,7 +421,7 @@ SELECT (SELECT count(*) FROM scoped)::text,
        (SELECT count(*) FROM agents a
         JOIN scoped s ON s.id = a.company_id
         WHERE a.status = 'terminated' AND s.status <> 'archived')::text,
-       (SELECT coalesce(string_agg(name, E'\x1f' ORDER BY name), '') FROM scoped);
+       (SELECT coalesce(string_agg(regexp_replace(name, '[[:cntrl:]]', ' ', 'g'), E'\x1f' ORDER BY name), '') FROM scoped);
 SQL
   local rc=$?
   if [ "$rc" -ne 0 ]; then
@@ -884,12 +884,20 @@ main() {
       #
       # Exit 1 是正常的"需要人工"渲染；只有 2 表示面板无法作答，只有这种情况
       # 才值得在间隔之间告警。
-      ( preflight && run_once )
-      if [ $? -eq 2 ]; then
+      # Exit 141 (128 + SIGPIPE) 表示输出管道已关闭（例如 `| head`），watch
+      # 检测到后停止，不再继续查询数据库。子 shell 里忽略 SIGPIPE，让写失败
+      # 返回退出码而不是直接杀掉进程。
+      ( trap "" PIPE; preflight && run_once )
+      rc=$?
+      if [ "$rc" -eq 141 ]; then
+        break
+      fi
+      if [ "$rc" -eq 2 ]; then
         warn "panel unavailable; retrying in ${WATCH}s"
       fi
       sleep "$WATCH"
     done
+    return 0
   fi
 
   preflight || return 2
