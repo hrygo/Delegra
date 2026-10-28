@@ -5,8 +5,8 @@
     "deploy": "deploy"
   },
   "currentDeployment": {
-    "tag": "deploy/v2026.1024.0-canary.7-r14",
-    "commit": "fa8675037b3da1cef5960bee3445a4dfbc44ea9d",
+    "tag": "deploy/v2026.1024.0-canary.7-r15",
+    "commit": "8cd0a7f1dd166e1c965be64cc31513c35e53d89c",
     "base": "canary/v2026.1024.0-canary.7",
     "patches": [
       "budget-allow-unknown-usage",
