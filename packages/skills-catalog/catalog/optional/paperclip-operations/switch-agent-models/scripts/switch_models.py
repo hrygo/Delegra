@@ -20,7 +20,6 @@ from datetime import datetime, timezone
 SUFFIX_RE = re.compile(r"\((max|high|medium|low)\)$")
 UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE)
 CONNECTION_PREFIX = "paperclip/"
-CONNECTION_PREFIXES = ("paperclip/", "openrouter/")
 DEFAULT_SNAPSHOT_DIR = "~/.paperclip/model-switch-snapshots"
 CONNECTION = "connection"
 PROVIDER = "provider"
@@ -143,7 +142,7 @@ def connection_catalog(company_id: str) -> list[dict]:
     for connection in data.get("connections", []):
         routing = connection.get("routing") or {}
         models = {model["id"] for model in routing.get("models") or [] if model.get("id")}
-        catalog.append({"id": connection.get("id"), "kind": routing.get("kind"), "models": models})
+        catalog.append({"id": connection.get("id"), "provider": connection.get("provider"), "kind": routing.get("kind"), "models": models})
     return catalog
 
 
@@ -208,11 +207,34 @@ def with_suffix(model: str, suffix: str) -> str:
     return model + suffix
 
 
-def strip_prefix(value: str) -> str:
-    for prefix in CONNECTION_PREFIXES:
-        if value.startswith(prefix):
-            return value[len(prefix):]
-    return value
+def model_prefix(agent: dict, catalog: list[dict]) -> str | None:
+    """Return the harness transport prefix, or None when the route is unknown.
+
+    Mirrors aiRoutingModel() in packages/shared/src/ai-provider-routing.ts and
+    managedProviderRouting() in server/src/services/ai-provider-routing.ts.
+    """
+    harness = harness_of(agent)
+    if harness not in ("opencode_local", "pi_local"):
+        return ""
+    binding = binding_of(agent)
+    connection = bound_connection(agent, catalog)
+    route = (connection or {}).get("kind")
+    provider = (connection or {}).get("provider") or (binding or {}).get("provider")
+    # A routed OpenRouter account and a native OpenRouter account name the same
+    # provider, so both take the same prefix without needing routing.kind.
+    if route == "openrouter" or (not route and provider == "openrouter"):
+        return "openrouter/"
+    if route:
+        # aiRoutingModel prefixes OpenCode for other routes but leaves Pi bare.
+        return "paperclip/" if harness == "opencode_local" else ""
+    if harness == "pi_local":
+        # Native Pi requires <provider>/<id>, including a responsible-user default.
+        return f"{provider}/" if provider else None
+    if binding:
+        # A native non-OpenRouter account leaves OpenCode on its own provider
+        # configuration, and the API does not say which model shape that takes.
+        return None
+    return "paperclip/"
 
 
 def target_model(agent: dict, args, catalog: list[dict] | None = None) -> tuple[str | None, str]:
@@ -222,20 +244,12 @@ def target_model(agent: dict, args, catalog: list[dict] | None = None) -> tuple[
         source = args.connection_model or args.model
         if not source:
             return None, "needs --connection-model"
-        bare = strip_prefix(source)
-        harness = harness_of(agent)
-        connection = bound_connection(agent, catalog or [])
-        binding = binding_of(agent)
-        if binding and harness in ("opencode_local", "pi_local") and (not connection or not connection.get("kind")):
+        prefix = model_prefix(agent, catalog or [])
+        if prefix is None:
             return None, "cannot determine bound connection route"
-        route = connection.get("kind") if connection else None
-        if harness == "opencode_local":
-            model = f"{'openrouter' if route == 'openrouter' else 'paperclip'}/{bare}"
-        elif harness == "pi_local" and route == "openrouter":
-            model = f"openrouter/{bare}"
-        else:
-            model = bare
-        return with_suffix(model, suffix), ""
+        # The CLI argument is an upstream model ID, not a harness model value.
+        # For example, openrouter/auto needs a second openrouter/ for OpenCode.
+        return with_suffix(prefix + source, suffix), ""
     if not args.model:
         return None, "needs --model"
     return with_suffix(args.model, suffix), ""
@@ -250,7 +264,10 @@ def validate(agent: dict, model: str, catalog: list[dict], gateway: list[str] | 
         ids = connection["models"] if connection else connection_model_ids(catalog)
         if not ids:
             return True, "unverified (no connection models)"
-        bare = SUFFIX_RE.sub("", strip_prefix(model))
+        bare = SUFFIX_RE.sub("", model)
+        prefix = model_prefix(agent, catalog)
+        if prefix and bare.startswith(prefix):
+            bare = bare[len(prefix):]
         if bare in ids:
             return True, "connection model"
         return False, f"{bare} is not in the bound connection" if binding else f"{bare} is in no connection"
@@ -566,7 +583,7 @@ def add_target_flags(target: argparse.ArgumentParser) -> None:
     target.add_argument("--select", help="agent names, comma separated, or re:<pattern>")
     target.add_argument("--all", action="store_true", help="select every agent")
     target.add_argument("--model", help="literal model value for agents that resolve through their provider")
-    target.add_argument("--connection-model", help="model id for agents whose model starts with paperclip/")
+    target.add_argument("--connection-model", help="upstream model id for agents bound to an AI connection (without a harness prefix)")
     target.add_argument("--drop-suffix", action="store_true", help="drop an existing (max)/(high) suffix")
     target.add_argument("--force", action="store_true", help="write even when a validation check fails")
 

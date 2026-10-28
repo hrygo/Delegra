@@ -39,6 +39,79 @@ class SwitchModelsTests(unittest.TestCase):
         self.assertTrue(switch.validate(self.agent(), model, self.catalog, None)[0])
         self.assertEqual(model.count('(high)'), 1)
 
+    def test_native_openrouter_connection_and_responsible_user(self):
+        for mode in ('shared', 'responsible_user'):
+            for harness in ('opencode_local', 'pi_local'):
+                with self.subTest(mode=mode, harness=harness):
+                    agent = self.agent(harness)
+                    agent['runtimeConfig']['aiConnection'] = {'provider': 'openrouter', 'method': 'api_key', 'mode': mode}
+                    if mode == 'shared':
+                        agent['runtimeConfig']['aiConnection']['connectionId'] = 'bound'
+                    response = {'connections': [{'id': 'bound', 'provider': 'openrouter', 'method': 'api_key'}]}
+                    with patch.object(switch, 'request', return_value=(200, response)):
+                        catalog = switch.connection_catalog('c')
+                    self.assertEqual(switch.target_model(agent, self.args, catalog)[0], 'openrouter/vendor/new(high)')
+
+    def test_upstream_openrouter_auto_is_not_a_transport_prefix(self):
+        self.args.connection_model = 'openrouter/auto'
+        self.catalog[0]['models'] = {'openrouter/auto'}
+        for harness, expected in [('codex_local', 'openrouter/auto(high)'), ('claude_local', 'openrouter/auto(high)'), ('opencode_local', 'openrouter/openrouter/auto(high)'), ('pi_local', 'openrouter/openrouter/auto(high)')]:
+            with self.subTest(harness=harness):
+                agent = self.agent(harness)
+                model, _ = switch.target_model(agent, self.args, self.catalog)
+                self.assertEqual(model, expected)
+                self.assertTrue(switch.validate(agent, model, self.catalog, None)[0])
+
+    def test_responsible_user_unknown_route_is_not_guessed(self):
+        agent = self.agent()
+        agent['runtimeConfig']['aiConnection'] = {'provider': 'openai', 'method': 'api_key', 'mode': 'responsible_user'}
+        self.assertIsNone(switch.target_model(agent, self.args, self.catalog)[0])
+
+    def test_responsible_user_pi_uses_the_binding_provider(self):
+        # isAiConnectionCompatible() requires <provider>/<id> for Pi even when the
+        # binding names no connection, so a responsible-user default is resolvable.
+        for provider in ('openai', 'anthropic', 'google'):
+            with self.subTest(provider=provider):
+                agent = self.agent('pi_local')
+                agent['runtimeConfig']['aiConnection'] = {'provider': provider, 'method': 'api_key', 'mode': 'responsible_user'}
+                model, note = switch.target_model(agent, self.args, [])
+                self.assertEqual((model, note), (f'{provider}/vendor/new(high)', ''))
+
+    def test_native_opencode_without_a_route_is_not_guessed(self):
+        agent = self.agent()
+        agent['runtimeConfig']['aiConnection'] = {'provider': 'openai', 'method': 'api_key', 'mode': 'shared', 'connectionId': 'bound'}
+        catalog = [{'id': 'bound', 'provider': 'openai', 'kind': None, 'models': {'vendor/new'}}]
+        self.assertIsNone(switch.target_model(agent, self.args, catalog)[0])
+
+    def test_force_does_not_guess_an_unknown_route(self):
+        agent = self.agent()
+        agent['runtimeConfig']['aiConnection'] = {'provider': 'openai', 'method': 'api_key', 'mode': 'responsible_user'}
+        args = SimpleNamespace(company='c', all=True, select=None, model=None, connection_model='vendor/new', drop_suffix=True, force=True)
+        with patch.object(switch, 'company_from', return_value={'id': 'c'}), patch.object(switch, 'list_agents', return_value=[agent]), patch.object(switch, 'connection_catalog', return_value=self.catalog), patch.object(switch, 'gateway_model_ids', return_value=None):
+            _, rows, entries = switch.build_plan(args)
+        self.assertFalse(entries[0]['ok'])
+        self.assertEqual(rows[0]['validation'], 'cannot determine bound connection route')
+
+    def test_gateway_keeps_upstream_openrouter_model_id(self):
+        self.args.connection_model = 'openrouter/auto'
+        catalog = [{'id': 'bound', 'kind': 'gateway', 'models': {'openrouter/auto'}}]
+        agent = self.agent()
+        model, _ = switch.target_model(agent, self.args, catalog)
+        self.assertEqual(model, 'paperclip/openrouter/auto(high)')
+        self.assertTrue(switch.validate(agent, model, catalog, None)[0])
+
+    def test_non_openrouter_routing_does_not_apply_native_pi_prefix(self):
+        agent = self.agent('pi_local')
+        agent['runtimeConfig']['aiConnection']['provider'] = 'openai'
+        catalog = [{'id': 'bound', 'provider': 'openai', 'kind': 'gateway', 'models': set()}]
+        self.assertEqual(switch.model_prefix(agent, catalog), '')
+
+    def test_native_pi_non_openrouter_uses_provider_prefix(self):
+        agent = self.agent('pi_local')
+        agent['runtimeConfig']['aiConnection']['provider'] = 'google'
+        catalog = [{'id': 'bound', 'provider': 'google', 'kind': None, 'models': set()}]
+        self.assertEqual(switch.target_model(agent, self.args, catalog)[0], 'google/vendor/new(high)')
+
     def test_uuid_does_not_list_companies(self):
         with patch.object(switch, 'list_companies', side_effect=AssertionError('listed')):
             self.assertEqual(switch.resolve_company('01234567-0123-0123-0123-0123456789ab')['id'], '01234567-0123-0123-0123-0123456789ab')

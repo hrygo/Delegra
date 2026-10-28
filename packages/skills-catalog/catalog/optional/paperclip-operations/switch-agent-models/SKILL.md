@@ -41,14 +41,15 @@ An agent stores its model in `adapterConfig.model`. A bound AI connection decide
 
 | Agent | How it resolves | Write |
 | --- | --- | --- |
-| `runtimeConfig.aiConnection` is set | Paperclip projects that company AI connection into the agent's harness | `paperclip/<id>` or `openrouter/<id>` for OpenCode depending on the route; `openrouter/<id>` for Pi on OpenRouter; bare `<id>` for other harnesses |
+| `runtimeConfig.aiConnection` is set | Paperclip projects that company AI connection into the agent's harness | `paperclip/<id>` or `openrouter/<id>` for OpenCode depending on the route; `openrouter/<id>` for Pi on OpenRouter and `<provider>/<id>` for a native provider; bare `<id>` for other harnesses |
 | no binding | the agent's own provider resolves it — a local CLI config, a gateway alias, or a direct provider id | the exact string that provider accepts |
 
 A record written before bindings existed still counts as connection-backed when its value starts with `paperclip/`.
 
 Two consequences:
 
-- `aiRoutingModel()` prefixes OpenCode connection models with `openrouter/` or `paperclip/` according to the bound route. Pi uses `openrouter/` for OpenRouter; Codex and Claude use bare model IDs. A saved value is not proof that the next run will resolve it correctly.
+- `aiRoutingModel()` prefixes OpenCode connection models with `openrouter/` or `paperclip/` according to the bound route. Pi names its provider, so it takes `openrouter/` or `<provider>/`; Codex and Claude use bare model IDs. A saved value is not proof that the next run will resolve it correctly.
+- `routing` is optional, so a native OpenRouter account and a `responsible_user` binding resolve without it. The prefix follows the provider in those cases instead of blocking the target.
 - The trailing `(max)`, `(high)`, `(medium)`, or `(low)` on some existing models is a reasoning hint. The script preserves the suffix the agent already has, appends it only when the new value has none, and strips it from validation lookups. Pass `--drop-suffix` to remove it.
 
 ## Workflow
@@ -76,7 +77,7 @@ python3 scripts/switch_models.py rollback \
 
 Selection accepts exact names, `re:<pattern>`, or `--all`. Run these commands from this skill's directory, or call the script by its absolute path.
 
-`--model` is the literal value for agents that resolve through their provider. `--connection-model` is the id for agents bound to a company AI connection; the script writes it in the harness's own format. Give both when the company has both kinds, or select each kind in its own run.
+`--model` is the literal value for agents that resolve through their provider. `--connection-model` is the upstream model ID for a company AI connection, not a preformatted harness value; the script adds any required harness prefix. For example, upstream `openrouter/auto` becomes `openrouter/openrouter/auto` for OpenCode and Pi. Give both flags when the company has both kinds, or select each kind in its own run.
 
 ## Validation
 

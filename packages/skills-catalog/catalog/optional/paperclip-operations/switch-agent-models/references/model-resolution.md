@@ -11,11 +11,13 @@ The harness and the bound connection's route decide the format, following `aiRou
 | Harness (`agentHarnessType`) | Value written |
 | --- | --- |
 | `opencode_local` | `openrouter/<id>` for OpenRouter; `paperclip/<id>` for other routes |
-| `pi_local` | `openrouter/<id>` for OpenRouter; bare `<id>` for other routes |
+| `pi_local` | `openrouter/<id>` for OpenRouter; `<provider>/<id>` for a native provider |
 | other harnesses | bare `<id>` |
 
 - Valid ids: `GET /api/companies/{companyId}/ai-connections` → `connections[].routing.models[].id`.
-- A free model inside a connection usually has a bare id such as `beam-free`; an OpenCode agent stores `paperclip/beam-free`, a Codex agent stores `beam-free`, and an OpenCode agent on an OpenRouter route stores `openrouter/<id>`.
+- Supply `--connection-model` as an upstream ID, not a preformatted harness value. For example, `beam-free` becomes `paperclip/beam-free` for a gateway-backed OpenCode agent and remains `beam-free` for Codex. The upstream OpenRouter ID `openrouter/auto` becomes `openrouter/openrouter/auto` for OpenCode and Pi; Codex and Claude retain `openrouter/auto`.
+- `routing` is optional. A native OpenRouter account stores no route, and a `responsible_user` binding names no connection, yet both still resolve. The prefix follows the provider in those cases: OpenRouter takes `openrouter/`, and Pi takes `<provider>/` because `isAiConnectionCompatible()` requires it for every Pi binding.
+- An OpenCode agent on a native account whose provider is not OpenRouter has no derivable prefix: Paperclip leaves that harness on its own provider configuration, and the API does not say which shape it expects. The script blocks the target and names the reason instead of writing a guess.
 - A record with no binding whose value still starts with `paperclip/` is read as connection-backed, so older data keeps working.
 - A model missing from the bound connection's advertised list cannot be validated against that list. Saving a value alone does not prove that the next run will succeed.
 - For an explicit binding, validate against that connection rather than the union of company connections. A legacy `paperclip/` value without a binding can only be checked against the union; confirm its intended connection separately. If a bound route needed for prefix selection is unavailable, the script blocks the target instead of guessing from another connection.
