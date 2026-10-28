@@ -29,7 +29,8 @@
       "remote-anchor-workspace-enoent",
       "remote-anchor-workspace-error",
       "workspace-test-host-isolation",
-      "claude-build-registry-egress"
+      "claude-build-registry-egress",
+      "fleet-status-panel"
     ]
   },
   "base": {
@@ -421,6 +422,19 @@
       "verifiedAt": "2026-10-28",
       "retireWhen": "The accepted stable base ships the switch-agent-models catalog skill from upstream PR #17988.",
       "notes": "Optional catalog skill that lists how each agent resolves its model, plans a bulk change, validates it against the bound connection or the gateway, writes it with a snapshot, and rolls it back. Upstream work lives on PR paperclipai/paperclip#17988; this entry is a fork-only port rather than a patch-equivalent backport because deploy trails that branch's base by 231 upstream commits, where a full merge conflicts in 23 unrelated files. Only the skill surface was carried over and the catalog manifest was regenerated on this branch. Model routing follows aiRoutingModel() and managedProviderRouting(): OpenCode takes openrouter/ or paperclip/, Pi always takes <provider>/, and other harnesses keep the bare upstream id. Verified with the catalog manifest build and validate, a clean skills-catalog typecheck, 18 Python regression tests, and the shipped-catalog and stale-manifest suites."
+    },
+    {
+      "id": "fleet-status-panel",
+      "kind": "fork-only",
+      "status": "active",
+      "commits": [
+        "eaaf0842aa1079636010b71e44e3b3a44ffa8ffd"
+      ],
+      "owner": "hrygo",
+      "reviewBy": "2026-11-30",
+      "verifiedAt": "2026-10-28",
+      "retireWhen": "The upstream dashboard API exposes per-agent run state and wakeup health with equivalent detail, or a stable base ships with a built-in fleet panel.",
+      "notes": "A read-only bash+psql operator panel that renders per-agent run state, work cards, wakeup health and recovery status. Kept as a fork-only patch because it depends on direct SQL (not the HTTP API) and is sized for Delegra's operator workflow. The script enforces read-only sessions and bounded timeouts."
     }
   ]
 }
