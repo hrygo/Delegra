@@ -657,6 +657,7 @@ describe("OpenCodeServerDriver", () => {
   });
 
   it.each(["gateway-key", ""])("forwards selected-model streams without exposing the reusable key and revokes the proxy on close (%s)", async key => {
+    await chmod(fixture, 0o755);
     const received: Array<{ path: string; authorization?: string; body: unknown; session?: string }> = [];
     const upstream = createHttpServer((request, response) => {
       void (async () => {
@@ -744,6 +745,41 @@ describe("OpenCodeServerDriver", () => {
     expect(harnessRoutingSessionId({ "x-session-affinity": ["ses_first", "ses_second"] })).toBe("ses_first");
     expect(harnessRoutingSessionId({ "x-session-affinity": "  " })).toBeUndefined();
     expect(harnessRoutingSessionId({})).toBeUndefined();
+  });
+
+  it("passes an explicit harness routing session through to the gateway", async () => {
+    await chmod(fixture, 0o755);
+    const received: Array<Record<string, string | string[] | undefined>> = [];
+    const upstream = createHttpServer((request, response) => {
+      received.push(request.headers);
+      request.resume();
+      response.writeHead(200, { "content-type": "text/event-stream" }).end("data: [DONE]\n\n");
+    });
+    await new Promise<void>(resolve => upstream.listen(0, "127.0.0.1", resolve));
+    const address = upstream.address();
+    if (!address || typeof address === "string") throw new Error("Missing fixture address");
+    const root = await mkdtemp(join(tmpdir(), "paperclip-opencode-session-header-"));
+    roots.push(root);
+    let session: Awaited<ReturnType<OpenCodeServerDriver["openSession"]>> | undefined;
+    try {
+      const driver = new OpenCodeServerDriver({
+        model: "paperclip/team/model-alias", runtimeDirectory: root, command: fixture,
+        environment: { PATH: process.env.PATH, PAPERCLIP_AI_PROVIDER_URL: `http://127.0.0.1:${address.port}/custom/v1`, PAPERCLIP_AI_PROVIDER_KEY: "fixture-key" },
+      });
+      session = await driver.openSession({ runId: "session-header", normalizedSessionId: "session-header", workingDirectory: root });
+      const config = JSON.parse(await readFile(join(root, "session-header", "config", "opencode", "opencode.json"), "utf8"));
+      const { baseURL, apiKey } = config.provider.paperclip.options;
+      const url = `${baseURL}/chat/completions`;
+      const body = JSON.stringify({ model: "team/model-alias", stream: true, messages: [] });
+      const base = { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" };
+      expect((await fetch(url, { method: "POST", headers: { ...base, "x-opencode-session": "opencode-session-fixture" }, body })).status).toBe(200);
+      expect((await fetch(url, { method: "POST", headers: base, body })).status).toBe(200);
+      expect(received[0]?.["x-opencode-session"]).toBe("opencode-session-fixture");
+      expect(received[1]?.["x-opencode-session"]).toBeUndefined();
+    } finally {
+      await session?.close({ reason: "test" });
+      await new Promise<void>(resolve => { upstream.close(() => resolve()); upstream.closeAllConnections(); });
+    }
   });
 
   it.each([["HTTP_PROXY", "file"], ["ALL_PROXY", "directory"]] as const)("uses the runtime's %s, %s trust, and NO_PROXY without changing global transport", async (proxySetting, trust) => {
