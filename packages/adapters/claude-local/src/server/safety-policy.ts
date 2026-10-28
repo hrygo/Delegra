@@ -3,6 +3,19 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 
 export const CLAUDE_SAFETY_MINIMUM_VERSION = "2.1.310";
+
+/**
+ * The one admitted egress for the build profile: the package registries a
+ * locked install needs. A build that cannot resolve its dependencies spends
+ * its whole turn budget on workarounds and still fails, so these registries
+ * are allowlisted while every other host stays blocked. Keep the list literal
+ * and minimal; any new capability still needs a separately designed policy.
+ */
+export const WORKSPACE_BUILD_NETWORK_ALLOWLIST = [
+  "registry.npmjs.org",
+  "registry.npmmirror.com",
+] as const;
+
 export interface ClaudeSafetyPolicy {
   version: 1;
   profile: "workspace-build" | "candidate-review";
@@ -109,7 +122,11 @@ export async function buildClaudeSafetyPolicy(input: {
       excludedCommands: [],
       allowAppleEvents: false,
       network: {
-        strictAllowlist: true, allowedDomains: [], allowAllUnixSockets: false,
+        strictAllowlist: true,
+        allowedDomains: policy.profile === "workspace-build"
+          ? [...WORKSPACE_BUILD_NETWORK_ALLOWLIST]
+          : [],
+        allowAllUnixSockets: false,
         allowUnixSockets: [], allowLocalBinding: false,
       },
       filesystem: { disabled: false, allowWrite: [], denyWrite, allowRead: skillSources.map(skill => skill.source) },
