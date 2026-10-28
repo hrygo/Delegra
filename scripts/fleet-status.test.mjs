@@ -12,6 +12,7 @@ import test from "node:test";
 
 const repoRoot = new URL("..", import.meta.url).pathname.replace(/\/$/, "");
 const scriptPath = join(repoRoot, "scripts", "fleet-status.sh");
+const renderPath = join(repoRoot, "scripts", "fleet-status-render.sh");
 const script = readFileSync(scriptPath, "utf8");
 const FIELD_SEPARATOR = "\x1f";
 
@@ -59,6 +60,7 @@ function drive({ rows, mode = "text", scopeMulti = 0, extra = "" }) {
     "reset_counters",
     'ROWS="$FIXTURE"',
     'SCOPE_NAMES="Testco"',
+    'SCOPE_NAME_LIST=("Testco")',
     `SCOPE_MULTI=${scopeMulti}`,
     'GENERATED_AT="2026-01-01 00:00:00"',
     'GENERATED_AT_ISO="2026-01-01T00:00:00+0000"',
@@ -81,6 +83,25 @@ test("script is executable, parses, and needs only bash plus psql", () => {
   assert.doesNotMatch(script, /^\s*python3?\s/m, "the panel must not shell out to python");
   assert.doesNotMatch(script, /command -v python/, "the panel must not depend on python");
   assert.doesNotMatch(script, /^\s*jq\s/m, "the panel must not shell out to jq");
+});
+
+test("the panel sources the renderer next to itself", () => {
+  accessSync(renderPath, constants.R_OK);
+  execFileSync("bash", ["-n", renderPath]);
+  assert.match(script, /fleet-status-render\.sh/, "the panel must load the renderer");
+  const sourced = execFileSync(
+    "bash",
+    ["-c", 'set -u; source "$1"; declare -F render_text render_json >/dev/null', "_", scriptPath],
+    { encoding: "utf8" },
+  );
+  assert.equal(sourced, "");
+});
+
+test("neither panel file grows past the size rule", () => {
+  for (const path of [scriptPath, renderPath]) {
+    const lines = readFileSync(path, "utf8").split("\n").length;
+    assert.ok(lines <= 1000, `${path} has ${lines} lines`);
+  }
 });
 
 test("an idle agent with no work is capacity, not attention", () => {
@@ -349,7 +370,7 @@ test("watch mode writes no terminal control codes to a file", () => {
   const driver = [
     'source "$SCRIPT"',
     "preflight() { return 0; }",
-    'resolve_scope() { SCOPE_NAMES="Testco"; SCOPE_MULTI=0; EXCLUDED_TERMINATED=0; return 0; }',
+    'resolve_scope() { SCOPE_NAMES="Testco"; SCOPE_NAME_LIST=("Testco"); SCOPE_MULTI=0; EXCLUDED_TERMINATED=0; return 0; }',
     'fetch_rows() { SQL_OUT="$FIXTURE"; return 0; }',
     'main --watch 1 --db "postgresql://example.invalid/paperclip"',
   ].join("\n");
@@ -481,7 +502,7 @@ test("an archived-only scope exits 2 with a reason instead of an empty table", (
   const driver = [
     "set -u",
     'source "$SCRIPT"',
-    'query() { SQL_OUT="1${FS}OldCo${FS}1${FS}0"; return 0; }',
+    'query() { SQL_OUT="1${FS}1${FS}0${FS}OldCo"; return 0; }',
     "resolve_scope",
   ].join("\n");
   const run = spawnSync("bash", ["-c", driver], {
@@ -493,19 +514,94 @@ test("an archived-only scope exits 2 with a reason instead of an empty table", (
 });
 
 test("a company that matches nothing exits 2 instead of exiting 0", () => {
-  const probe = spawnSync("psql", ["postgres://paperclip:paperclip@localhost:5432/paperclip", "-tAc", "SELECT 1"], {
+  // Stubbed: the scope query reports no matching company.
+  const driver = [
+    "set -u",
+    'source "$SCRIPT"',
+    'query() { SQL_OUT="0${FS}0${FS}0${FS}"; return 0; }',
+    'COMPANY="no-such-company-xyz"',
+    "resolve_scope",
+  ].join("\n");
+  const run = spawnSync("bash", ["-c", driver], {
     encoding: "utf8",
-    timeout: 10_000,
-  });
-  if (probe.status !== 0) {
-    // No reachable local instance: the exit-2 contract is already covered by
-    // the unreachable-database case above.
-    return;
-  }
-  const run = spawnSync("bash", [scriptPath, "--company", "no-such-company-xyz"], {
-    encoding: "utf8",
-    timeout: 30_000,
+    env: { ...process.env, SCRIPT: scriptPath },
   });
   assert.equal(run.status, 2);
   assert.match(run.stderr, /no company matches/);
+});
+
+test("a silent run is reported before it is old", () => {
+  // The age threshold and the silence threshold are independent. A run that is
+  // younger than --running-slow but silent for longer than --run-silent still
+  // needs a human.
+  const run = drive({ rows: [row({ agent: "quiet", runState: "running", runCard: "T-1", runAge: 15, runSilent: 12 })] });
+  assert.equal(run.status, 1, run.stderr);
+  assert.match(run.stdout, /no new output for 12m/);
+  assert.match(run.stdout, /silent runs 1/);
+});
+
+test("the action lines report the count before the threshold", () => {
+  const run = drive({ rows: [row({ agent: "w", failed: 2, stalePending: 5, oldestPending: 90 })] });
+  assert.equal(run.status, 1, run.stderr);
+  assert.match(run.stdout, /2 failed wakeup\(s\) in the last 3h/);
+  assert.match(run.stdout, /5 wakeup\(s\) queued longer than 30m/);
+});
+
+test("a paused agent that only holds parked cards still needs a human", () => {
+  const run = drive({ rows: [row({ agent: "p", status: "paused", active: 0, review: 0, parked: 2 })] });
+  assert.equal(run.status, 1, run.stderr);
+  assert.match(run.stdout, /paused but still holds 0 open \/ 0 in review \/ 2 parked/);
+});
+
+test("a flag wins over an exported environment default", () => {
+  const run = spawnSync("bash", ["-c", 'source "$SCRIPT"; parse_args --run-silent 3; echo "$RUN_SILENT|$RUNNING_SLOW"'], {
+    encoding: "utf8",
+    env: { ...process.env, SCRIPT: scriptPath, FLEET_RUN_SILENT: "10", FLEET_RUNNING_SLOW: "40" },
+  });
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(run.stdout.trim(), "3|40");
+});
+
+test("a company name that holds a pipe stays one name", () => {
+  const run = spawnSync("bash", ["-c", 'source "$SCRIPT"; scope_names_split "Research|Ops"; echo "${#SCOPE_NAME_LIST[@]}"; echo "${SCOPE_NAME_LIST[0]}"'], {
+    encoding: "utf8",
+    env: { ...process.env, SCRIPT: scriptPath },
+  });
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(run.stdout.trim(), "1\nResearch|Ops");
+
+  const json = spawnSync("bash", ["-c", 'source "$SCRIPT"; scope_names_split "Research|Ops"; scope_companies_json; echo "$JSON"'], {
+    encoding: "utf8",
+    env: { ...process.env, SCRIPT: scriptPath },
+  });
+  assert.equal(json.status, 0, json.stderr);
+  assert.equal(json.stdout.trim(), '["Research|Ops"]');
+});
+
+test("a control character in a name becomes a JSON escape", () => {
+  const run = spawnSync("bash", ["-c", 'source "$SCRIPT"; json_string "$CTRL"; echo "$JSON"'], {
+    encoding: "utf8",
+    env: { ...process.env, SCRIPT: scriptPath, CTRL: "a\u0001b" },
+  });
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(run.stdout.trim(), '"a\\u0001b"');
+});
+
+test("watch mode retries after a failure instead of stopping", () => {
+  // A failure that ends the shell must end that attempt only. The watcher
+  // reports it and tries again on the next interval.
+  const out = join(tmpdir(), `fleet-watch-retry-${process.pid}.txt`);
+  const driver = [
+    'source "$SCRIPT"',
+    "preflight() { return 2; }",
+    'main --watch 1 --db "postgresql://example.invalid/paperclip"',
+  ].join("\n");
+  const run = spawnSync("bash", ["-c", `${driver} > "$OUT" 2>&1`], {
+    encoding: "utf8",
+    timeout: 3500,
+    env: { ...process.env, SCRIPT: scriptPath, OUT: out },
+  });
+  const written = readFileSync(out, "utf8");
+  try { unlinkSync(out); } catch {}
+  assert.match(written, /panel unavailable; retrying in 1s/);
 });

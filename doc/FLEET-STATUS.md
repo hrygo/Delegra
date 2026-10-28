@@ -51,8 +51,9 @@ cannot be parsed, or when the scope matches no agent.
 The text panel and the JSON document use one decision function. They cannot
 report different facts.
 
-`--watch` does not propagate these codes. It reports each failure on stderr and
-keeps the interval running. Use a single run for health checks.
+`--watch` does not propagate these codes. A failed round is reported on stderr
+and the next round starts after the interval, so a database that comes back
+does not end the watch. Use a single run for health checks.
 
 An idle agent with no unfinished work exits `0`. Free capacity is healthy. The
 panel still lists it so that an operator can hand out work.
@@ -79,7 +80,8 @@ The panel reports these states:
 - `in_review` work that is not the card of a live run. A review card that the
   assigned agent is running now is not counted again. The reported wait skips
   that card.
-- A paused agent that still holds unfinished work.
+- A paused agent that still holds unfinished work. A card parked on the agent
+  counts as unfinished work here, the same as an active or in-review card.
 - An agent with status `error` or `pending_approval`.
 - Failed wakeup requests inside the `--wake-window` window.
 - Queued or deferred wakeups that are older than `--wake-stale` and that no run
@@ -117,9 +119,11 @@ one of those behind.
 
 The same values can be set through `FLEET_RUNNING_SLOW`, `FLEET_RUN_SILENT`,
 `FLEET_TODO_IDLE`, `FLEET_REVIEW_WAIT`, `FLEET_WAKE_WINDOW_H` and
-`FLEET_WAKE_STALE`. This keeps `--watch` invocations short. Every threshold is
-echoed in the header and in the JSON `thresholds` block. A reading is always
-attributable to the numbers that produced it.
+`FLEET_WAKE_STALE`. This keeps `--watch` invocations short. An explicit flag
+wins over the environment variable, and the environment variable wins over the
+built-in default. Every threshold is echoed in the header and in the JSON
+`thresholds` block. A reading is always attributable to the numbers that
+produced it.
 
 ## Data source and scope
 
@@ -164,8 +168,21 @@ list. A missing column surfaces as a query failure with the PostgreSQL error.
 ## Tests
 
 ```sh
-pnpm test:fleet-status
+node --test scripts/fleet-status.test.mjs
 ```
 
 The test file covers the decision rules, the exit codes, the width calculation
-for CJK text, the scope handling and the pipe behaviour.
+for CJK text, the scope handling and the pipe behaviour. It needs no database
+instance: every query is stubbed.
+
+## Files
+
+| File | Role |
+| ---- | ---- |
+| `scripts/fleet-status.sh` | Argument parsing, the read-only queries and the decision rules. |
+| `scripts/fleet-status-render.sh` | The text and JSON renderers. Sourced by the panel, never run on its own. |
+| `scripts/fleet-status.test.mjs` | The test suite for both files. |
+| `doc/FLEET-STATUS.md` | This document. |
+
+The panel resolves the renderer next to itself, so the two files have to stay
+in the same directory.

@@ -118,6 +118,7 @@ A_FAILED_WAKE_EVENTS=0
 A_STALE_WAKE_EVENTS=0
 NEEDS_ATTENTION=0
 SCOPE_NAMES=""
+SCOPE_NAME_LIST=()
 SCOPE_MULTI=0
 EXCLUDED_TERMINATED=0
 GENERATED_AT=""
@@ -171,6 +172,21 @@ warn() {
   printf '%s: %s\n' "$PROG" "$*" >&2
 }
 
+# The rendering layer sits next to this script. Resolve the directory from
+# the invocation, so the panel runs the same way from any working directory.
+case "${BASH_SOURCE[0]}" in
+  */*) FLEET_DIR=${BASH_SOURCE[0]%/*} ;;
+  *)
+    # Invoked through PATH: ask the shell where it found the command.
+    FLEET_SELF=$(command -v -- "${BASH_SOURCE[0]}" 2>/dev/null) || FLEET_SELF=""
+    case "$FLEET_SELF" in
+      */*) FLEET_DIR=${FLEET_SELF%/*} ;;
+      *) FLEET_DIR=. ;;
+    esac
+    ;;
+esac
+. "$FLEET_DIR/fleet-status-render.sh"
+
 # ---------------------------------------------------------------- arguments
 
 # Validates in the current shell: a die inside $(...) would only exit the
@@ -182,7 +198,31 @@ assert_uint() {
   esac
 }
 
+# Applies the environment defaults. This runs before the flags are parsed, so an
+# explicit flag always wins over an exported default.
+apply_env_defaults() {
+  if [ -n "${FLEET_RUNNING_SLOW:-}" ]; then
+    assert_uint FLEET_RUNNING_SLOW "$FLEET_RUNNING_SLOW"; RUNNING_SLOW=$FLEET_RUNNING_SLOW
+  fi
+  if [ -n "${FLEET_RUN_SILENT:-}" ]; then
+    assert_uint FLEET_RUN_SILENT "$FLEET_RUN_SILENT"; RUN_SILENT=$FLEET_RUN_SILENT
+  fi
+  if [ -n "${FLEET_TODO_IDLE:-}" ]; then
+    assert_uint FLEET_TODO_IDLE "$FLEET_TODO_IDLE"; TODO_IDLE=$FLEET_TODO_IDLE
+  fi
+  if [ -n "${FLEET_REVIEW_WAIT:-}" ]; then
+    assert_uint FLEET_REVIEW_WAIT "$FLEET_REVIEW_WAIT"; REVIEW_WAIT=$FLEET_REVIEW_WAIT
+  fi
+  if [ -n "${FLEET_WAKE_WINDOW_H:-}" ]; then
+    assert_uint FLEET_WAKE_WINDOW_H "$FLEET_WAKE_WINDOW_H"; WAKE_WINDOW_H=$FLEET_WAKE_WINDOW_H
+  fi
+  if [ -n "${FLEET_WAKE_STALE:-}" ]; then
+    assert_uint FLEET_WAKE_STALE "$FLEET_WAKE_STALE"; WAKE_STALE=$FLEET_WAKE_STALE
+  fi
+}
+
 parse_args() {
+  apply_env_defaults
   while [ $# -gt 0 ]; do
     case "$1" in
       --json) MODE="json"; shift ;;
@@ -259,26 +299,6 @@ parse_args() {
       *) die "unknown argument '$1' (try --help)" ;;
     esac
   done
-
-  # Environment fallbacks keep --watch invocations short.
-  if [ -n "${FLEET_RUNNING_SLOW:-}" ]; then
-    assert_uint FLEET_RUNNING_SLOW "$FLEET_RUNNING_SLOW"; RUNNING_SLOW=$FLEET_RUNNING_SLOW
-  fi
-  if [ -n "${FLEET_RUN_SILENT:-}" ]; then
-    assert_uint FLEET_RUN_SILENT "$FLEET_RUN_SILENT"; RUN_SILENT=$FLEET_RUN_SILENT
-  fi
-  if [ -n "${FLEET_TODO_IDLE:-}" ]; then
-    assert_uint FLEET_TODO_IDLE "$FLEET_TODO_IDLE"; TODO_IDLE=$FLEET_TODO_IDLE
-  fi
-  if [ -n "${FLEET_REVIEW_WAIT:-}" ]; then
-    assert_uint FLEET_REVIEW_WAIT "$FLEET_REVIEW_WAIT"; REVIEW_WAIT=$FLEET_REVIEW_WAIT
-  fi
-  if [ -n "${FLEET_WAKE_WINDOW_H:-}" ]; then
-    assert_uint FLEET_WAKE_WINDOW_H "$FLEET_WAKE_WINDOW_H"; WAKE_WINDOW_H=$FLEET_WAKE_WINDOW_H
-  fi
-  if [ -n "${FLEET_WAKE_STALE:-}" ]; then
-    assert_uint FLEET_WAKE_STALE "$FLEET_WAKE_STALE"; WAKE_STALE=$FLEET_WAKE_STALE
-  fi
 
   if [ -z "$DB_DSN" ]; then
     DB_DSN="${PAPERCLIP_FLEET_DATABASE_URL:-${DATABASE_URL:-postgres://paperclip:paperclip@localhost:5432/paperclip}}"
@@ -362,6 +382,28 @@ SQL
   return 0
 }
 
+# Splits the scope list into the individual company names and builds the
+# display string. The list uses the field separator, so a name that holds a "|"
+# or any other printable character stays one name.
+scope_names_split() {
+  local rest=$1 name first=1
+  SCOPE_NAME_LIST=()
+  SCOPE_NAMES=""
+  while [ -n "$rest" ]; do
+    case "$rest" in
+      *"$FS"*) name=${rest%%"$FS"*}; rest=${rest#*"$FS"} ;;
+      *) name=$rest; rest="" ;;
+    esac
+    SCOPE_NAME_LIST+=("$name")
+    if [ "$first" -eq 1 ]; then
+      SCOPE_NAMES=$name
+      first=0
+    else
+      SCOPE_NAMES="${SCOPE_NAMES}, ${name}"
+    fi
+  done
+}
+
 # Resolves the company scope in one round trip: how many companies matched,
 # their names, and how many terminated agents the scope holds. A scope that
 # matches nothing is a configuration problem, not an all-clear.
@@ -375,11 +417,11 @@ WITH scoped AS (
      OR lower(name) = lower(:'company')
 )
 SELECT (SELECT count(*) FROM scoped)::text,
-       (SELECT coalesce(string_agg(name, '|' ORDER BY name), '') FROM scoped),
        (SELECT count(*) FROM scoped WHERE status = 'archived')::text,
        (SELECT count(*) FROM agents a
         JOIN scoped s ON s.id = a.company_id
-        WHERE a.status = 'terminated' AND s.status <> 'archived')::text;
+        WHERE a.status = 'terminated' AND s.status <> 'archived')::text,
+       (SELECT coalesce(string_agg(name, E'\x1f' ORDER BY name), '') FROM scoped);
 SQL
   local rc=$?
   if [ "$rc" -ne 0 ]; then
@@ -387,13 +429,17 @@ SQL
     return 2
   fi
 
+  # The names come last, joined with the field separator. A company name may
+  # hold any printable character, including "|", so it is never split on a
+  # character that a name can contain.
   local count rest archived
   count=${SQL_OUT%%"$FS"*}
   rest=${SQL_OUT#*"$FS"}
-  SCOPE_NAMES=${rest%%"$FS"*}
-  rest=${rest#*"$FS"}
   archived=${rest%%"$FS"*}
-  EXCLUDED_TERMINATED=${rest#*"$FS"}
+  rest=${rest#*"$FS"}
+  EXCLUDED_TERMINATED=${rest%%"$FS"*}
+  rest=${rest#*"$FS"}
+  scope_names_split "$rest"
 
   case "$count" in
     ''|*[!0-9]*) die "unexpected scope answer from the database: '$count'" ;;
@@ -599,15 +645,24 @@ classify_row() {
   case "$run_state" in
     running|queued|scheduled_retry)
       if [ "$run_state" = "running" ]; then ROW_STATE="busy"; else ROW_STATE="queued"; fi
-      if [ "$run_state" = "running" ] && [ "$run_age" -ge "$RUNNING_SLOW" ]; then
-        ROW_ATTENTION="$ROW_ATTENTION long_run"
-        if [ "$run_silent" -ge "$RUN_SILENT" ]; then
+      if [ "$run_state" = "running" ]; then
+        # The age threshold and the silence threshold are independent. A run can
+        # go silent long before it is old, and it must be reported either way.
+        local slow=0 silent=0
+        if [ "$run_age" -ge "$RUNNING_SLOW" ]; then slow=1; fi
+        if [ "$run_silent" -ge "$RUN_SILENT" ]; then silent=1; fi
+        if [ "$slow" -eq 1 ]; then
+          ROW_ATTENTION="$ROW_ATTENTION long_run"
+        fi
+        if [ "$silent" -eq 1 ]; then
           ROW_ATTENTION="$ROW_ATTENTION silent_run"
+        fi
+        if [ "$silent" -eq 1 ]; then
           ROW_NOTE="running ${run_age}m, no new output for ${run_silent}m: check the run log and the artifacts"
-        else
+        elif [ "$slow" -eq 1 ]; then
           ROW_NOTE="running ${run_age}m: check the progress and the artifacts"
         fi
-      elif [ "$run_state" != "running" ] && [ "$run_age" -ge "$WAKE_STALE" ]; then
+      elif [ "$run_age" -ge "$WAKE_STALE" ]; then
         ROW_ATTENTION="$ROW_ATTENTION stale_run"
         ROW_NOTE="not running after ${run_age}m: check the wakeups and the concurrency limit"
       fi
@@ -618,9 +673,11 @@ classify_row() {
       case "$status" in
         paused)
           ROW_STATE="paused"
-          if [ $((active + review)) -gt 0 ]; then
+          # Parked cards (backlog or blocked) are unfinished work too. A paused
+          # agent that only holds those still needs a human.
+          if [ $((active + review + parked)) -gt 0 ]; then
             ROW_ATTENTION="$ROW_ATTENTION paused_with_work"
-            ROW_NOTE="paused but still holds ${active} open / ${review} in review${pause_reason:+ (reason: ${pause_reason})}: confirm this is intended"
+            ROW_NOTE="paused but still holds ${active} open / ${review} in review / ${parked} parked${pause_reason:+ (reason: ${pause_reason})}: confirm this is intended"
           elif [ -n "$pause_reason" ]; then
             ROW_NOTE="paused (reason: ${pause_reason})"
           fi
@@ -740,336 +797,10 @@ tally_row() {
 }
 
 # ---------------------------------------------------------------- rendering
-
-# Resolves a UTF-8 locale for character counting. Without one, bash reports byte
-# lengths and CJK text is padded to three columns per character.
-resolve_utf8_locale() {
-  local name
-  for name in C.UTF-8 en_US.UTF-8; do
-    if [ "$(LC_ALL=$name locale charmap 2>/dev/null)" = "UTF-8" ]; then
-      printf '%s' "$name"
-      return 0
-    fi
-  done
-  return 1
-}
-
-# Sets W to the display width of $1 in terminal columns, computed from bytes
-# rather than characters so the table lines up the same way under LC_ALL=C
-# (cron, systemd, CI) as it does in an interactive shell. Three-byte characters
-# are CJK and occupy two columns; a two-byte character is counted one column
-# short, which is rare in agent names and only ever under-pads.
 #
-# The length calls are builtins scoped by a local LC_ALL, so the per-cell cost
-# is arithmetic rather than a fork. The tr/wc fallback runs only on hosts with
-# no UTF-8 locale at all.
-disp_width() {
-  local s=$1 chars bytes
-  case "$s" in
-    *[!-~]*) ;;
-    *) W=${#s}; return ;;
-  esac
-  if [ -n "$UTF8_LOCALE" ]; then
-    local LC_ALL=$UTF8_LOCALE
-    chars=${#s}
-    local LC_ALL=C
-    bytes=${#s}
-    W=$(( chars + (bytes - chars) / 2 ))
-    return
-  fi
-  chars=$(printf '%s' "$s" | tr -d '\000-\177' | wc -c | tr -d '[:space:]')
-  bytes=$(printf '%s' "$s" | wc -c | tr -d '[:space:]')
-  case "$chars$bytes" in
-    ''|*[!0-9]*) W=${#s}; return ;;
-  esac
-  W=$(( (bytes - chars) + (chars / 3) * 2 ))
-}
-
-# Resolved once at load time so sourced callers get the same behaviour as an
-# executed run.
-UTF8_LOCALE=$(resolve_utf8_locale 2>/dev/null) || UTF8_LOCALE=""
-
-# Writes one line of output. A consumer that stops reading (`| head`) is normal
-# usage and ends the panel quietly; a failed write to a file or device is a real
-# failure and must not be reported as a successful run.
-emit() {
-  # stderr is silenced for the write itself: bash prints "write error: Broken
-  # pipe" for every remaining cell otherwise. Formats here are literals, so the
-  # only thing being hidden is that message.
-  printf "$@" 2>/dev/null && return 0
-  if [ -f /dev/stdout ]; then
-    printf '%s: cannot write output\n' "$PROG" >&2
-    exit 2
-  fi
-  exit 0
-}
-
-# Sets PADDED to $1 right-padded to $2 display columns.
-pad() {
-  local s=$1 width=$2 fill
-  disp_width "$s"
-  fill=$(( width - W ))
-  if [ "$fill" -lt 0 ]; then fill=0; fi
-  printf -v PADDED '%s%*s' "$s" "$fill" ''
-}
-
-# Sets JSON to $1 as a quoted JSON string.
-json_string() {
-  local s=$1
-  s=${s//\\/\\\\}
-  s=${s//\"/\\\"}
-  s=${s//$'\b'/\\b}
-  s=${s//$'\f'/\\f}
-  s=${s//$'\n'/\\n}
-  s=${s//$'\r'/\\r}
-  s=${s//$'\t'/\\t}
-  printf -v JSON '"%s"' "$s"
-}
-
-json_optional_string() {
-  if [ -z "$1" ]; then JSON="null"; else json_string "$1"; fi
-}
-
-json_optional_number() {
-  if [ -z "$1" ] || [ "$1" -lt 0 ] 2>/dev/null; then
-    JSON="null"
-  else
-    JSON=$1
-  fi
-}
-
-json_bool() {
-  if [ "$1" -eq 1 ]; then JSON="true"; else JSON="false"; fi
-}
-
-# The table shows the derived state, not agents.status: a database row can still
-# read "idle" while a run is already executing, and the panel's job is to say
-# what is happening, not what was last written to the row.
-state_label() {
-  case "$1" in
-    busy) STATE_LABEL='running' ;;
-    queued) STATE_LABEL='queued' ;;
-    idle_with_work) STATE_LABEL='cards idle' ;;
-    waiting) STATE_LABEL='waiting' ;;
-    free) STATE_LABEL='available' ;;
-    paused) STATE_LABEL='paused' ;;
-    error) STATE_LABEL='error' ;;
-    pending_approval) STATE_LABEL='approval' ;;
-    *) STATE_LABEL=$1 ;;
-  esac
-}
-
-# Sets JSON to the attention codes as a JSON array.
-json_attention_array() {
-  local code sep="" out="["
-  for code in $ROW_ATTENTION; do
-    json_string "$code"
-    out="$out$sep$JSON"
-    sep=","
-  done
-  JSON="$out]"
-}
-
-# Sets JSON to the resolved company names as a JSON array.
-scope_companies_json() {
-  local old_ifs=$IFS name first=1 out=""
-  IFS='|'
-  for name in $SCOPE_NAMES; do
-    name=${name# }
-    name=${name% }
-    if [ "$first" -eq 0 ]; then out="$out, "; fi
-    first=0
-    json_string "$name"
-    out="$out$JSON"
-  done
-  IFS=$old_ifs
-  JSON="[$out]"
-}
-
-render_header_text() {
-  emit '══ FLEET STATUS %s ══\n' "$GENERATED_AT"
-  emit 'scope %s · thresholds running>%sm/silent>%sm · open>%sm · review>%sm · wake window %sh/queued>%sm\n' \
-    "$SCOPE_NAMES" "$RUNNING_SLOW" "$RUN_SILENT" "$TODO_IDLE" "$REVIEW_WAIT" "$WAKE_WINDOW_H" "$WAKE_STALE"
-  emit '\n'
-  local line="" rule=""
-  if [ "$SCOPE_MULTI" -eq 1 ]; then
-    pad 'Company' 14; line="$PADDED "
-    rule='-------------- '
-  fi
-  pad 'AGENT' 14; line="$line$PADDED "; rule="$rule-------------- "
-  pad 'State' 12; line="$line$PADDED "; rule="$rule------------ "
-  pad 'Card' 10; line="$line$PADDED "; rule="$rule---------- "
-  pad 'Age' 8; line="$line$PADDED "; rule="$rule-------- "
-  pad 'Open/Rev/Pau' 12; line="$line$PADDED"; rule="$rule------------"
-  emit '%s\n' "$line"
-  emit '%s\n' "$rule"
-}
-
-render_row_text() {
-  local company=$1 name=$2 state=$3 run_card=$4 run_age=$5
-  local active=$6 review=$7 parked=$8
-  local shown_card="-" shown_age="-" line=""
-
-  if [ -n "$run_card" ]; then shown_card=$run_card; fi
-  if [ "$run_age" -ge 0 ]; then shown_age="${run_age}m"; fi
-
-  if [ "$SCOPE_MULTI" -eq 1 ]; then
-    pad "$company" 14; line="$PADDED "
-  fi
-  pad "$name" 14; line="$line$PADDED "
-  state_label "$state"; pad "$STATE_LABEL" 12; line="$line$PADDED "
-  pad "$shown_card" 10; line="$line$PADDED "
-  pad "$shown_age" 8; line="$line$PADDED "
-  pad "${active}/${review}/${parked}" 12; line="$line$PADDED "
-  emit '%s%s\n' "$line" "${ROW_NOTE:-—}"
-}
-
-render_footer_text() {
-  emit '\n── SUMMARY ──\n'
-  emit '  agent %s: running %s · queued %s · cards idle %s · cards waiting %s · available %s · paused %s · error %s · approval %s\n' \
-    "$N_TOTAL" "$N_BUSY" "$N_QUEUED" "$N_IDLE_WORK" "$N_WAITING" "$N_FREE" "$N_PAUSED" "$N_ERROR" "$N_PENDING_APPROVAL"
-  emit '  review in_review %s · long runs %s · silent runs %s · paused with work %s · failed wakeups %s (%s agent(s)) · queued too long %s (%s agent(s) without a run)\n' \
-    "$A_REVIEW" "$A_LONG_RUNNING" "$A_SILENT_RUN" "$A_PAUSED_WORK" \
-    "$A_FAILED_WAKE_EVENTS" "$A_FAILED_WAKE" "$A_STALE_WAKE_EVENTS" "$A_STALE_WAKE"
-  if [ "$EXCLUDED_TERMINATED" -gt 0 ]; then
-    emit '  excluded %s terminated agent(s)\n' "$EXCLUDED_TERMINATED"
-  fi
-
-  emit '\n'
-  if [ "$NEEDS_ATTENTION" -eq 1 ]; then
-    emit '── ACTION NEEDED (%s agent(s) to check) ──\n' "$A_AGENTS"
-    if [ "$A_IDLE_WORK" -gt 0 ]; then
-      emit '  · %s agent(s) have open cards and no waiting path: check the tasks and the wakeups first, then decide whether to add a wakeup\n' "$A_IDLE_WORK"
-    fi
-    if [ "$A_LONG_RUNNING" -gt 0 ]; then
-      emit '  · %s run(s) are long or queued too long: read the run log, the process and the artifacts first; this is not a stall verdict\n' "$A_LONG_RUNNING"
-    fi
-    if [ "$A_SILENT_RUN" -gt 0 ]; then
-      emit '  · %s run(s) are silent: confirm that they still produce output; silence alone is not a stall\n' "$A_SILENT_RUN"
-    fi
-    if [ "$A_REVIEW" -gt 0 ]; then
-      emit '  · %s in_review card(s) await a decision: the bottleneck is here, decide first, then hand out new work\n' "$A_REVIEW"
-    fi
-    if [ "$A_PAUSED_WORK" -gt 0 ]; then
-      emit '  · %s paused agent(s) still hold unfinished cards: confirm that the pause is intended\n' "$A_PAUSED_WORK"
-    fi
-    if [ "$A_AGENT_ERROR" -gt 0 ]; then
-      emit '  · %s agent(s) have status error: check the failure of the last run\n' "$A_AGENT_ERROR"
-    fi
-    if [ "$A_PENDING_APPROVAL" -gt 0 ]; then
-      emit '  · %s agent(s) await approval\n' "$A_PENDING_APPROVAL"
-    fi
-    if [ "$A_FAILED_WAKE_EVENTS" -gt 0 ]; then
-      emit '  · %s failed wakeup(s) in the last %sh: check each one to see whether a retry covered it\n' "$WAKE_WINDOW_H" "$A_FAILED_WAKE_EVENTS"
-    fi
-    if [ "$A_STALE_WAKE_EVENTS" -gt 0 ]; then
-      emit '  · %s wakeup(s) queued longer than %sm: check the queue and the concurrency limit\n' "$WAKE_STALE" "$A_STALE_WAKE_EVENTS"
-    fi
-  else
-    emit '  Nothing to do.\n'
-  fi
-}
-
-render_text() {
-  local line
-  render_header_text
-  while IFS= read -r line; do
-    [ -n "$line" ] || continue
-    split_row "$line"
-    classify_row "${F[@]}"
-    tally_row "${F[15]}" "${F[18]}"
-    render_row_text "${F[0]}" "${F[1]}" "$ROW_STATE" "${F[5]}" "${F[6]}" "${F[8]}" "${F[10]}" "${F[12]}"
-  done <<< "$ROWS"
-  render_footer_text
-}
-
-render_json() {
-  local line sep=""
-  local entries=()
-
-  # Classify first: the summary block is printed above the per-agent entries,
-  # so the counters must already be complete when it is written.
-  while IFS= read -r line; do
-    [ -n "$line" ] || continue
-    split_row "$line"
-    classify_row "${F[@]}"
-    tally_row "${F[15]}" "${F[18]}"
-    render_entry_json "${F[@]}"
-    entries+=("$ENTRY")
-  done <<< "$ROWS"
-
-  emit '{\n'
-  emit '  "schemaVersion": %s,\n' "$SCHEMA_VERSION"
-  json_string "$GENERATED_AT_ISO"
-  emit '  "generatedAt": %s,\n' "$JSON"
-  json_optional_string "$COMPANY"
-  local requested=$JSON
-  scope_companies_json
-  emit '  "scope": {"requested": %s, "companies": %s},\n' "$requested" "$JSON"
-  emit '  "thresholds": {"runningSlowMinutes": %s, "runSilentMinutes": %s, "todoIdleMinutes": %s, "reviewWaitMinutes": %s, "wakeWindowHours": %s, "wakeStaleMinutes": %s},\n' \
-    "$RUNNING_SLOW" "$RUN_SILENT" "$TODO_IDLE" "$REVIEW_WAIT" "$WAKE_WINDOW_H" "$WAKE_STALE"
-  json_bool "$NEEDS_ATTENTION"
-  emit '  "needsAttention": %s,\n' "$JSON"
-  emit '  "summary": {\n'
-  emit '    "agents": {"total": %s, "busy": %s, "queued": %s, "idleWithWork": %s, "waiting": %s, "free": %s, "paused": %s, "error": %s, "pendingApproval": %s, "excludedTerminated": %s},\n' \
-    "$N_TOTAL" "$N_BUSY" "$N_QUEUED" "$N_IDLE_WORK" "$N_WAITING" "$N_FREE" "$N_PAUSED" "$N_ERROR" \
-    "$N_PENDING_APPROVAL" "$EXCLUDED_TERMINATED"
-  emit '    "attention": {"agents": %s, "longRunning": %s, "silentRun": %s, "idleWithWork": %s, "pausedWithWork": %s, "agentError": %s, "pendingApproval": %s, "reviewCards": %s, "failedWakeAgents": %s, "failedWakeEvents": %s, "staleWakeAgents": %s, "staleWakeEvents": %s}\n' \
-    "$A_AGENTS" "$A_LONG_RUNNING" "$A_SILENT_RUN" "$A_IDLE_WORK" "$A_PAUSED_WORK" "$A_AGENT_ERROR" \
-    "$A_PENDING_APPROVAL" "$A_REVIEW" "$A_FAILED_WAKE" "$A_FAILED_WAKE_EVENTS" "$A_STALE_WAKE" "$A_STALE_WAKE_EVENTS"
-  emit '  },\n'
-  emit '  "agents": [\n'
-  # Indexed loop: bash 3.2 treats "${empty[@]}" as an unbound variable under
-  # set -u, and this array is empty whenever the scope has no rows.
-  local i=0
-  while [ "$i" -lt "${#entries[@]}" ]; do
-    emit '%s%s' "$sep" "${entries[$i]}"
-    sep=$',\n'
-    i=$((i + 1))
-  done
-  emit '\n  ]\n'
-  emit '}\n'
-}
-
-# Sets ENTRY to one agent object. Every value is written through the JSON
-# helpers, which set $JSON, so no value passes through a subshell.
-render_entry_json() {
-  local company=$1 name=$2 status=$3 pause_reason=$4
-  local run_state=$5 run_card=$6 run_age=$7 run_silent=$8
-  local active=$9 monitored=${10} review=${11} review_in_run=${12} parked=${13}
-  local oldest_active=${14} oldest_review=${15}
-  local failed=${16} failed_detail=${17}
-  local pending=${18} stale_pending=${19} oldest_pending=${20} recoveries=${21}
-  local out="    {" attention_flag=0
-
-  json_string "$company"; out="$out\"company\": $JSON, "
-  json_string "$name"; out="$out\"agent\": $JSON, "
-  json_string "$status"; out="$out\"agentStatus\": $JSON, "
-  json_optional_string "$pause_reason"; out="$out\"pauseReason\": $JSON, "
-  json_string "$ROW_STATE"; out="$out\"state\": $JSON, "
-  if [ -n "$ROW_ATTENTION" ]; then attention_flag=1; fi
-  json_bool "$attention_flag"; out="$out\"needsAttention\": $JSON, "
-  json_attention_array; out="$out\"attention\": $JSON, "
-  json_optional_string "$ROW_NOTE"; out="$out\"note\": $JSON, "
-
-  json_optional_string "$run_state"; out="$out\"run\": {\"state\": $JSON, "
-  json_optional_string "$run_card"; out="$out\"card\": $JSON, "
-  json_optional_number "$run_age"; out="$out\"ageMinutes\": $JSON, "
-  json_optional_number "$run_silent"; out="$out\"silentMinutes\": $JSON}, "
-
-  out="$out\"cards\": {\"active\": $active, \"activeMonitored\": $monitored, "
-  out="$out\"review\": $review, \"reviewPending\": $ROW_REVIEW_PENDING, \"parked\": $parked, "
-  json_optional_number "$oldest_active"; out="$out\"oldestActiveMinutes\": $JSON, "
-  json_optional_number "$oldest_review"; out="$out\"oldestReviewMinutes\": $JSON}, "
-
-  out="$out\"wakeups\": {\"failed\": $failed, "
-  json_optional_string "$failed_detail"; out="$out\"failedDetail\": $JSON, "
-  out="$out\"pending\": $pending, \"stalePending\": $stale_pending, "
-  json_optional_number "$oldest_pending"; out="$out\"oldestPendingMinutes\": $JSON}, "
-
-  ENTRY="$out\"recoveries\": $recoveries}"
-}
-
+# The output layer lives in scripts/fleet-status-render.sh and is sourced
+# below. It holds the layout and the JSON escaping only, so that the
+# decision rules in this file stay the single source of truth.
 # ---------------------------------------------------------------- pipeline
 
 # Splits one transport row into F and rejects a wrong field count instead of
@@ -1149,16 +880,18 @@ main() {
   ERR_FILE=$(mktemp "${TMPDIR:-/tmp}/fleet-status.XXXXXX") || die "cannot create a temporary file"
   trap 'rm -f "$ERR_FILE"' EXIT
 
-  preflight || return 2
-
   if [ -n "$WATCH" ]; then
     while :; do
       # Only clear a real terminal: the escape sequence would otherwise land in
       # a redirected file once per frame.
       if [ -t 1 ]; then clear 2>/dev/null || true; fi
+      # Each attempt runs in a subshell. A failure that ends the shell (a
+      # company that was archived, a database that went away) then ends that
+      # attempt only, so the watcher reports it and tries again.
+      #
       # Exit 1 is a normal "needs attention" render; only 2 means the panel
       # could not answer, and only that is worth a warning between intervals.
-      run_once
+      ( preflight && run_once )
       if [ $? -eq 2 ]; then
         warn "panel unavailable; retrying in ${WATCH}s"
       fi
@@ -1166,6 +899,7 @@ main() {
     done
   fi
 
+  preflight || return 2
   run_once
   return $?
 }
