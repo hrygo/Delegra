@@ -283,6 +283,143 @@ migration history; they have no active pricing API or UI. Future deployment
 from this branch may create the unused table again. Complete billing design
 files remain on a local-only branch pending upstream scope agreement.
 
+## Fleet status panel
+
+`scripts/fleet-status.sh` answers one question: who is working, who is idle, and
+what is waiting on a human. It renders a text table by default and the same
+facts as one JSON document with `--json`.
+
+```sh
+scripts/fleet-status.sh                      # one render
+scripts/fleet-status.sh --json               # same facts, machine-readable
+scripts/fleet-status.sh --watch 60           # re-render every minute
+scripts/fleet-status.sh --company Delegra    # one company, by name or id
+pnpm test:fleet-status                       # decision-rule tests
+```
+
+### Exit codes
+
+| Code | Meaning |
+| ---- | ------- |
+| `0`  | Nothing needs a human |
+| `1`  | At least one item needs a human |
+| `2`  | Panel unavailable: bad usage, `psql` missing, unreachable database, query or schema failure, unparsable row, or a scope that matches no agent |
+
+Text and JSON modes share one decision function, so they cannot disagree.
+`--watch` deliberately does not propagate these codes: it reports each failure
+on stderr and keeps the interval running. It clears the screen only when stdout
+is a terminal, so redirecting a `--watch` run to a file yields plain frames
+instead of one escape sequence per frame.
+
+An idle agent with no unfinished work exits `0`. Free capacity is the healthy
+case, not an item to action; the panel still lists it so work can be handed out.
+A scope that matches no company, that matches only archived companies, or whose
+query returns no agent, exits `2` instead of reporting an empty fleet as
+all-clear. The one exception is a scope whose agents are all `terminated`: that
+is a real answer, so the panel prints an empty table with the excluded count and
+exits `0`.
+
+### What counts as attention
+
+The rule is that a state is only called out when the database shows no waiting
+path for it. A live run, a fresh queued wakeup and an active recovery action
+cover the whole agent; a scheduled monitor (`monitor_next_check_at`) covers only
+the card it is attached to.
+
+- A live run older than `--running-slow`, or one silent for longer than
+  `--run-silent`. Reported for inspection only: the panel does not claim the run
+  is wedged, does not recommend interrupting it, and does not suggest rewriting
+  or clearing any field. Those calls need the run log, process state and
+  artifacts, which this tool does not read.
+- In-progress cards that no live run, fresh wakeup or recovery action covers and
+  that carry no monitor of their own. A monitor on one card does not excuse the
+  others, and the note counts only the uncovered cards.
+- `in_review` work that is not the card of the live run. A review card the
+  assigned agent is currently running is not counted again, and the reported
+  wait skips that card.
+- A paused agent that still holds unfinished work.
+- Agent status `error` or `pending_approval`.
+- Failed wakeup requests inside the `--wake-window` window.
+- Queued or deferred wakeups older than `--wake-stale` when the agent has no run
+  that could drain them. Behind a live run the same queue is reported without
+  raising attention, because one run serialises its agent's wakeups.
+
+A stale queue is not a waiting path either. An agent whose only queued wakeups
+are older than `--wake-stale` counts as having work with no usable path, so the
+row never reads "waiting to be claimed" and "queued for six hours" about the
+same wakeup. One fresh entry keeps the agent in `waiting` while the older
+entries are still reported.
+
+`deferred_issue_execution` is a queue state the scheduler resumes, not a failure,
+so it is never counted as a failed wakeup. `claimed` is excluded from the queue
+entirely: it records that a run took the wakeup, and not every completion path
+advances the row to a terminal status, so counting it would report permanent
+backlog.
+
+### Data source, scope and read-only boundary
+
+The panel reads the instance database directly rather than the HTTP API. The
+board API exposes aggregate counts (`/api/companies/:id/dashboard`) and a
+decision feed (`/api/companies/:id/attention`), both behind board
+authorization, and neither carries per-agent run state. Direct SQL is therefore
+the only way to render this view without adding a server endpoint; extending the
+dashboard API remains the better long-term home if this becomes a product
+surface rather than an operator panel.
+
+Every statement runs with `default_transaction_read_only=on`, and the panel
+refuses to continue if that setting is not in effect. `statement_timeout` and
+`lock_timeout` keep a blocked read from hanging a shell. The panel only reads.
+
+Scope defaults to every company with a non-archived status; `--company` narrows
+it by id or by case-insensitive name. The same predicate is applied inside the
+aggregate CTEs, so a narrowed scope also reads fewer rows instead of filtering
+after a full scan. `terminated` agents are excluded and counted in the footer.
+Conversation containers, hidden rows and non-execution harness rows are excluded
+from work cards the same way the board excludes them.
+
+Connection string resolution order is `--db`, `PAPERCLIP_FLEET_DATABASE_URL`,
+`DATABASE_URL`, then `postgresql://delegra_app@127.0.0.1:5432/delegra`. The
+connection needs `SELECT` on `companies`, `agents`, `issues`, `heartbeat_runs`,
+`agent_wakeup_requests` and `issue_recovery_actions`; it needs nothing else, and
+a read-only role is sufficient.
+
+This panel depends on those six relations. A schema change to any of them needs
+a matching change here. A missing relation fails with exit `2` and a named list;
+a missing column surfaces as a query failure with the PostgreSQL error.
+
+### Thresholds
+
+Defaults are `--running-slow 25`, `--run-silent 10`, `--todo-idle 8`,
+`--review-wait 15`, `--wake-window 3` and `--wake-stale 30` (minutes, except the
+window in hours). `--todo-idle` and `--review-wait` grade the wording of a note;
+they do not change whether a row is flagged. An in-progress card with no run, no
+wake, no monitor and no recovery is anomalous at any age, because a healthy
+fleet always leaves one of those behind.
+
+The same values can be set through `FLEET_RUNNING_SLOW`, `FLEET_RUN_SILENT`,
+`FLEET_TODO_IDLE`, `FLEET_REVIEW_WAIT`, `FLEET_WAKE_WINDOW_H` and
+`FLEET_WAKE_STALE`, which keeps `--watch` invocations short. Every threshold is
+echoed in the header and in the JSON `thresholds` block, so a reading is always
+attributable to the numbers that produced it.
+
+### Known limits
+
+- Embedded PostgreSQL has no TCP endpoint, so the panel needs an external
+  PostgreSQL instance. With `DATABASE_URL` unset it exits `2` and says so.
+- The Slack/chat "waiting" conversation check is not evaluated. A chat
+  conversation left `in_review` can therefore appear as a review card.
+- Run silence is measured from the later of the last output and the current
+  attempt's start, so a restarted attempt never inherits silence. It is a
+  signal to look, not a stall verdict.
+- A fresh queued wakeup, an active recovery action and a live run are treated as
+  covering every card of the agent, not just the card they name. That errs
+  toward under-reporting a stall, never toward inventing one.
+- The panel applies no board authorization. Its only access control is the
+  database role it connects with, so treat its output as instance-wide: do not
+  hand it to someone who lacks board access to the companies in scope.
+- `--watch` clears the screen only on a terminal; a redirected run is a plain
+  sequence of frames with no separator between them.
+
 ## Remote native Codex over SSH
 
 Remote Codex agents use the same `paperclip_runner` Codex app-server harness as
