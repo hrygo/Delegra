@@ -428,13 +428,14 @@
       "kind": "fork-only",
       "status": "active",
       "commits": [
-        "eaaf0842aa1079636010b71e44e3b3a44ffa8ffd"
+        "eaaf0842aa1079636010b71e44e3b3a44ffa8ffd",
+        "aa658d315ae4964dec351217db48d25d1d327e57"
       ],
       "owner": "hrygo",
       "reviewBy": "2026-11-30",
       "verifiedAt": "2026-10-28",
       "retireWhen": "The upstream dashboard API exposes per-agent run state and wakeup health with equivalent detail, or a stable base ships with a built-in fleet panel.",
-      "notes": "A read-only bash+psql operator panel that renders per-agent run state, work cards, wakeup health and recovery status. Kept as a fork-only patch because it depends on direct SQL (not the HTTP API) and is sized for Delegra's operator workflow. The script enforces read-only sessions and bounded timeouts. Upstream contribution: https://github.com/paperclipai/paperclip/pull/18054. The upstream port carries the same decision rules, translates the panel into English, and makes the test suite hermetic so that no live instance is required. This entry retains the original deploy commits and does not claim patch-ID equivalence."
+      "notes": "A read-only bash+psql operator panel that renders per-agent run state, work cards, wakeup health and recovery status. Kept as a fork-only patch because it depends on direct SQL (not the HTTP API) and is sized for Delegra's operator workflow. The script enforces read-only sessions and bounded timeouts. Upstream contribution: https://github.com/paperclipai/paperclip/pull/18054. The upstream port carries the same decision rules, translates the panel into English, and makes the test suite hermetic so that no live instance is required. The review findings on the upstream pull request were addressed in both ports: the run age and the run silence thresholds are checked independently, a failed watched round is retried instead of ending the watcher, an explicit flag wins over an exported environment default, company names holding a pipe stay one name, parked cards count as unfinished work for a paused agent, the renderers live in their own file so that no file crosses the 1000 line limit, and the panel no longer adds a package.json script for its test suite. This entry retains the original deploy commits and does not claim patch-ID equivalence."
     }
   ]
 }
