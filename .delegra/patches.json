@@ -5,8 +5,8 @@
     "deploy": "deploy"
   },
   "currentDeployment": {
-    "tag": "deploy/v2026.1024.0-canary.7-r13",
-    "commit": "de2d1690f783bd6340eb6f1d7e37f25072c28851",
+    "tag": "deploy/v2026.1024.0-canary.7-r14",
+    "commit": "fa8675037b3da1cef5960bee3445a4dfbc44ea9d",
     "base": "canary/v2026.1024.0-canary.7",
     "patches": [
       "budget-allow-unknown-usage",
@@ -28,7 +28,8 @@
       "portable-test-baselines",
       "remote-anchor-workspace-enoent",
       "remote-anchor-workspace-error",
-      "workspace-test-host-isolation"
+      "workspace-test-host-isolation",
+      "claude-build-registry-egress"
     ]
   },
   "base": {
