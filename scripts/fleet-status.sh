@@ -421,7 +421,7 @@ SELECT (SELECT count(*) FROM scoped)::text,
        (SELECT count(*) FROM agents a
         JOIN scoped s ON s.id = a.company_id
         WHERE a.status = 'terminated' AND s.status <> 'archived')::text,
-       (SELECT coalesce(string_agg(name, E'\x1f' ORDER BY name), '') FROM scoped);
+       (SELECT coalesce(string_agg(regexp_replace(name, '[[:cntrl:]]', ' ', 'g'), E'\x1f' ORDER BY name), '') FROM scoped);
 SQL
   local rc=$?
   if [ "$rc" -ne 0 ]; then
@@ -891,12 +891,21 @@ main() {
       #
       # Exit 1 is a normal "needs attention" render; only 2 means the panel
       # could not answer, and only that is worth a warning between intervals.
-      ( preflight && run_once )
-      if [ $? -eq 2 ]; then
+      # Exit 141 (128 + SIGPIPE) means the output pipe closed (e.g. piped to
+      # head), so the watcher stops instead of keeping the database busy.
+      # SIGPIPE is ignored inside the subshell so that a failed write returns
+      # an exit code instead of killing the subshell with an unhandled signal.
+      ( trap "" PIPE; preflight && run_once )
+      rc=$?
+      if [ "$rc" -eq 141 ]; then
+        break
+      fi
+      if [ "$rc" -eq 2 ]; then
         warn "panel unavailable; retrying in ${WATCH}s"
       fi
       sleep "$WATCH"
     done
+    return 0
   fi
 
   preflight || return 2

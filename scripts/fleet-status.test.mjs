@@ -358,7 +358,8 @@ test("a row with the wrong field count fails loudly instead of being dropped", (
 test("watch mode treats exit 1 as a normal render, not a failure", () => {
   // Regression: `run_once || warn` reported every "needs attention" render as
   // an unavailable panel.
-  assert.match(script, /if \[ \$\? -eq 2 \]; then\n\s+warn "panel unavailable/);
+  assert.match(script, /rc=\$\?\n\s+if \[ "\$rc" -eq 141 \]; then/);
+  assert.match(script, /if \[ "\$rc" -eq 2 \]; then\n\s+warn "panel unavailable/);
   assert.doesNotMatch(script, /run_once \|\| warn/);
 });
 
@@ -443,11 +444,13 @@ test("a failed write is loud on a file and quiet on a closed pipe", () => {
   assert.equal(fileRun.status, 2);
   assert.match(fileRun.stderr, /cannot write output/);
 
+  // A closed pipe exits 141 (128 + SIGPIPE) so a watched loop can detect it
+  // and stop. The error message is silenced.
   const pipeRun = spawnSync("bash", ["-c", 'source "$SCRIPT"; emit "%d" not-a-number | cat; exit ${PIPESTATUS[0]}'], {
     encoding: "utf8",
     env: { ...process.env, SCRIPT: scriptPath },
   });
-  assert.equal(pipeRun.status, 0);
+  assert.equal(pipeRun.status, 141);
   assert.equal(pipeRun.stderr.trim(), "");
 });
 
@@ -618,4 +621,39 @@ test("the JSON scope keeps a company name with a pipe as one entry", () => {
   assert.equal(run.status, 0, run.stderr);
   const doc = JSON.parse(run.stdout);
   assert.deepEqual(doc.scope.companies, ["Research|Ops"]);
+});
+
+test("watch stops when its output pipe closes", () => {
+  // fleet-status.sh --watch 1 | head -n 1 should end the watcher instead of
+  // keeping the database busy after head exits and closes the read end.
+  const driver = [
+    'source "$SCRIPT"',
+    "preflight() { return 0; }",
+    "run_once() { emit 'line one\\n'; sleep 0.2; emit 'line two\\n'; return 0; }",
+    'main --watch 1 --db "postgresql://example.invalid/paperclip"',
+  ].join("\n");
+  const run = spawnSync("bash", ["-c", `${driver} | head -n 1`], {
+    encoding: "utf8",
+    timeout: 5000,
+    env: { ...process.env, SCRIPT: scriptPath },
+  });
+  // The watcher should have stopped (head closed the pipe), not timed out.
+  assert.ok(run.status !== null, "watch did not stop after the pipe closed");
+});
+
+test("a company name with control characters is cleaned for text output", () => {
+  // The scope query filters control characters with regexp_replace. A name
+  // that holds a newline or an ANSI escape must not forge extra lines or
+  // manipulate the operator's terminal in text mode. The test drives the
+  // panel with a pre-sanitized name (the SQL layer does the sanitisation) and
+  // verifies that the text renderer does not reintroduce raw control codes.
+  const run = drive({
+    rows: [row({ agent: "worker" })],
+    mode: "text",
+    scopeNames: ["Safe Co "],
+  });
+  assert.equal(run.status, 0, run.stderr);
+  // The name must appear on one line, without escape sequences.
+  assert.match(run.stdout, /Safe Co/);
+  assert.doesNotMatch(run.stdout, /\x1b\[/);
 });

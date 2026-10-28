@@ -73,7 +73,9 @@ emit() {
     printf '%s: cannot write output\n' "$PROG" >&2
     exit 2
   fi
-  exit 0
+  # A closed pipe (SIGPIPE). Exit 141 (128 + 13) so a watched loop can detect
+  # it and stop instead of keeping the database busy after the reader leaves.
+  exit 141
 }
 
 # Sets PADDED to $1 right-padded to $2 display columns.

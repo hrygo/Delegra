@@ -55,6 +55,10 @@ report different facts.
 and the next round starts after the interval, so a database that comes back
 does not end the watch. Use a single run for health checks.
 
+`--watch` stops when its output pipe closes (for example `fleet-status.sh
+--watch 1 | head -n 1`). The closed write is detected as SIGPIPE and the
+watcher exits instead of keeping the database busy after the reader leaves.
+
 An idle agent with no unfinished work exits `0`. Free capacity is healthy. The
 panel still lists it so that an operator can hand out work.
 
