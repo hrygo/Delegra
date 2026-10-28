@@ -294,8 +294,19 @@ scripts/fleet-status.sh                      # one render
 scripts/fleet-status.sh --json               # same facts, machine-readable
 scripts/fleet-status.sh --watch 60           # re-render every minute
 scripts/fleet-status.sh --company Delegra    # one company, by name or id
-pnpm test:fleet-status                       # decision-rule tests
+node --test scripts/fleet-status.test.mjs    # decision-rule tests
 ```
+
+### Files
+
+| File | Role |
+| ---- | ---- |
+| `scripts/fleet-status.sh` | Argument parsing, the read-only queries and the decision rules |
+| `scripts/fleet-status-render.sh` | The text and JSON renderers. Sourced by the panel, never run on its own |
+| `scripts/fleet-status.test.mjs` | The test suite for both files |
+
+The panel resolves the renderer next to itself, so the two files have to stay in
+the same directory.
 
 ### Exit codes
 
@@ -306,8 +317,10 @@ pnpm test:fleet-status                       # decision-rule tests
 | `2`  | Panel unavailable: bad usage, `psql` missing, unreachable database, query or schema failure, unparsable row, or a scope that matches no agent |
 
 Text and JSON modes share one decision function, so they cannot disagree.
-`--watch` deliberately does not propagate these codes: it reports each failure
-on stderr and keeps the interval running. It clears the screen only when stdout
+`--watch` deliberately does not propagate these codes: each round runs in a
+subshell, so a failure that would end the shell (an archived company, a
+database that went away) ends that round only. The watcher reports it on stderr
+and retries on the next interval. It clears the screen only when stdout
 is a terminal, so redirecting a `--watch` run to a file yields plain frames
 instead of one escape sequence per frame.
 
@@ -327,17 +340,20 @@ cover the whole agent; a scheduled monitor (`monitor_next_check_at`) covers only
 the card it is attached to.
 
 - A live run older than `--running-slow`, or one silent for longer than
-  `--run-silent`. Reported for inspection only: the panel does not claim the run
-  is wedged, does not recommend interrupting it, and does not suggest rewriting
-  or clearing any field. Those calls need the run log, process state and
-  artifacts, which this tool does not read.
+  `--run-silent`. The two thresholds are independent: a run can go silent long
+  before it is old, and either one is reported. Reported for inspection only: the
+  panel does not claim the run is wedged, does not recommend interrupting it, and
+  does not suggest rewriting or clearing any field. Those calls need the run log,
+  process state and artifacts, which this tool does not read.
 - In-progress cards that no live run, fresh wakeup or recovery action covers and
   that carry no monitor of their own. A monitor on one card does not excuse the
   others, and the note counts only the uncovered cards.
 - `in_review` work that is not the card of the live run. A review card the
   assigned agent is currently running is not counted again, and the reported
   wait skips that card.
-- A paused agent that still holds unfinished work.
+- A paused agent that still holds unfinished work. A card parked on the agent
+  (`backlog` or `blocked`) counts as unfinished work here, the same as an active
+  or in-review card.
 - Agent status `error` or `pending_approval`.
 - Failed wakeup requests inside the `--wake-window` window.
 - Queued or deferred wakeups older than `--wake-stale` when the agent has no run
@@ -398,9 +414,11 @@ fleet always leaves one of those behind.
 
 The same values can be set through `FLEET_RUNNING_SLOW`, `FLEET_RUN_SILENT`,
 `FLEET_TODO_IDLE`, `FLEET_REVIEW_WAIT`, `FLEET_WAKE_WINDOW_H` and
-`FLEET_WAKE_STALE`, which keeps `--watch` invocations short. Every threshold is
-echoed in the header and in the JSON `thresholds` block, so a reading is always
-attributable to the numbers that produced it.
+`FLEET_WAKE_STALE`, which keeps `--watch` invocations short. An explicit flag
+wins over the environment variable, and the environment variable wins over the
+built-in default. Every threshold is echoed in the header and in the JSON
+`thresholds` block, so a reading is always attributable to the numbers that
+produced it.
 
 ### Known limits
 
