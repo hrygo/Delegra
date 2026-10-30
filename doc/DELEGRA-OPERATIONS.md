@@ -287,7 +287,9 @@ files remain on a local-only branch pending upstream scope agreement.
 
 `scripts/fleet-status.sh` answers one question: who is working, who is idle, and
 what is waiting on a human. It renders a text table by default and the same
-facts as one JSON document with `--json`.
+facts as one JSON document with `--json`. Scope names in text output replace
+control characters with spaces; `scope.companies` in JSON retains the original
+names with JSON escaping.
 
 ```sh
 scripts/fleet-status.sh                      # one render

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { accessSync, constants, readFileSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -564,14 +564,14 @@ test("a flag wins over an exported environment default", () => {
 });
 
 test("a company name that holds a pipe stays one name", () => {
-  const run = spawnSync("bash", ["-c", 'source "$SCRIPT"; scope_names_split "Research|Ops"; echo "${#SCOPE_NAME_LIST[@]}"; echo "${SCOPE_NAME_LIST[0]}"'], {
+  const run = spawnSync("bash", ["-c", 'source "$SCRIPT"; scope_names_split "52657365617263687c4f7073"; echo "${#SCOPE_NAME_LIST[@]}"; echo "${SCOPE_NAME_LIST[0]}"'], {
     encoding: "utf8",
     env: { ...process.env, SCRIPT: scriptPath },
   });
   assert.equal(run.status, 0, run.stderr);
   assert.equal(run.stdout.trim(), "1\nResearch|Ops");
 
-  const json = spawnSync("bash", ["-c", 'source "$SCRIPT"; scope_names_split "Research|Ops"; scope_companies_json; echo "$JSON"'], {
+  const json = spawnSync("bash", ["-c", 'source "$SCRIPT"; scope_names_split "52657365617263687c4f7073"; scope_companies_json; echo "$JSON"'], {
     encoding: "utf8",
     env: { ...process.env, SCRIPT: scriptPath },
   });
@@ -620,37 +620,54 @@ test("the JSON scope keeps a company name with a pipe as one entry", () => {
   assert.deepEqual(doc.scope.companies, ["Research|Ops"]);
 });
 
-test("watch stops when its output pipe closes", () => {
-  // fleet-status.sh --watch 1 | head -n 1 should end the watcher instead of
-  // keeping the database busy after head exits and closes the read end.
+test("watch stops querying when the real renderer loses its pipe", async () => {
   const driver = [
     'source "$SCRIPT"',
-    "preflight() { return 0; }",
-    "run_once() { emit 'line one\\n'; sleep 0.2; emit 'line two\\n'; return 0; }",
+    'query() {',
+    '  printf x >> "$COUNT_FILE"',
+    '  case "$(( $(wc -c < "$COUNT_FILE") % 3 ))" in',
+    '    1) SQL_OUT="on${FS}" ;;',
+    '    2) SQL_OUT="1${FS}0${FS}0${FS}54657374636f" ;;',
+    '    0) SQL_OUT="$FIXTURE" ;;',
+    '  esac',
+    '}',
     'main --watch 1 --db "postgresql://example.invalid/paperclip"',
   ].join("\n");
-  const run = spawnSync("bash", ["-c", `${driver} | head -n 1`], {
-    encoding: "utf8",
-    timeout: 5000,
-    env: { ...process.env, SCRIPT: scriptPath },
+  const countFile = join(tmpdir(), `fleet-query-count-${process.pid}-${Date.now()}`);
+  const child = spawn("bash", ["-c", driver], {
+    env: { ...process.env, SCRIPT: scriptPath, COUNT_FILE: countFile,
+      FIXTURE: Array(500).fill(row()).join("\n") },
+    stdio: ["ignore", "pipe", "pipe"],
   });
-  // The watcher should have stopped (head closed the pipe), not timed out.
-  assert.ok(run.status !== null, "watch did not stop after the pipe closed");
+  let stderr = "";
+  child.stderr.setEncoding("utf8");
+  child.stderr.on("data", (chunk) => { stderr += chunk; });
+  child.stdout.once("data", () => child.stdout.destroy());
+  const outcome = await new Promise((resolve) => {
+    const timer = setTimeout(() => { child.kill("SIGKILL"); resolve("timeout"); }, 4000);
+    child.on("close", (code, signal) => { clearTimeout(timer); resolve({ code, signal }); });
+  });
+  const queries = readFileSync(countFile, "utf8").length;
+  unlinkSync(countFile);
+  assert.deepEqual(outcome, { code: 0, signal: null }, stderr);
+  assert.equal(queries, 3, "watch must not start a second database round");
 });
 
-test("a company name with control characters is cleaned for text output", () => {
-  // The scope query filters control characters with regexp_replace. A name
-  // that holds a newline or an ANSI escape must not forge extra lines or
-  // manipulate the operator's terminal in text mode. The test drives the
-  // panel with a pre-sanitized name (the SQL layer does the sanitisation) and
-  // verifies that the text renderer does not reintroduce raw control codes.
-  const run = drive({
-    rows: [row({ agent: "worker" })],
-    mode: "text",
-    scopeNames: ["Safe Co "],
+test("scope names preserve JSON data and sanitize terminal controls", () => {
+  const raw = "研发|Ops\n\u001b[31m\u001fDone";
+  const encoded = Buffer.from(raw).toString("hex");
+  const driver = [
+    'source "$SCRIPT"',
+    'query() { SQL_OUT="1${FS}0${FS}0${FS}$ENCODED"; }',
+    'resolve_scope',
+    'printf "%s\\n" "$SCOPE_NAMES"',
+    'scope_companies_json; printf "%s\\n" "$JSON"',
+  ].join("\n");
+  const run = spawnSync("bash", ["-c", driver], {
+    encoding: "utf8", env: { ...process.env, SCRIPT: scriptPath, ENCODED: encoded },
   });
   assert.equal(run.status, 0, run.stderr);
-  // The name must appear on one line, without escape sequences.
-  assert.match(run.stdout, /Safe Co/);
-  assert.doesNotMatch(run.stdout, /\x1b\[/);
+  const [textName, json] = run.stdout.trimEnd().split("\n");
+  assert.equal(textName, "研发|Ops  [31m Done");
+  assert.deepEqual(JSON.parse(json), [raw]);
 });
