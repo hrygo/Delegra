@@ -996,6 +996,38 @@ else if(m.id!==undefined) send({id:m.id,result:{}});
     } finally { getObject.mockRestore(); await scope.close(); }
   });
 
+  it("rechecks live run authority after artifact storage opens", async () => {
+    const fixture = await server.fixture();
+    const scope = new NativeChatAttachmentReadScope({ db: server.db, binding: fixture.authority.binding, workspaceRoot: fixture.workspace, executionTargetKind: "local" });
+    const authority = new PaperclipRunnerToolAuthority(server.db, { ...fixture.authority.binding, workspaceRoot: fixture.workspace, chatAttachmentReadScope: scope });
+    const original = server.storage.getObject.bind(server.storage);
+    const getObject = vi.spyOn(server.storage, "getObject").mockImplementation(async (...args) => {
+      const object = await original(...args);
+      await server.db.update(issues).set({ workMode: "planning" }).where(eq(issues.id, fixture.issueId));
+      return object;
+    });
+    try {
+      const sha256 = createHash("sha256").update(Buffer.alloc(32000, 65)).digest("hex");
+      await expect(authority.execute({ tool: "stage_api_artifact", callId: randomUUID(), arguments: { artifactId: fixture.binaryArtifactId, sha256 } })).rejects.toThrow("Artifact staging is no longer authorized");
+      expect(getObject).toHaveBeenCalledOnce();
+      expect(existsSync(join(fixture.workspace, ".paperclip-inbound"))).toBe(false);
+    } finally { getObject.mockRestore(); await scope.close(); }
+  });
+
+  it("rejects a staging scope bound to another actual run of the same task", async () => {
+    const fixture = await server.fixture();
+    const otherRunId = randomUUID();
+    await server.db.insert(heartbeatRuns).values({ id: otherRunId, companyId: fixture.companyId, agentId: fixture.agentId, status: "running", runtimeMode: "native", nativeIssueId: fixture.issueId, invocationSource: "assignment", triggerDetail: "system", contextSnapshot: { issueId: fixture.issueId } });
+    const scope = new NativeChatAttachmentReadScope({ db: server.db, binding: { ...fixture.authority.binding, runId: otherRunId }, workspaceRoot: fixture.workspace, executionTargetKind: "local" });
+    const authority = new PaperclipRunnerToolAuthority(server.db, { ...fixture.authority.binding, workspaceRoot: fixture.workspace, chatAttachmentReadScope: scope });
+    const getObject = vi.spyOn(server.storage, "getObject");
+    try {
+      const sha256 = createHash("sha256").update(Buffer.alloc(32000, 65)).digest("hex");
+      await expect(authority.execute({ tool: "stage_api_artifact", callId: randomUUID(), arguments: { artifactId: fixture.binaryArtifactId, sha256 } })).rejects.toThrow("scope is unavailable");
+      expect(getObject).not.toHaveBeenCalled();
+    } finally { getObject.mockRestore(); await scope.close(); }
+  });
+
   it.each(["sample.txt", "/home/agent/proof.txt"])("uploads remote task bytes at %s and fails closed without the reader", async (sourcePath) => {
     const fixture=await server.fixture();
     const bytes=Buffer.from("proof exists only on the execution host\n");
