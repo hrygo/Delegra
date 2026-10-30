@@ -1,5 +1,10 @@
 import type { StorageService } from "../../storage/types.js";
 
+// getObject has no cancellation contract. Keep a permit until it actually
+// settles, even if the caller has timed out, to bound orphaned operations.
+export const MAX_PENDING_ARTIFACT_STORAGE_OPENS = 8;
+let pendingStorageOpens = 0;
+
 /** Bound storage setup and streaming; destroy a stream returned after cancellation. */
 export async function readApiArtifactBytes(storage: StorageService, companyId: string, objectKey: string, maxBytes: number, signal: AbortSignal, timeoutMs = 10_000): Promise<Buffer> {
   let expired = false;
@@ -18,7 +23,13 @@ export async function readApiArtifactBytes(storage: StorageService, companyId: s
   if (signal.aborted) stop();
   try {
     if (expired) return await stopped;
-    const object = await Promise.race([storage.getObject(companyId, objectKey).then(result => {
+    if (pendingStorageOpens >= MAX_PENDING_ARTIFACT_STORAGE_OPENS) throw new Error("runner_api_artifact_storage_busy");
+    pendingStorageOpens++;
+    let opening: ReturnType<StorageService["getObject"]>;
+    try { opening = storage.getObject(companyId, objectKey); }
+    catch (error) { pendingStorageOpens--; throw error; }
+    opening = opening.finally(() => { pendingStorageOpens--; });
+    const object = await Promise.race([opening.then(result => {
       if (expired) result.stream.destroy();
       return result;
     }), stopped]);

@@ -148,6 +148,9 @@ authorization is revoked during staging, the tool withholds the path and clears
 the slot, but bytes may already have been visible to the run during that window.
 Storage reads time out and stop waiting when the run scope closes. The storage
 interface cannot cancel a pending `getObject`; a stream returned later is destroyed.
+At most eight artifact storage opens may remain pending per server process. A
+timed-out open retains its slot until the storage call actually settles; when
+all slots are occupied, further attempts fail with `runner_api_artifact_storage_busy`.
 
 ### Media files and upload limits
 
