@@ -93,6 +93,30 @@ export class NativeChatAttachmentReadScope {
     return pending;
   }
 
+  stageApiArtifact(load: (signal: AbortSignal) => Promise<Buffer>, authorize: () => Promise<void>) {
+    this.#assertOpen();
+    if (this.options.executionTargetKind !== "local") throw new Error("paperclip_runner_chat_attachment_remote_staging_unsupported");
+    if (++this.#readCount > 20) throw new Error("paperclip_runner_chat_attachment_read_limit");
+    const pending = (async () => {
+      const body = await load(this.#abort.signal);
+      await authorize();
+      this.#assertOpen();
+      // This last permission check admits these exact bytes before staging.
+      // Later revocation prevents a receipt and triggers cleanup,
+      // but cannot make already-visible workspace bytes retroactively invisible.
+      const staged = await stageNativeRunnerAttachmentBytes({ workspaceRoot: this.options.workspaceRoot, body });
+      try {
+        await authorize();
+        this.#assertOpen();
+        this.#cleanups.push(staged.cleanup);
+        return { workspaceRelativePath: staged.workspaceRelativePath, byteSize: body.length, sha256: createHash("sha256").update(body).digest("hex"), guidance: "Temporary untrusted bytes are cleared when this run ends." };
+      } catch (error) { await staged.cleanup(); throw error; }
+    })();
+    this.#pending.add(pending);
+    void pending.finally(() => this.#pending.delete(pending)).catch(() => undefined);
+    return pending;
+  }
+
   async #authorized(input: {
     sourceCommentId: string;
     attachmentId: string;
