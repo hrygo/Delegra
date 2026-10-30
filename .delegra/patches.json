@@ -406,6 +406,20 @@
       "verifiedAt": "2026-10-28",
       "retireWhen": "The accepted stable base gives the workspace-build safety profile a documented package-registry allowlist or an equivalent dependency-provisioning path.",
       "notes": "The workspace-build sandbox used an empty strict allowlist, so a guest checkout without node_modules could not install its locked dependencies and spent the whole turn budget on offline workarounds. A DEL-85 build consumed 150 turns, ended in error_max_turns, and (before claude-max-turns-auth-classification) was misread as an auth failure that poisoned the shared AI connection. The profile now admits only registry.npmjs.org and registry.npmmirror.com; candidate-review keeps an empty allowlist, and Unix sockets and local binding stay denied. Verified by a real claude_local run inside the sandbox: curl https://registry.npmjs.org/ returned 200."
+    },
+    {
+      "id": "native-authorized-artifact-staging",
+      "kind": "fork-only",
+      "status": "active",
+      "commits": [
+        "e9e944f7fb26c0831430e12f50de352c1a76a108",
+        "a370f755e383ec2ab7371f5547e4409536802e89"
+      ],
+      "owner": "hrygo",
+      "reviewBy": "2026-11-30",
+      "verifiedAt": "2026-10-30",
+      "retireWhen": "The accepted upstream stable release provides equivalent authorized, bounded binary API artifact staging for local native runner tasks.",
+      "notes": "Delegra runtime requires binary API artifacts to be available within an authorized local task attachment scope for independent handoff review; this temporary fork integration uses the existing task-scoped staging and asset access checks until an equivalent upstream capability is accepted. Fixed size and per-process pending storage limits fail closed; see doc/runner-api-tools.md for the scope and revocation limitations."
     }
   ]
 }
