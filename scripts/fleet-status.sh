@@ -386,10 +386,11 @@ SQL
 # their names, and how many terminated agents the scope holds. A scope that
 # matches nothing is a configuration problem, not an all-clear.
 # Splits the scope list into the individual company names and builds the
-# display string. The list uses the field separator, so a name that holds a "|"
-# or any other printable character stays one name.
+# display string. Each name is UTF-8 hex encoded before the field separator
+# is added, preserving arbitrary non-NUL text without delimiter collisions.
 scope_names_split() {
-  local rest=$1 name first=1
+  local rest=$1 name hex byte octet display first=1
+  local LC_ALL=C
   SCOPE_NAME_LIST=()
   SCOPE_NAMES=""
   while [ -n "$rest" ]; do
@@ -397,12 +398,22 @@ scope_names_split() {
       *"$FS"*) name=${rest%%"$FS"*}; rest=${rest#*"$FS"} ;;
       *) name=$rest; rest="" ;;
     esac
+    # Names travel as UTF-8 hex so field separators and newlines in a name
+    # cannot corrupt the transport. PostgreSQL text cannot contain NUL.
+    hex=$name; name=""
+    while [ -n "$hex" ]; do
+      byte=${hex:0:2}; hex=${hex:2}
+      printf -v octet '%03o' "0x$byte"
+      printf -v byte '%b' "\\$octet"
+      name=$name$byte
+    done
     SCOPE_NAME_LIST+=("$name")
+    display=${name//[[:cntrl:]]/ }
     if [ "$first" -eq 1 ]; then
-      SCOPE_NAMES=$name
+      SCOPE_NAMES=$display
       first=0
     else
-      SCOPE_NAMES="${SCOPE_NAMES}, ${name}"
+      SCOPE_NAMES="${SCOPE_NAMES}, ${display}"
     fi
   done
 }
@@ -421,7 +432,7 @@ SELECT (SELECT count(*) FROM scoped)::text,
        (SELECT count(*) FROM agents a
         JOIN scoped s ON s.id = a.company_id
         WHERE a.status = 'terminated' AND s.status <> 'archived')::text,
-       (SELECT coalesce(string_agg(name, E'\x1f' ORDER BY name), '') FROM scoped);
+       (SELECT coalesce(string_agg(encode(convert_to(name, 'UTF8'), 'hex'), E'\x1f' ORDER BY name), '') FROM scoped);
 SQL
   local rc=$?
   if [ "$rc" -ne 0 ]; then
@@ -429,8 +440,7 @@ SQL
     return 2
   fi
 
-  # 公司名放在最后一列，用字段分隔符拼接。公司名可以包含任何可打印字符
-  # （包括 "|"），所以绝不能按名字里可能出现的字符去切分。
+  # 公司名先编码成十六进制，再用字段分隔符拼接；原始控制字符不会破坏解析。
   local count rest archived
   count=${SQL_OUT%%"$FS"*}
   rest=${SQL_OUT#*"$FS"}
@@ -884,12 +894,20 @@ main() {
       #
       # Exit 1 是正常的"需要人工"渲染；只有 2 表示面板无法作答，只有这种情况
       # 才值得在间隔之间告警。
-      ( preflight && run_once )
-      if [ $? -eq 2 ]; then
+      # Exit 141 (128 + SIGPIPE) 表示输出管道已关闭（例如 `| head`），watch
+      # 检测到后停止，不再继续查询数据库。子 shell 里忽略 SIGPIPE，让写失败
+      # 返回退出码而不是直接杀掉进程。
+      ( trap "" PIPE; preflight && run_once )
+      rc=$?
+      if [ "$rc" -eq 141 ]; then
+        break
+      fi
+      if [ "$rc" -eq 2 ]; then
         warn "panel unavailable; retrying in ${WATCH}s"
       fi
       sleep "$WATCH"
     done
+    return 0
   fi
 
   preflight || return 2
