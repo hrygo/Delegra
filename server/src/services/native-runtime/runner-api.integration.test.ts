@@ -1,9 +1,9 @@
 import { existsSync } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
-import { chmod, writeFile, symlink, mkdir, open } from "node:fs/promises";
+import { chmod, writeFile, readFile, symlink, mkdir, open } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { eq } from "drizzle-orm";
-import { agents, agentWakeupRequests, assets, documents, heartbeatRuns, issues, projects, routineDocuments, routines, runnerApiResponseReservations, companySkills, companyMemberships, principalPermissionGrants } from "@paperclipai/db";
+import { agents, agentWakeupRequests, assets, documents, heartbeatRuns, issueAttachments, issues, projects, routineDocuments, routines, runnerApiResponseReservations, companySkills, companyMemberships, principalPermissionGrants } from "@paperclipai/db";
 import { initializeRunIdentity } from "../run-identity.js";
 import { beforeAll, afterAll, beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import { secretService } from "../secrets.js";
@@ -19,6 +19,7 @@ import { prepareHeartbeatTaskContext } from "../heartbeat/task-context.js";
 import { createAssignedMcpTools } from "./assigned-mcp-tools.js";
 import type { ToolGatewayService } from "../tool-gateway.js";
 import { RUNNER_TOOL_RESULT_MAX_BYTES } from "./runner-tool-results.js";
+import { NativeChatAttachmentReadScope } from "./chat-attachment-read.js";
 
 describe("runner API against real HTTP routes", () => {
   let server: Awaited<ReturnType<typeof startRunnerApiTestServer>>;
@@ -931,6 +932,100 @@ else if(m.id!==undefined) send({id:m.id,result:{}});
     const download = await fixture.authority.execute({ tool: "call_api", callId: "download", arguments: { operationId: "GET /api/assets/{assetId}/content", pathParams: { assetId: fixture.binaryArtifactId } } }) as any;
     expect(download).toMatchObject({ status: 206, byteSize: 32000, artifact: { artifactId: fixture.binaryArtifactId, byteSize: 32000 } });
     expect((await fixture.snapshot()).assets).toEqual(expect.arrayContaining([expect.objectContaining({ id: download.artifact.artifactId, companyId: fixture.companyId, createdByAgentId: fixture.agentId })]));
+  });
+
+  it("stages an authorized binary asset in a run-scoped workspace file", async () => {
+    const fixture = await server.fixture();
+    const foreign = await server.fixture();
+    const scope = new NativeChatAttachmentReadScope({ db: server.db, binding: fixture.authority.binding, workspaceRoot: fixture.workspace, executionTargetKind: "local" });
+    const authority = new PaperclipRunnerToolAuthority(server.db, { ...fixture.authority.binding, workspaceRoot: fixture.workspace, chatAttachmentReadScope: scope });
+    const sha256 = createHash("sha256").update(Buffer.alloc(32000, 65)).digest("hex");
+    const call = (artifactId: string, hash = sha256) => authority.execute({ tool: "stage_api_artifact", callId: randomUUID(), arguments: { artifactId, sha256: hash } });
+    expect(authority.definitions().some(tool => tool.name === "stage_api_artifact")).toBe(true);
+    const [attachment] = await server.db.insert(issueAttachments).values({ companyId: fixture.companyId, issueId: fixture.issueId, assetId: fixture.binaryArtifactId }).returning();
+    const download: any = await authority.execute({ tool: "call_api", callId: randomUUID(), arguments: { operationId: "GET /api/attachments/{attachmentId}/content", pathParams: { attachmentId: attachment.id } } });
+    expect(download).toMatchObject({ ok: true, artifact: { artifactId: expect.any(String), sha256, byteSize: 32000 } });
+    const staged: any = await call(download.artifact.artifactId);
+    expect(staged).toMatchObject({ workspaceRelativePath: expect.any(String), byteSize: 32000, sha256 });
+    expect(await readFile(join(fixture.workspace, staged.workspaceRelativePath))).toEqual(Buffer.alloc(32000, 65));
+    await expect(call(fixture.binaryArtifactId, "0".repeat(64))).rejects.toThrow();
+    await expect(call(foreign.binaryArtifactId)).rejects.toThrow();
+    await expect(authority.execute({ tool: "stage_api_artifact", callId: randomUUID(), arguments: { artifactId: fixture.binaryArtifactId, sha256, path: "../escape.bin" } })).rejects.toThrow();
+    const remote = new PaperclipRunnerToolAuthority(server.db, { ...fixture.authority.binding, workspaceRoot: fixture.workspace, chatAttachmentReadScope: scope, executionTargetKind: "remote" });
+    expect(remote.definitions().some(tool => tool.name === "stage_api_artifact")).toBe(false);
+    await expect(remote.execute({ tool: "stage_api_artifact", callId: randomUUID(), arguments: { artifactId: fixture.binaryArtifactId, sha256 } })).rejects.toThrow();
+    for (const restriction of [{ dotRuntime: true }, { firstPartyOnly: true }, { museRuntime: true }, { apiToolsEnabled: false }, { workMode: "planning" as const }]) {
+      const restricted = new PaperclipRunnerToolAuthority(server.db, { ...fixture.authority.binding, workspaceRoot: fixture.workspace, chatAttachmentReadScope: scope, ...restriction });
+      expect(restricted.definitions().some(tool => tool.name === "stage_api_artifact")).toBe(false);
+      await expect(restricted.execute({ tool: "stage_api_artifact", callId: randomUUID(), arguments: { artifactId: fixture.binaryArtifactId, sha256 } })).rejects.toThrow();
+    }
+    const noScope = new PaperclipRunnerToolAuthority(server.db, { ...fixture.authority.binding, workspaceRoot: fixture.workspace });
+    expect(noScope.definitions().some(tool => tool.name === "stage_api_artifact")).toBe(false);
+    const mismatched = new PaperclipRunnerToolAuthority(server.db, { ...foreign.authority.binding, workspaceRoot: fixture.workspace, chatAttachmentReadScope: scope });
+    await expect(mismatched.execute({ tool: "stage_api_artifact", callId: randomUUID(), arguments: { artifactId: fixture.binaryArtifactId, sha256 } })).rejects.toThrow();
+    for (const field of ["companyId", "issueId", "runId", "agentId"] as const) {
+      const badScope = new NativeChatAttachmentReadScope({ db: server.db, binding: { ...fixture.authority.binding, [field]: randomUUID() }, workspaceRoot: fixture.workspace, executionTargetKind: "local" });
+      const bad = new PaperclipRunnerToolAuthority(server.db, { ...fixture.authority.binding, workspaceRoot: fixture.workspace, chatAttachmentReadScope: badScope });
+      await expect(bad.execute({ tool: "stage_api_artifact", callId: randomUUID(), arguments: { artifactId: fixture.binaryArtifactId, sha256 } })).rejects.toThrow("scope is unavailable");
+      await badScope.close();
+    }
+    await server.db.update(issues).set({ workMode: "planning" }).where(eq(issues.id, fixture.issueId));
+    await expect(call(fixture.binaryArtifactId)).rejects.toThrow();
+    await scope.close();
+    expect((await readFile(join(fixture.workspace, staged.workspaceRelativePath))).length).toBe(0);
+    await server.db.update(issues).set({ workMode: "standard" }).where(eq(issues.id, fixture.issueId));
+    await expect(call(fixture.binaryArtifactId)).rejects.toThrow();
+  });
+
+  it("refuses a same-company asset belonging to a task outside the agent's authorized boundary", async () => {
+    const fixture = await server.fixture();
+    await server.db.update(agents).set({ permissions: { trustPreset: "low_trust_review", authorizationPolicy: {
+      trustBoundary: { mode: "low_trust_review", companyId: fixture.companyId, issueIds: [fixture.issueId], allowedAgentIds: [fixture.agentId] },
+    } } }).where(eq(agents.id, fixture.agentId));
+    const body = Buffer.from("unrelated task artifact");
+    const saved = await server.storage.putFile({ companyId: fixture.companyId, namespace: `issues/${fixture.blockerId}`, originalFilename: "unrelated.bin", contentType: "application/octet-stream", body });
+    const [asset] = await server.db.insert(assets).values({ companyId: fixture.companyId, ...saved, createdByAgentId: fixture.agentId }).returning();
+    await server.db.insert(issueAttachments).values({ companyId: fixture.companyId, issueId: fixture.blockerId, assetId: asset.id });
+    const scope = new NativeChatAttachmentReadScope({ db: server.db, binding: fixture.authority.binding, workspaceRoot: fixture.workspace, executionTargetKind: "local" });
+    const authority = new PaperclipRunnerToolAuthority(server.db, { ...fixture.authority.binding, workspaceRoot: fixture.workspace, chatAttachmentReadScope: scope });
+    const getObject = vi.spyOn(server.storage, "getObject");
+    try {
+      expect(authority.definitions().some(tool => tool.name === "stage_api_artifact")).toBe(true);
+      await expect(authority.execute({ tool: "stage_api_artifact", callId: randomUUID(), arguments: { artifactId: asset.id, sha256: createHash("sha256").update(body).digest("hex") } })).rejects.toThrow("not available");
+      expect(getObject).not.toHaveBeenCalled();
+    } finally { getObject.mockRestore(); await scope.close(); }
+  });
+
+  it("rechecks live run authority after artifact storage opens", async () => {
+    const fixture = await server.fixture();
+    const scope = new NativeChatAttachmentReadScope({ db: server.db, binding: fixture.authority.binding, workspaceRoot: fixture.workspace, executionTargetKind: "local" });
+    const authority = new PaperclipRunnerToolAuthority(server.db, { ...fixture.authority.binding, workspaceRoot: fixture.workspace, chatAttachmentReadScope: scope });
+    const original = server.storage.getObject.bind(server.storage);
+    const getObject = vi.spyOn(server.storage, "getObject").mockImplementation(async (...args) => {
+      const object = await original(...args);
+      await server.db.update(issues).set({ workMode: "planning" }).where(eq(issues.id, fixture.issueId));
+      return object;
+    });
+    try {
+      const sha256 = createHash("sha256").update(Buffer.alloc(32000, 65)).digest("hex");
+      await expect(authority.execute({ tool: "stage_api_artifact", callId: randomUUID(), arguments: { artifactId: fixture.binaryArtifactId, sha256 } })).rejects.toThrow("Artifact staging is no longer authorized");
+      expect(getObject).toHaveBeenCalledOnce();
+      expect(existsSync(join(fixture.workspace, ".paperclip-inbound"))).toBe(false);
+    } finally { getObject.mockRestore(); await scope.close(); }
+  });
+
+  it("rejects a staging scope bound to another actual run of the same task", async () => {
+    const fixture = await server.fixture();
+    const otherRunId = randomUUID();
+    await server.db.insert(heartbeatRuns).values({ id: otherRunId, companyId: fixture.companyId, agentId: fixture.agentId, status: "running", runtimeMode: "native", nativeIssueId: fixture.issueId, invocationSource: "assignment", triggerDetail: "system", contextSnapshot: { issueId: fixture.issueId } });
+    const scope = new NativeChatAttachmentReadScope({ db: server.db, binding: { ...fixture.authority.binding, runId: otherRunId }, workspaceRoot: fixture.workspace, executionTargetKind: "local" });
+    const authority = new PaperclipRunnerToolAuthority(server.db, { ...fixture.authority.binding, workspaceRoot: fixture.workspace, chatAttachmentReadScope: scope });
+    const getObject = vi.spyOn(server.storage, "getObject");
+    try {
+      const sha256 = createHash("sha256").update(Buffer.alloc(32000, 65)).digest("hex");
+      await expect(authority.execute({ tool: "stage_api_artifact", callId: randomUUID(), arguments: { artifactId: fixture.binaryArtifactId, sha256 } })).rejects.toThrow("scope is unavailable");
+      expect(getObject).not.toHaveBeenCalled();
+    } finally { getObject.mockRestore(); await scope.close(); }
   });
 
   it.each(["sample.txt", "/home/agent/proof.txt"])("uploads remote task bytes at %s and fails closed without the reader", async (sourcePath) => {
