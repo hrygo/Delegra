@@ -68,7 +68,7 @@ emit() {
   # pipe" for every remaining cell otherwise. Formats here are literals, so the
   # only thing being hidden is that message.
   printf "$@" 2>/dev/null && return 0
-  if [ -f /dev/stdout ]; then
+  if [ ! -p /dev/stdout ] && [ ! -S /dev/stdout ]; then
     printf '%s: cannot write output\n' "$PROG" >&2
     exit 2
   fi

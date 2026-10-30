@@ -620,6 +620,14 @@ test("the JSON scope keeps a company name with a pipe as one entry", () => {
   assert.deepEqual(doc.scope.companies, ["Research|Ops"]);
 });
 
+test("a non-pipe output failure reports an error", () => {
+  const run = spawnSync("bash", ["-c", 'source "$SCRIPT"; exec 1</dev/null; emit "hello"'], {
+    encoding: "utf8", env: { ...process.env, SCRIPT: scriptPath },
+  });
+  assert.equal(run.status, 2);
+  assert.match(run.stderr, /cannot write output/);
+});
+
 test("watch stops querying when the real renderer loses its pipe", async () => {
   const driver = [
     'source "$SCRIPT"',
