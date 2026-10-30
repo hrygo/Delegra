@@ -5,7 +5,8 @@
 upstream commit. `pr.yml` calls the snapshot by the fork commit that contains
 it. This prevents a moving upstream workflow from requiring scripts that do
 not exist in deploy. The consistency job checks both the snapshot against
-`pr-trusted.yml` and the caller SHA against the snapshot on every PR.
+`pr-trusted.yml`, the caller SHA against the snapshot, and the pinned routing
+content against the candidate `ci-routing.yml` on every PR.
 
 To update CI with a deploy upgrade or a deliberate workflow change:
 
@@ -13,7 +14,8 @@ To update CI with a deploy upgrade or a deliberate workflow change:
    script and command against the candidate deploy tree. Preserve all gates.
 2. Update `pr-trusted.yml` and the snapshot together; the only allowed
    difference is the full SHA used by the snapshot's `ci-routing.yml` call.
-   Commit the snapshot before updating its caller SHA.
+   The routing pin must identify a commit whose `ci-routing.yml` matches the
+   candidate baseline. Commit the snapshot before updating its caller SHA.
 3. Set the `pr.yml` snapshot reference to that commit, run
    `node scripts/check-delegra-shared-ci.mjs`, validate both workflow files,
    and register fork-only code commits in `.delegra/patches.json`.

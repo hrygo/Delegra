@@ -11,6 +11,7 @@ const paths = [
   '.github/workflows/pr.yml',
   '.github/workflows/pr-trusted.yml',
   '.github/workflows/pr-delegra-trusted.yml',
+  '.github/workflows/ci-routing.yml',
   'scripts/check-delegra-shared-ci.mjs',
 ];
 
@@ -66,4 +67,13 @@ test('rejects a moving nested routing reference', (t) => {
   const result = check(dir);
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /caller and routing must each use one full commit SHA/);
+});
+
+test('rejects routing baseline drift from the pinned workflow', (t) => {
+  const dir = fixture(t);
+  const file = join(dir, '.github/workflows/ci-routing.yml');
+  writeFileSync(file, readFileSync(file, 'utf8') + '# new routing rule\n');
+  const result = check(dir);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /pinned routing workflow differs from ci-routing.yml/);
 });
