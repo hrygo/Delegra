@@ -14,6 +14,15 @@ permissions:
 jobs:
   ci:
     if: github.event.action != 'labeled' || github.event.label.name == 'profile-ci'
-    # Master requires CODEOWNERS review for .github/**, including this workflow.
-    # The AWS runner group permits pr-trusted.yml@refs/heads/master.
-    uses: paperclipai/paperclip/.github/workflows/pr-trusted.yml@master
+    # Review and update the snapshot and its routing pin together.
+    uses: hrygo/Delegra/.github/workflows/pr-delegra-trusted.yml@f6381c9e2bbe4baf72b6f59f284e7e5c4a6b149d
+
+  shared_ci_consistency:
+    name: Shared CI snapshot consistency
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - run: node scripts/check-delegra-shared-ci.mjs
