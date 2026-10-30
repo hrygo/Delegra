@@ -74,10 +74,22 @@ describe("bounded API artifact storage reads", () => {
     expect(outcomes.every(result => result.status === "rejected" && String(result.reason).includes("aborted_or_timed_out"))).toBe(true);
     await expect(readApiArtifactBytes(storage, "company", "key", 100, new AbortController().signal)).rejects.toThrow("storage_busy");
     rejectors.forEach(reject => reject(new Error("late storage failure")));
-    const healthy = { getObject: vi.fn(async () => ({ stream: Readable.from(["ok"]) })) } as unknown as StorageService;
-    await vi.waitFor(async () => {
-      await expect(readApiArtifactBytes(healthy, "company", "key", 100, new AbortController().signal)).resolves.toEqual(Buffer.from("ok"));
-    });
+    await Promise.allSettled(vi.mocked(storage.getObject).mock.results.map(result => result.value));
+    const resolvers: ((value: GetObjectResult) => void)[] = [];
+    const pending = { getObject: vi.fn(() => new Promise<GetObjectResult>(resolve => resolvers.push(resolve))) } as unknown as StorageService;
+    const controllers = Array.from({ length: 8 }, () => new AbortController());
+    const reopened = controllers.map(controller => readApiArtifactBytes(pending, "company", "key", 100, controller.signal));
+    const completion = Promise.allSettled(reopened);
+    try {
+      expect(pending.getObject).toHaveBeenCalledTimes(8);
+      await expect(readApiArtifactBytes(pending, "company", "key", 100, new AbortController().signal)).rejects.toThrow("storage_busy");
+      expect(pending.getObject).toHaveBeenCalledTimes(8);
+    } finally {
+      controllers.forEach(controller => controller.abort());
+      await completion;
+      const streams = resolvers.map(resolve => { const stream = new Readable({ read() {} }); resolve({ stream }); return stream; });
+      await vi.waitFor(() => expect(streams.every(stream => stream.destroyed)).toBe(true));
+    }
   });
 
   it("rejects and destroys a stream that exceeds the 10 MiB transfer limit", async () => {
