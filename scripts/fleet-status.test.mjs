@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { accessSync, constants, readFileSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -358,7 +358,8 @@ test("a row with the wrong field count fails loudly instead of being dropped", (
 test("watch mode treats exit 1 as a normal render, not a failure", () => {
   // Regression: `run_once || warn` reported every "needs attention" render as
   // an unavailable panel.
-  assert.match(script, /if \[ \$\? -eq 2 \]; then\n\s+warn "panel unavailable/);
+  assert.match(script, /rc=\$\?\n\s+if \[ "\$rc" -eq 141 \]; then/);
+  assert.match(script, /if \[ "\$rc" -eq 2 \]; then\n\s+warn "panel unavailable/);
   assert.doesNotMatch(script, /run_once \|\| warn/);
 });
 
@@ -442,11 +443,13 @@ test("a failed write is loud on a file and quiet on a closed pipe", () => {
   assert.equal(fileRun.status, 2);
   assert.match(fileRun.stderr, /cannot write output/);
 
+  // A closed pipe exits 141 (128 + SIGPIPE) so a watched loop can detect it
+  // and stop. The error message is silenced.
   const pipeRun = spawnSync("bash", ["-c", 'source "$SCRIPT"; emit "%d" not-a-number | cat; exit ${PIPESTATUS[0]}'], {
     encoding: "utf8",
     env: { ...process.env, SCRIPT: scriptPath },
   });
-  assert.equal(pipeRun.status, 0);
+  assert.equal(pipeRun.status, 141);
   assert.equal(pipeRun.stderr.trim(), "");
 });
 
@@ -561,14 +564,14 @@ test("a flag wins over an exported environment default", () => {
 });
 
 test("a company name that holds a pipe stays one name", () => {
-  const run = spawnSync("bash", ["-c", 'source "$SCRIPT"; scope_names_split "Research|Ops"; echo "${#SCOPE_NAME_LIST[@]}"; echo "${SCOPE_NAME_LIST[0]}"'], {
+  const run = spawnSync("bash", ["-c", 'source "$SCRIPT"; scope_names_split "52657365617263687c4f7073"; echo "${#SCOPE_NAME_LIST[@]}"; echo "${SCOPE_NAME_LIST[0]}"'], {
     encoding: "utf8",
     env: { ...process.env, SCRIPT: scriptPath },
   });
   assert.equal(run.status, 0, run.stderr);
   assert.equal(run.stdout.trim(), "1\nResearch|Ops");
 
-  const json = spawnSync("bash", ["-c", 'source "$SCRIPT"; scope_names_split "Research|Ops"; scope_companies_json; echo "$JSON"'], {
+  const json = spawnSync("bash", ["-c", 'source "$SCRIPT"; scope_names_split "52657365617263687c4f7073"; scope_companies_json; echo "$JSON"'], {
     encoding: "utf8",
     env: { ...process.env, SCRIPT: scriptPath },
   });
@@ -615,4 +618,64 @@ test("the JSON scope keeps a company name with a pipe as one entry", () => {
   assert.equal(run.status, 0, run.stderr);
   const doc = JSON.parse(run.stdout);
   assert.deepEqual(doc.scope.companies, ["Research|Ops"]);
+});
+
+test("a non-pipe output failure reports an error", () => {
+  const run = spawnSync("bash", ["-c", 'source "$SCRIPT"; exec 1</dev/null; emit "hello"'], {
+    encoding: "utf8", env: { ...process.env, SCRIPT: scriptPath },
+  });
+  assert.equal(run.status, 2);
+  assert.match(run.stderr, /cannot write output/);
+});
+
+test("watch stops querying when the real renderer loses its pipe", async () => {
+  const driver = [
+    'source "$SCRIPT"',
+    'query() {',
+    '  printf x >> "$COUNT_FILE"',
+    '  case "$(( $(wc -c < "$COUNT_FILE") % 3 ))" in',
+    '    1) SQL_OUT="on${FS}" ;;',
+    '    2) SQL_OUT="1${FS}0${FS}0${FS}54657374636f" ;;',
+    '    0) SQL_OUT="$FIXTURE" ;;',
+    '  esac',
+    '}',
+    'main --watch 1 --db "postgresql://example.invalid/paperclip"',
+  ].join("\n");
+  const countFile = join(tmpdir(), `fleet-query-count-${process.pid}-${Date.now()}`);
+  const child = spawn("bash", ["-c", driver], {
+    env: { ...process.env, SCRIPT: scriptPath, COUNT_FILE: countFile,
+      FIXTURE: Array(500).fill(row()).join("\n") },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let stderr = "";
+  child.stderr.setEncoding("utf8");
+  child.stderr.on("data", (chunk) => { stderr += chunk; });
+  child.stdout.once("data", () => child.stdout.destroy());
+  const outcome = await new Promise((resolve) => {
+    const timer = setTimeout(() => { child.kill("SIGKILL"); resolve("timeout"); }, 4000);
+    child.on("close", (code, signal) => { clearTimeout(timer); resolve({ code, signal }); });
+  });
+  const queries = readFileSync(countFile, "utf8").length;
+  unlinkSync(countFile);
+  assert.deepEqual(outcome, { code: 0, signal: null }, stderr);
+  assert.equal(queries, 3, "watch must not start a second database round");
+});
+
+test("scope names preserve JSON data and sanitize terminal controls", () => {
+  const raw = "研发|Ops\n\u001b[31m\u001fDone";
+  const encoded = Buffer.from(raw).toString("hex");
+  const driver = [
+    'source "$SCRIPT"',
+    'query() { SQL_OUT="1${FS}0${FS}0${FS}$ENCODED"; }',
+    'resolve_scope',
+    'printf "%s\\n" "$SCOPE_NAMES"',
+    'scope_companies_json; printf "%s\\n" "$JSON"',
+  ].join("\n");
+  const run = spawnSync("bash", ["-c", driver], {
+    encoding: "utf8", env: { ...process.env, SCRIPT: scriptPath, ENCODED: encoded },
+  });
+  assert.equal(run.status, 0, run.stderr);
+  const [textName, json] = run.stdout.trimEnd().split("\n");
+  assert.equal(textName, "研发|Ops  [31m Done");
+  assert.deepEqual(JSON.parse(json), [raw]);
 });
