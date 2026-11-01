@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -14,9 +14,8 @@ const script = path.join(repoRoot, "scripts", "e2e-shard.mjs");
 const durationsManifest = path.join(repoRoot, "scripts", "e2e-shard-durations.json");
 const playwrightConfig = path.join(repoRoot, "tests", "e2e", "playwright.config.ts");
 const prCallerWorkflow = path.join(repoRoot, ".github", "workflows", "pr.yml");
-const trustedPrWorkflowPath = ".github/workflows/pr-trusted.yml";
+const trustedPrWorkflowPath = ".github/workflows/pr-delegra-trusted.yml";
 const trustedPrWorkflow = path.join(repoRoot, trustedPrWorkflowPath);
-const routingWorkflow = path.join(repoRoot, ".github", "workflows", "ci-routing.yml");
 
 const SHARD_COUNT = 8;
 
@@ -26,15 +25,28 @@ function runShard(args) {
   return result.stdout.trim().split(/\s+/).filter(Boolean);
 }
 
+function readPinnedFile(sha, file) {
+  return execFileSync("git", ["show", `${sha}:${file}`], { cwd: repoRoot, encoding: "utf8" });
+}
+
 function readTrustedPrWorkflow() {
   const caller = readFileSync(prCallerWorkflow, "utf8");
-  assert.match(
-    caller,
-    /^\s+uses: paperclipai\/paperclip\/\.github\/workflows\/pr-trusted\.yml@master\s*$/m,
-    "pr.yml must call the trusted workflow from CODEOWNERS-protected master",
+  const match = caller.match(
+    /^\s+uses: hrygo\/Delegra\/\.github\/workflows\/pr-delegra-trusted\.yml@([0-9a-f]{40})\s*$/m,
   );
-  // Validate proposed workflow changes locally; CI executes the merged master version.
-  return readFileSync(trustedPrWorkflow, "utf8");
+  assert.ok(match, "pr.yml must call the fork snapshot by full commit SHA");
+  const calledWorkflow = readPinnedFile(match[1], trustedPrWorkflowPath);
+  assert.equal(calledWorkflow, readFileSync(trustedPrWorkflow, "utf8"), "snapshot must match the called commit");
+  return calledWorkflow;
+}
+
+function readRoutingWorkflow() {
+  const workflow = readTrustedPrWorkflow();
+  const match = workflow.match(
+    /^\s+uses: paperclipai\/paperclip\/\.github\/workflows\/ci-routing\.yml@([0-9a-f]{40})\s*$/m,
+  );
+  assert.ok(match, "snapshot must call the routing workflow by full commit SHA");
+  return readPinnedFile(match[1], ".github/workflows/ci-routing.yml");
 }
 
 function readWorkflowJobs(workflow) {
@@ -55,7 +67,7 @@ function readWorkflowJobs(workflow) {
 }
 
 function runStackScope(stack, prBaseRef) {
-  const workflow = readFileSync(routingWorkflow, "utf8");
+  const workflow = readRoutingWorkflow();
   const match = workflow.match(
     /      - name: Select PR CI scope[\s\S]*?        run: \|\n([\s\S]*?)\s*$/,
   );
@@ -158,7 +170,7 @@ test("shard arguments are validated", () => {
   }
 });
 
-test("pr.yml calls the trusted PR workflow from master", () => {
+test("pr.yml calls the pinned fork PR workflow", () => {
   assert.ok(readTrustedPrWorkflow().length > 0);
 });
 
@@ -209,7 +221,7 @@ test("the trusted PR workflow keeps a stable aggregate check named e2e over the 
 });
 
 test("runner selection has reserved AWS capacity and executes metadata checks only", () => {
-  const workflow = readFileSync(routingWorkflow, "utf8");
+  const workflow = readRoutingWorkflow();
   const jobs = readWorkflowJobs(workflow.split(/^jobs:\n/m)[1]);
   assert.deepEqual([...jobs.keys()], ["gate"]);
   assert.match(jobs.get("gate"), /^ {4}runs-on: \$\{\{ vars\.AWS_CI_ENABLED[\s\S]*paperclip-ci-routing-x64/m);
@@ -220,10 +232,10 @@ test("runner selection has reserved AWS capacity and executes metadata checks on
 });
 
 test("the trusted PR workflow limits full CI to merge-relevant stack layers", () => {
-  const workflow = readFileSync(trustedPrWorkflow, "utf8");
+  const workflow = readTrustedPrWorkflow();
   const jobs = readWorkflowJobs(workflow);
-  assert.match(jobs.get("gate"), /uses: paperclipai\/paperclip\/\.github\/workflows\/ci-routing\.yml@master/);
-  const gate = readWorkflowJobs(readFileSync(routingWorkflow, "utf8")).get("gate");
+  assert.match(jobs.get("gate"), /uses: paperclipai\/paperclip\/\.github\/workflows\/ci-routing\.yml@[0-9a-f]{40}/);
+  const gate = readWorkflowJobs(readRoutingWorkflow()).get("gate");
 
   assert.match(gate, /^ {6}full_ci: \$\{\{ steps\.scope\.outputs\.full_ci \}\}$/m);
   assert.match(gate, /STACK_JSON: \$\{\{ toJSON\(github\.event\.pull_request\.stack\) \}\}/);
@@ -315,9 +327,8 @@ test("the trusted PR workflow passes the shard's spec filter to Playwright witho
 });
 
 test("the trusted PR workflow regenerates stale stacked lockfiles", () => {
-  // Validate the proposed workflow here. The caller executes the merged master
-  // workflow; edits to this workflow take effect after code-owner review and merge.
-  const workflow = readFileSync(trustedPrWorkflow, "utf8");
+  // Check the workflow that the pinned caller actually executes.
+  const workflow = readTrustedPrWorkflow();
   assert.match(
     workflow,
     /policy:\n    needs: \[gate\][\s\S]{0,160}timeout-minutes: 10/,
