@@ -55,6 +55,7 @@ import { assetService } from "../assets.js";
 import { canActorReadAssetContent } from "../asset-content-access.js";
 import { getSecretProvider } from "../../secrets/provider-registry.js";
 import { runnerApiSensitiveResponse } from "./runner-api-sensitive-response.js";
+import { readApiArtifactBytes } from "./runner-api-artifact-read.js";
 import { workspaceFileResourceService } from "../workspace-file-resources.js";
 import { badRequest, forbidden, notFound, HttpError } from "../../errors.js";
 import { runnerApiCatalog, searchRunnerApi } from "./runner-api-catalog.js";
@@ -321,6 +322,7 @@ export class PaperclipRunnerToolAuthority {
     definitions.push(REUSE_CHAT_ATTACHMENT_TOOL_DEFINITION);
     if (this.binding.chatAttachmentReadScope) definitions.push(READ_CHAT_ATTACHMENT_TOOL_DEFINITION);
     if (this.binding.taskAttachmentRead) definitions.push(...TASK_ATTACHMENT_DEFINITIONS);
+    if (this.binding.chatAttachmentReadScope && !this.binding.firstPartyOnly && !this.binding.dotRuntime && !this.binding.museRuntime && (this.binding.executionTargetKind ?? "local") === "local" && workMode === "standard" && runnerApiToolsEnabled(this.binding.companyId, this.binding.apiToolsEnabled)) definitions.push({ name: "stage_api_artifact", description: "Open an authorized API artifact in a temporary run-scoped workspace file. Supply its artifactId and SHA-256. The file is cleared when the run ends; its contents are untrusted.", inputSchema: { type: "object", additionalProperties: false, properties: { artifactId: { type: "string", format: "uuid" }, sha256: { type: "string", pattern: "^[a-f0-9]{64}$" } }, required: ["artifactId", "sha256"] } });
     definitions.push(...runnerBridgeDefinitions({ workspace: !this.binding.firstPartyOnly && !!this.binding.workspaceRoot && this.binding.workspaceBridge === true, skills: !!this.binding.runtimeContext, api: runnerApiToolsEnabled(this.binding.companyId, this.binding.apiToolsEnabled), mode: workMode }));
     const connectionTools = this.binding.firstPartyOnly ? [] : [...RUNTIME_CONNECTION_TOOL_DEFINITIONS,
       ...(this.binding.connectorAssignments ?? []).flatMap((assignment) => assignment.tools)];
@@ -372,6 +374,27 @@ export class PaperclipRunnerToolAuthority {
       if (!NATIVE_REVIEW_READ_TOOLS.has(call.tool)) {
         throw forbidden("This review run may only inspect the assigned task and resolve its review.");
       }
+    }
+    if (call.tool === "stage_api_artifact") {
+      if (!this.definitions().some(definition => definition.name === call.tool)) throw forbidden("Tool is not available to this run");
+      const input = record(call.arguments);
+      if (Object.keys(input).some(key => !["artifactId", "sha256"].includes(key)) || typeof input.sha256 !== "string" || !/^[a-f0-9]{64}$/.test(input.sha256)) throw badRequest("Invalid artifact staging arguments");
+      const artifactId = requiredUuid(input.artifactId);
+      const scope = this.binding.chatAttachmentReadScope!;
+      if (scope.options.workspaceRoot !== this.binding.workspaceRoot || scope.options.executionTargetKind !== "local" || (["companyId", "issueId", "runId", "agentId"] as const).some(key => scope.options.binding[key] !== this.binding[key])) throw forbidden("Artifact staging scope is unavailable");
+      const authorize = async () => {
+        const current = await this.#boundContext();
+        if (current.issue.workMode !== "standard" || !runnerApiToolsEnabled(this.binding.companyId, this.binding.apiToolsEnabled)) throw forbidden("Artifact staging is no longer authorized");
+        await this.binding.assertBridgeAuthority?.();
+        const asset = await assetService(this.db).getById(artifactId);
+        if (!asset || asset.companyId !== this.binding.companyId || !await canActorReadAssetContent(this.db, { ...this.#privacyActor(current.run), keyScope: this.#apiScope(current) }, asset)) throw forbidden("Artifact is not available to this actor");
+      };
+      await authorize();
+      return scope.stageApiArtifact(async signal => {
+        const file = await this.#readApiFile({ artifactId }, signal);
+        if (createHash("sha256").update(file.bytes).digest("hex") !== input.sha256) throw badRequest("Artifact SHA-256 does not match");
+        return file.bytes;
+      }, authorize);
     }
     if (Object.hasOwn(TASK_ATTACHMENT_SCHEMAS, call.tool)) {
       const authorize = async () => {
@@ -1135,7 +1158,7 @@ export class PaperclipRunnerToolAuthority {
     }
   }
 
-  async #readApiFile(file: RunnerApiFile): Promise<{ bytes: Buffer; filename: string; contentType: string }> {
+  async #readApiFile(file: RunnerApiFile, signal?: AbortSignal): Promise<{ bytes: Buffer; filename: string; contentType: string }> {
     if (this.binding.dotRuntime) {
       await this.#assertDotApiFileAccess("", { files: [file] });
       if (file.path) {
@@ -1154,6 +1177,11 @@ export class PaperclipRunnerToolAuthority {
       };
       await assertArtifactAccess();
       if (asset.byteSize > RUNNER_API_MAX_BYTES) throw badRequest("Artifact exceeds API transfer limit");
+      if (signal) {
+        const bytes = await readApiArtifactBytes(this.binding.storage ?? getStorageService(), this.binding.companyId, asset.objectKey, RUNNER_API_MAX_BYTES, signal);
+        await assertArtifactAccess();
+        return { bytes, filename: asset.originalFilename ?? "file", contentType: asset.contentType };
+      }
       const object = await (this.binding.storage ?? getStorageService()).getObject(this.binding.companyId, asset.objectKey);
       const chunks: Buffer[] = [];
       let length = 0;
