@@ -124,7 +124,28 @@ does not complete a missing provider receipt or establish that a provider stoppe
 
 ## Deployment and rollback
 
-The current deployment is `deploy/v2026.1024.0-canary.7-r13`
+The current deployment is `deploy/v2026.1024.0-canary.7-r17`
+(`b246054c39e5da139ac55c9918e1338507684ca3`). It was activated on
+2026-11-02 at 09:33 Asia/Shanghai with `delegra service restart --instance
+delegra --wait`. The restart report had no lost, skipped, or adopted runs.
+The health endpoint returned `ok`, the expected commit, and `ready`; the UI
+returned HTTP 200 and a read-only database query succeeded. The release has
+25 active patch IDs recorded in `currentDeployment`.
+
+The pre-switch service ran from the retained r14 release directory, with r13
+as its Git base and the r14 Claude safety patch present as local changes. The
+r16 registry entry had recorded the tag and commit but did not include service
+activation evidence. The r17 source contains those local code changes. The old
+release directory and the launcher backup `~/.local/bin/delegra.bak-before-r17-20261102`
+are retained for source rollback. A source rollback does not restore database data.
+
+No database migration files changed from the running r13 base to r17. A fresh
+logical backup was created before the switch and passed `gzip -t`; no restore
+drill was performed. The backup is retained under
+`~/.local/share/delegra/pre-r17-backup-20261102-XTfGwU/` with SHA-256
+`defa16a4fae7402cd4273ba025ee7deff6a6a572ee72c7249803cd0e44b8fa6c`.
+
+The prior documented deployment was `deploy/v2026.1024.0-canary.7-r13`
 (`de2d1690f783bd6340eb6f1d7e37f25072c28851`). It replaced r12 on 2026-10-28 at
 09:48 Asia/Shanghai through `delegra service restart --instance delegra --wait`,
 which drained active work before the cutover and then adopted the native runs
