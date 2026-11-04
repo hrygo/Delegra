@@ -35,12 +35,12 @@
   },
   "base": {
     "kind": "canary",
-    "ref": "canary/v2026.1024.0-canary.7",
-    "commit": "5e26b733b9668d24b005418704d43f66109a7dd8",
+    "ref": "canary/v2026.1104.0-canary.1",
+    "commit": "d7283e875772ca8c684dc86e471e6b48d543b7b1",
     "transitionalWaiver": {
-      "reason": "v2026.1023.0 predates the managed Codex project-auth implementation. Porting the deployed patch stack to that tag would require a substantive rewrite with no operational benefit.",
-      "expiresOn": "2026-11-30",
-      "replaceWith": "The first stable tag that contains the managed Codex project-auth patch stack"
+      "reason": "No stable tag contains the managed Codex project-auth stack, the structured Codex launch policy transport, or the native recovery fixes this deploy depends on. v2026.1104.0-canary.1 is the tag whose release-manifest sourceRevision matches the artifact verified end to end on the clean remote Mac.",
+      "expiresOn": "2026-12-31",
+      "replaceWith": "The first stable tag published after v2026.1104.0-canary.1 that contains the managed Codex project-auth patch stack"
     }
   },
   "internalPaths": [
@@ -79,7 +79,7 @@
       "reviewBy": "2026-11-30",
       "verifiedAt": "2026-10-25",
       "retireWhen": "The stable base contains all six commits or patch-equivalent changes.",
-      "notes": "Scopes managed Codex project-auth checks to the task project and uses the Harness project-auth policy for routed accounts. The deploy commits were produced on canary.7; the upstream PR was rebased onto canary.8 on 2026-10-24. Both stacks have the same patch IDs. Adds the upstream follow-up that preserves invalid probe-directory diagnostics without starting the adapter. Ten new regression cases cover direct and routed Codex plus the HTTP route. The sixth upstream/deploy commits have matching patch IDs."
+      "notes": "During the canary v2026.1104.0-canary.1 merge the managed credential-home condition gained upstream's antigravity branch; the project-auth boundary itself is still fork-only."
     },
     {
       "id": "native-ssh-macos-process-identity",
@@ -143,7 +143,7 @@
       "reviewBy": "2026-11-30",
       "verifiedAt": "2026-10-25",
       "retireWhen": "The accepted stable base contains the five portable test baseline commits or patch-equivalent changes.",
-      "notes": "Test-only portability fixes for native Git diagnostics, npm pack metadata, loaded fixture waits, uninstall host-home isolation, and macOS TCP admission. The deploy and upstream stacks have matching patch IDs. The full local baseline completed with 42662 tests passed, 158 existing conditional skips, and zero final failures after full-scope repairs. No new skip or waiver was added. Adds a stdin-gated native lifetime fixture after CI exposed a bootstrap signal-registration race. Controlled normal, early-exit, and assertion-failure paths left no snapshots or processes."
+      "notes": "Partly absorbed during the canary v2026.1104.0-canary.1 merge: upstream made the chat-channel integration poll, the CLI health probe, the copilot decode baselines, and the native Git diagnostics assertions portable or hermetic. The remaining commits still carry fork-only portability fixes."
     },
     {
       "id": "fork-review-workflow-token",
@@ -161,7 +161,7 @@
     {
       "id": "inbox-badge-resolved-failed-runs",
       "kind": "upstream-backport",
-      "status": "active",
+      "status": "absorbed",
       "upstreamPr": "paperclipai/paperclip#17683",
       "upstreamBase": "1a3f604097d81fb653b271af4c7c3614d2b032a7",
       "upstreamHead": "248d55c5d49de82316b3a7304a0da2fb4ae08f50",
@@ -177,7 +177,7 @@
       "reviewBy": "2026-11-30",
       "verifiedAt": "2026-10-26",
       "retireWhen": "The accepted stable base contains both commits from paperclipai/paperclip#17683 or patch-equivalent changes.",
-      "notes": "Makes the inbox failed-run list and the sidebar badge apply one resolved-interruption rule. The run list accepts suppressResolvedFailures, and issue status changes refresh the filtered run query. Deploy and upstream commits have matching patch IDs."
+      "notes": "Superseded upstream: server/src/services/sidebar-badges.ts now counts failed runs through a per-scope agentRunRank = 1 query plus getHeartbeatRunReadDecisions, so a later run that resolves a failure no longer leaves a badge the list cannot clear. The fork's client filter and the suppressResolvedFailures route flag were dropped during the canary merge."
     },
     {
       "id": "managed-agent-validation-environment",
@@ -232,7 +232,7 @@
       "reviewBy": "2026-11-30",
       "verifiedAt": "2026-10-26",
       "retireWhen": "The accepted upstream stable base supplies an equivalent company-level reference-rate editor and a separate estimate report for gateway and subscription usage.",
-      "notes": "Withdrawn at the operator request on 2026-10-26. The second commit reverses the reference-rate API, shared estimator, Providers editor, and related feature documentation from PR #17. Preserve the executed SQL migration, journal, snapshots, and schema as inert compatibility history. The running service and database were restored to the pre-r7 r6 baseline. A full billing proposal remains local until upstream scope review; no new billing feature is approved or implemented."
+      "notes": "Withdrawn at the operator request on 2026-10-26. The second commit reverses the reference-rate API, shared estimator, Providers editor, and related feature documentation from PR #17. The executed SQL migration stays as inert compatibility history; during the canary v2026.1104.0-canary.1 merge it was renumbered 0378 -> 0429 with a rebuilt journal entry and snapshot because upstream allocated 0378."
     },
     {
       "id": "codex-structured-launch-policy",
@@ -247,7 +247,7 @@
       "reviewBy": "2026-11-30",
       "verifiedAt": "2026-10-27",
       "retireWhen": "The accepted stable base carries an equivalent bounded structured launch-policy contract, frozen recovery identity and old-artifact rejection on both controller and Runner.",
-      "notes": "Carry the reviewed transport repair against the pinned canary.7 deployment pair. Preserves all assigned skill roots and argv bounds; fixed CLI and real old-artifact qualifications pass. Upstream integration must preserve the complete recovery and permission contract rather than cherry-picking only argv removal. Static contract imports preserve the server scenario closure. Canonical Copilot v59 identity records changed shared launch sources; all prior identity fixtures remain unchanged. v59 is pending live Copilot qualification and is not part of the Codex/Claude/OpenCode pilot. Synthetic handoff and damaged-session recovery fixtures implement the real preflight and assert its order before thread admission."
+      "notes": "During the canary v2026.1104.0-canary.1 merge, the generated profile/identity pinning that travelled with this patch was replaced by upstream's generic retained-profile handling (copilot pinned at v92); the structured launchPolicy transport, prepareConversationResume resume params, and attachRun identity proof remain fork-only."
     },
     {
       "id": "managed-claude-task-safety",
