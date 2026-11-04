@@ -77,3 +77,27 @@ test('rejects routing baseline drift from the pinned workflow', (t) => {
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /pinned routing workflow differs from ci-routing.yml/);
 });
+
+test('rejects a routing pin that is not reachable from the master mirror', (t) => {
+  const mirror = ['origin/master', 'master'].find((ref) => {
+    try {
+      execFileSync('git', ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`], { cwd: root, stdio: 'ignore' });
+      return true;
+    } catch {
+      return false;
+    }
+  });
+  if (!mirror) {
+    t.skip('no master mirror ref in this checkout');
+    return;
+  }
+  const dir = fixture(t);
+  const file = join(dir, '.github/workflows/pr-delegra-trusted.yml');
+  const snapshot = readFileSync(file, 'utf8');
+  // A Delegra-only merge commit: it carries an identical ci-routing.yml, so only
+  // the provenance rule can tell it apart from an upstream commit.
+  writeFileSync(file, snapshot.replace(/(ci-routing\.yml@)[0-9a-f]{40}/, '$1aa25ac9be5785243836e2f4aec0ad09a8cf348d3'));
+  const result = check(dir);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /not an upstream commit/);
+});

@@ -11,20 +11,7 @@ const routingReferences = [...snapshot.matchAll(routing)];
 if (!reference || routingReferences.length !== 1) {
   throw new Error('Shared CI caller and routing must each use one full commit SHA');
 }
-const normalized = snapshot.replace(routing, 'paperclipai/paperclip/.github/workflows/ci-routing.yml@master');
-if (normalized !== baseline) {
-  throw new Error('Shared CI snapshot differs from pr-trusted.yml beyond the routing pin');
-}
-const committed = execFileSync('git', ['show', `${reference[1]}:.github/workflows/pr-delegra-trusted.yml`], { encoding: 'utf8' });
-if (snapshot !== committed) {
-  throw new Error('Caller SHA does not contain the current shared CI snapshot');
-}
-const routingBaseline = readFileSync('.github/workflows/ci-routing.yml');
 const routingPin = routingReferences[0][1];
-const pinnedRouting = execFileSync('git', ['show', `${routingPin}:.github/workflows/ci-routing.yml`]);
-if (!routingBaseline.equals(pinnedRouting)) {
-  throw new Error('The pinned routing workflow differs from ci-routing.yml');
-}
 // GitHub resolves a cross-repository `uses` inside the called repository, so the
 // routing pin must name a commit in paperclipai/paperclip. Such a commit is
 // always an ancestor of the master mirror; a fork-only commit is not, and would
@@ -48,5 +35,18 @@ if (mirrorRefs.length === 0) {
   }
 })) {
   throw new Error(`Routing pin ${routingPin} is not an upstream commit: it is not an ancestor of the master mirror, so GitHub cannot resolve paperclipai/paperclip at that SHA`);
+}
+const normalized = snapshot.replace(routing, 'paperclipai/paperclip/.github/workflows/ci-routing.yml@master');
+if (normalized !== baseline) {
+  throw new Error('Shared CI snapshot differs from pr-trusted.yml beyond the routing pin');
+}
+const committed = execFileSync('git', ['show', `${reference[1]}:.github/workflows/pr-delegra-trusted.yml`], { encoding: 'utf8' });
+if (snapshot !== committed) {
+  throw new Error('Caller SHA does not contain the current shared CI snapshot');
+}
+const routingBaseline = readFileSync('.github/workflows/ci-routing.yml');
+const pinnedRouting = execFileSync('git', ['show', `${routingPin}:.github/workflows/ci-routing.yml`]);
+if (!routingBaseline.equals(pinnedRouting)) {
+  throw new Error('The pinned routing workflow differs from ci-routing.yml');
 }
 console.log('Shared CI snapshot and pinned caller agree; routing matches the baseline');
