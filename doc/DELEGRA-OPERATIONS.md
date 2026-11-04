@@ -53,9 +53,12 @@ configuration arguments, then checks files after the task workspace is known.
 An ordinary environment-variable edit keeps the selected AI connection and
 does not start a provider probe. Binding comparison normalizes both saved and
 requested values, including values read back from PostgreSQL JSONB.
-Changes to the model, harness, provider, engine, connection, or execution
-environment still require the applicable validation. A failed check leaves
-the saved configuration unchanged.
+A healthy saved account was verified when it was connected, so a
+configuration save does not acquire a computer or send a hello prompt for one.
+Legacy adoption and explicit environment tests still prove the environment, and
+the model, harness, provider, engine, connection, and execution-environment
+selection checks still reject an incompatible combination. A failed check
+leaves the saved configuration unchanged.
 
 Adoption checks and independent environment tests resolve the same prospective
 configuration. The selected environment supplies the base variables. Agent
@@ -124,7 +127,49 @@ does not complete a missing provider receipt or establish that a provider stoppe
 
 ## Deployment and rollback
 
-The current deployment is `deploy/v2026.1024.0-canary.7-r17`
+The current deployment is `deploy/v2026.1104.0-canary.1-r1`
+(`9e71d8344f03b9505b993f5ec9711bd6c8051835`, tree
+`4b34b59c46e0119bb5050cca253503942e3de761`). It was activated on
+2026-11-04 at 23:56 Asia/Shanghai with `delegra service restart --instance
+delegra --wait`; the restart report shows the previous server `76252` replaced
+by `23118`, no lost, skipped, adopted, or finalized-while-down runs, and the new
+server reports `2026.1023.0+1461.git.9e71d8344f`. The health endpoint returned
+`status: ok`, the expected commit, `bootstrapStatus: ready` and a healthy
+database backup status; the UI returned HTTP 200 and read-only queries returned
+1 company and 451 issues. `delegra doctor` reported 13 passed and 1 warning with
+all critical checks passing. The release contains 25 active patch IDs recorded
+in `currentDeployment`.
+
+This release moves the base from `canary/v2026.1024.0-canary.7` to
+`canary/v2026.1104.0-canary.1` ([PR #58](https://github.com/hrygo/Delegra/pull/58)),
+which brings 1072 upstream commits and 51 new migrations. The switch applied
+those migrations and the schema remained readable: `drizzle.__drizzle_migrations`
+holds 428 rows and `model_reference_rates` is present. The fork's
+`0378_superb_paibok` migration was renumbered to `0429_superb_paibok` by the
+merge, and the instance skipped it because the migrator matches applied
+migrations by SQL content hash; a pre-switch copy of this database migrated to
+`upToDate` on the same tree, and an empty database applied all 428 migrations.
+
+Two behaviours changed with this base. Managed agent saves now follow upstream:
+a healthy AI account is verified when it is connected, so saving a configuration
+does not send a hello prompt, and only legacy adoption still proves the
+environment; the model, harness, provider, engine, connection, and environment
+selection checks remain, and the "Managed agent configuration checks" section
+above describes the current contract. The native recovery probe decides a saved
+generation before it inspects the command line, because a zombie process has
+none, and a Linux marker reports a changed generation before a zombie state.
+
+No destructive migration ran. A full logical backup was taken before the switch,
+passed `gzip -t`, and is retained at
+`~/.local/share/delegra/pre-r18-backup-20261104-234742/` with SHA-256
+`eca13d538aa0dae4435d50b2de95c5812dd7e6786b0f0b1f2ee58b03d5a3ff0b` for
+`paperclip-20261104-234743.sql.gz`. The launcher backup is
+`~/.local/bin/delegra.bak-before-r18-20261104`, and the r17 release directory
+and tag `deploy/v2026.1024.0-canary.7-r17` (`b246054c39`) are retained. A source
+rollback pairs with restoring this backup, because the release applied schema
+migrations that r17 does not know.
+
+The previous deployment was `deploy/v2026.1024.0-canary.7-r17`
 (`b246054c39e5da139ac55c9918e1338507684ca3`). It was activated on
 2026-11-02 at 09:33 Asia/Shanghai with `delegra service restart --instance
 delegra --wait`. The restart report had no lost, skipped, or adopted runs.

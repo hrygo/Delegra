@@ -12,10 +12,46 @@ permissions:
   pull-requests: read
 
 jobs:
+  # The full matrix costs far more than the cheap checks below, so it runs only
+  # when a PR can actually break CI or when a maintainer asks for it: a change to
+  # the workflows, the composite actions, or the scripts they call, or the
+  # full-ci / profile-ci label. Everything else keeps the incremental
+  # qualification workflows and the branch policy check.
+  scope:
+    name: PR scope
+    if: github.event.action != 'labeled' || contains(fromJSON('["profile-ci","full-ci"]'), github.event.label.name)
+    runs-on: ubuntu-latest
+    outputs:
+      run_matrix: ${{ steps.detect.outputs.run_matrix }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: detect
+        shell: bash
+        run: |
+          set -euo pipefail
+          labels='${{ join(github.event.pull_request.labels.*.name, ' ') }}'
+          base='${{ github.event.pull_request.base.sha }}'
+          git cat-file -e "${base}^{commit}" 2>/dev/null || git fetch --no-tags origin "$base" --depth=1
+          changed=$(git diff --name-only "$base" HEAD)
+          if [[ " $labels " == *" full-ci "* || " $labels " == *" profile-ci "* ]]; then
+            echo "reason=label"
+            echo "run_matrix=true" >> "$GITHUB_OUTPUT"
+          elif grep -Eq '^(\.github/(workflows|actions)/|scripts/)' <<<"$changed"; then
+            echo "reason=ci-paths"
+            echo "run_matrix=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "reason=no-ci-scope"
+            echo "run_matrix=false" >> "$GITHUB_OUTPUT"
+          fi
+
   ci:
-    if: github.event.action != 'labeled' || github.event.label.name == 'profile-ci' || github.event.label.name == 'full-ci'
+    needs: scope
+    if: needs.scope.outputs.run_matrix == 'true'
     # Review and update the snapshot and its routing pin together.
-    uses: hrygo/Delegra/.github/workflows/pr-delegra-trusted.yml@72979f57913eeccaed2177c90d8b62983d6f0ea4
+    uses: hrygo/Delegra/.github/workflows/pr-delegra-trusted.yml@67653d5d3ac056d7f264c27186e1a0def0145a32
 
   shared_ci_consistency:
     name: Shared CI snapshot consistency
@@ -26,4 +62,5 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - run: node --test scripts/__tests__/delegra-shared-ci.test.mjs
+      - run: node --test scripts/__tests__/pr-matrix-scope.test.mjs
       - run: node scripts/check-delegra-shared-ci.mjs
