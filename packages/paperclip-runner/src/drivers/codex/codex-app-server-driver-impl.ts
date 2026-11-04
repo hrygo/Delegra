@@ -1,4 +1,5 @@
 import { usesPreconfiguredHome } from "../preconfigured-home.js";
+import { codexProviderFailure } from "./provider-failure.js";
 import { writeManagedCodexObservability, redactObservabilityDiagnostic } from "../agent-observability.js";
 import { trustCodexStartupRoot } from "./codex-startup-trust.js";
 import { readCodexThreadState, readCodexTurnMetadata } from "./codex-history.js";
@@ -23,7 +24,7 @@ import type {
   PersistedHarnessTurnTerminal,
 } from "../../contracts/harness-driver.js";
 import { NativeSessionProtocolIntegrityError, nativeRestartInterruptedTurnId } from "../../contracts/native-session-backend.js";
-import { HarnessReconciliationError } from "../../contracts/harness-driver.js";
+import { HarnessReconciliationError, runnerRecoveryFailureClass } from "../../contracts/harness-driver.js";
 import {
   CODEX_CODEX_PROTOCOL_VERSION,
   CODEX_SKILLLESS_BASE_INSTRUCTIONS,
@@ -370,6 +371,10 @@ export class CodexAppServerDriver implements HarnessDriver {
       await cancellation.close().catch(() => {});
       if (error instanceof NativeSessionProtocolIntegrityError) throw error;
       if (input.signal?.aborted) input.signal.throwIfAborted();
+      if (error instanceof CodexRpcError && (this.#options.driverIdentity?.kind ?? DRIVER_KIND) === DRIVER_KIND) {
+        const providerFailure = codexProviderFailure(error, "startup", this.#options.environment);
+        if (providerFailure) Object.defineProperty(error, "providerFailure", { value: providerFailure, enumerable: false });
+      }
       throw error;
     } finally {
       cancellation.detach();
@@ -392,7 +397,7 @@ export class CodexAppServerDriver implements HarnessDriver {
         if (frozen.homeMode !== (usesPreconfiguredHome(this.#options.environment) ? "preconfigured" : "managed")) throw new Error("codex_frozen_launch_home_mode_changed");
         if (snapshot.providerRecoveryPolicy !== "same_session_only" || snapshot.providerIdentity?.kind !== "codex_launch_policy_v1"
           || snapshot.providerIdentity.digest !== codexLaunchDigest(frozen)) throw new Error("codex_frozen_launch_invalid");
-        const current = createIsolatedCodexAppServerLaunch(this.#options.environment, codexExecutableReadOnlyRoots(this.#options.environment ?? process.env), this.#options.instructionWorkingCopyRoot).launchPolicy;
+        const current = createIsolatedCodexAppServerLaunch(this.#options.environment, codexExecutableReadOnlyRoots(this.#options.environment ?? process.env), this.#options.instructionWorkingCopyRoot, [], this.#options.disableWebSearch).launchPolicy;
         if (codexLaunchDigest(current) !== codexLaunchDigest(frozen.policy)) throw new Error("codex_frozen_launch_environment_changed");
         snapshot = { ...snapshot, driverSessionId: frozen.threadId };
       } catch { return { recovered: false, reason: "codex_frozen_launch_invalid_or_environment_changed" }; }
@@ -436,6 +441,14 @@ export class CodexAppServerDriver implements HarnessDriver {
       await cancellation.wait(this.#persistProcessOwnership(transport));
       const initialize = await cancellation.wait(this.#initialize(transport));
       if (frozen) await cancellation.wait(checkCodexLaunchConfiguration((method, params) => transport.request(method, params), frozen!.policy, frozen!.workingDirectory));
+      if (transport.prepareConversationResume) {
+        const resumeDirectory = snapshot.workingDirectory
+          ? validateWorkingDirectory(snapshot.workingDirectory, this.#options.environment, this.#options.workingDirectoryAuthority)
+          : undefined;
+        await cancellation.wait(transport.prepareConversationResume(resumeDirectory
+          ? this.#resumeThreadParams(snapshot.driverSessionId, resumeDirectory)
+          : { threadId: snapshot.driverSessionId }));
+      }
       const existing = await cancellation.wait(
         readCodexThreadState(transport, snapshot.driverSessionId),
       );
@@ -465,26 +478,7 @@ export class CodexAppServerDriver implements HarnessDriver {
         };
       }
       const response = await cancellation.wait(
-        transport.request("thread/resume", {
-          excludeTurns: true,
-          threadId: snapshot.driverSessionId,
-          ...createSecuredCodexThreadParams(
-            workingDirectory,
-            frozen?.collaborationMode ?? this.#options.requestedCollaborationMode ?? "default",
-            frozen?.includeCollaborationModeInstructions ?? this.#options.includeCollaborationModeInstructions ?? true,
-            frozen?.includeSkillInstructions ?? this.#options.includeSkillInstructions ?? false,
-            this.#options.environment,
-          ),
-          ...(frozen ? { config: { ...record(createSecuredCodexThreadParams(workingDirectory, frozen.collaborationMode, frozen.includeCollaborationModeInstructions, frozen.includeSkillInstructions, this.#options.environment).config),
-            "skills.include_instructions": frozen.includeSkillInstructions, ...codexLaunchPolicyConfig(frozen.policy) },
-            permissions: codexLaunchPermission(frozen.policy, frozen.collaborationMode) } : {}),
-          ...this.#instructionParams(this.#direct() ? "" : this.#baseInstructions()),
-          approvalPolicy: this.#options.approvalPolicy ?? "never",
-          ...(this.#options.model ? { model: this.#options.model } : {}),
-          dynamicTools: this.#providerDynamicTools(),
-          ...(this.#prepared() ? { conversationMode: "prepared" } : {}),
-          persistExtendedHistory: false,
-        }),
+        transport.request("thread/resume", this.#resumeThreadParams(snapshot.driverSessionId, workingDirectory, frozen)),
       );
       await cancellation.wait(this.#persistProcessOwnership(transport));
       const collaborationMode = await cancellation.wait(
@@ -713,10 +707,34 @@ export class CodexAppServerDriver implements HarnessDriver {
       await cancellation.close().catch(() => {});
       if (error instanceof NativeSessionProtocolIntegrityError) throw error;
       if (options.signal.aborted) options.signal.throwIfAborted();
-      return { recovered: false, reason: redactCodexDiagnostic(String(error)) };
+      const failureClass = runnerRecoveryFailureClass(error);
+      return {
+        recovered: false,
+        reason: redactCodexDiagnostic(String(error)),
+        ...(failureClass ? { failureClass } : {}),
+      };
     } finally {
       cancellation.detach();
     }
+  }
+
+  #resumeThreadParams(threadId: string, workingDirectory: string, frozen?: FrozenCodexLaunchContext): Record<string, unknown> {
+    return {
+      excludeTurns: true, threadId,
+      ...createSecuredCodexThreadParams(workingDirectory,
+        frozen?.collaborationMode ?? this.#options.requestedCollaborationMode ?? "default",
+        frozen?.includeCollaborationModeInstructions ?? this.#options.includeCollaborationModeInstructions ?? true,
+        frozen?.includeSkillInstructions ?? this.#options.includeSkillInstructions ?? false, this.#options.environment),
+      ...(frozen ? { config: { ...record(createSecuredCodexThreadParams(workingDirectory, frozen.collaborationMode, frozen.includeCollaborationModeInstructions, frozen.includeSkillInstructions, this.#options.environment).config),
+        "skills.include_instructions": frozen.includeSkillInstructions, ...codexLaunchPolicyConfig(frozen.policy) },
+        permissions: codexLaunchPermission(frozen.policy, frozen.collaborationMode) } : {}),
+      ...this.#instructionParams(this.#direct() ? "" : this.#baseInstructions()),
+      approvalPolicy: this.#options.approvalPolicy ?? "never",
+      ...(this.#options.model ? { model: this.#options.model } : {}),
+      dynamicTools: this.#providerDynamicTools(),
+      ...(this.#prepared() ? { conversationMode: "prepared" } : {}),
+      persistExtendedHistory: false,
+    };
   }
 
   #transport(context?: {
@@ -743,7 +761,7 @@ export class CodexAppServerDriver implements HarnessDriver {
     if (this.#options.transportFactory) return this.#options.transportFactory(context);
     const generated = context?.frozenLaunchContext
       ? { args: codexLaunchPolicyArgs(context.frozenLaunchContext.policy), launchPolicy: context.frozenLaunchContext.policy }
-      : createIsolatedCodexAppServerLaunch(this.#options.environment, codexExecutableReadOnlyRoots(this.#options.environment ?? process.env), this.#options.instructionWorkingCopyRoot);
+      : createIsolatedCodexAppServerLaunch(this.#options.environment, codexExecutableReadOnlyRoots(this.#options.environment ?? process.env), this.#options.instructionWorkingCopyRoot, [], this.#options.disableWebSearch);
     const transport = new ProcessCodexAppServerTransport({
         workingDirectory,
         args: generated.args,
@@ -1023,6 +1041,7 @@ export class CodexAppServerDriver implements HarnessDriver {
       dynamicTools: this.#providerDynamicTools(),
       skillInputs: this.#options.skillInputs,
       reasoningEffort: this.#options.reasoningEffort,
+      diagnosticEnvironment: this.#options.environment,
       dynamicToolHandler: this.#options.dynamicToolHandler,
       completionFeedback: this.#options.completionFeedback,
     });

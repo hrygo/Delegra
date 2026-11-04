@@ -38,12 +38,12 @@
   },
   "base": {
     "kind": "canary",
-    "ref": "canary/v2026.1024.0-canary.7",
-    "commit": "5e26b733b9668d24b005418704d43f66109a7dd8",
+    "ref": "canary/v2026.1104.0-canary.1",
+    "commit": "d7283e875772ca8c684dc86e471e6b48d543b7b1",
     "transitionalWaiver": {
-      "reason": "v2026.1023.0 predates the managed Codex project-auth implementation. Porting the deployed patch stack to that tag would require a substantive rewrite with no operational benefit.",
-      "expiresOn": "2026-11-30",
-      "replaceWith": "The first stable tag that contains the managed Codex project-auth patch stack"
+      "reason": "No stable tag contains the managed Codex project-auth stack, the structured Codex launch policy transport, or the native recovery fixes this deploy depends on. v2026.1104.0-canary.1 is the tag whose release-manifest sourceRevision matches the artifact verified end to end on the clean remote Mac.",
+      "expiresOn": "2026-12-31",
+      "replaceWith": "The first stable tag published after v2026.1104.0-canary.1 that contains the managed Codex project-auth patch stack"
     }
   },
   "internalPaths": [
@@ -82,7 +82,7 @@
       "reviewBy": "2026-11-30",
       "verifiedAt": "2026-10-25",
       "retireWhen": "The stable base contains all six commits or patch-equivalent changes.",
-      "notes": "Scopes managed Codex project-auth checks to the task project and uses the Harness project-auth policy for routed accounts. The deploy commits were produced on canary.7; the upstream PR was rebased onto canary.8 on 2026-10-24. Both stacks have the same patch IDs. Adds the upstream follow-up that preserves invalid probe-directory diagnostics without starting the adapter. Ten new regression cases cover direct and routed Codex plus the HTTP route. The sixth upstream/deploy commits have matching patch IDs."
+      "notes": "During the canary v2026.1104.0-canary.1 merge the managed credential-home condition gained upstream's antigravity branch; the project-auth boundary itself is still fork-only."
     },
     {
       "id": "native-ssh-macos-process-identity",
@@ -146,7 +146,7 @@
       "reviewBy": "2026-11-30",
       "verifiedAt": "2026-10-25",
       "retireWhen": "The accepted stable base contains the five portable test baseline commits or patch-equivalent changes.",
-      "notes": "Test-only portability fixes for native Git diagnostics, npm pack metadata, loaded fixture waits, uninstall host-home isolation, and macOS TCP admission. The deploy and upstream stacks have matching patch IDs. The full local baseline completed with 42662 tests passed, 158 existing conditional skips, and zero final failures after full-scope repairs. No new skip or waiver was added. Adds a stdin-gated native lifetime fixture after CI exposed a bootstrap signal-registration race. Controlled normal, early-exit, and assertion-failure paths left no snapshots or processes."
+      "notes": "Partly absorbed during the canary v2026.1104.0-canary.1 merge: upstream made the chat-channel integration poll, the CLI health probe, the copilot decode baselines, and the native Git diagnostics assertions portable or hermetic. The remaining commits still carry fork-only portability fixes."
     },
     {
       "id": "fork-review-workflow-token",
@@ -164,7 +164,7 @@
     {
       "id": "inbox-badge-resolved-failed-runs",
       "kind": "upstream-backport",
-      "status": "active",
+      "status": "absorbed",
       "upstreamPr": "paperclipai/paperclip#17683",
       "upstreamBase": "1a3f604097d81fb653b271af4c7c3614d2b032a7",
       "upstreamHead": "248d55c5d49de82316b3a7304a0da2fb4ae08f50",
@@ -180,7 +180,7 @@
       "reviewBy": "2026-11-30",
       "verifiedAt": "2026-10-26",
       "retireWhen": "The accepted stable base contains both commits from paperclipai/paperclip#17683 or patch-equivalent changes.",
-      "notes": "Makes the inbox failed-run list and the sidebar badge apply one resolved-interruption rule. The run list accepts suppressResolvedFailures, and issue status changes refresh the filtered run query. Deploy and upstream commits have matching patch IDs."
+      "notes": "Superseded upstream: server/src/services/sidebar-badges.ts now counts failed runs through a per-scope agentRunRank = 1 query plus getHeartbeatRunReadDecisions, so a later run that resolves a failure no longer leaves a badge the list cannot clear. The fork's client filter and the suppressResolvedFailures route flag were dropped during the canary merge."
     },
     {
       "id": "managed-agent-validation-environment",
@@ -194,7 +194,7 @@
       "reviewBy": "2026-11-30",
       "verifiedAt": "2026-10-26",
       "retireWhen": "The accepted stable base compares managed bindings by normalized identity and resolves prospective environment variables before adoption checks, with equivalent permission and selection-change tests.",
-      "notes": "Local hotfix for the pinned canary adoption and legacy-adapter interfaces. Port the behavior separately for upstream review rather than publish this installation-specific diff as an upstream backport. Ordinary environment edits do not start a provider probe; actual model, harness, binding, or execution-environment changes still validate. Both probe paths use the same secret resolver after execution-target validation. Unavailable targets retain missing-binding diagnostics through metadata-only inspection without resolving secret values. Upstream contribution: https://github.com/paperclipai/paperclip/pull/17760 (issue #17759; related #14518). The upstream port adds selection regressions and follows current contribution rules; this entry retains the original deploy commits and does not claim patch-ID equivalence."
+      "notes": "Local hotfix for the pinned canary adoption and legacy-adapter interfaces. Port the behavior separately for upstream review rather than publish this installation-specific diff as an upstream backport. Ordinary environment edits do not start a provider probe; actual model, harness, binding, or execution-environment changes still validate. Both probe paths use the same secret resolver after execution-target validation. Unavailable targets retain missing-binding diagnostics through metadata-only inspection without resolving secret values. Upstream contribution: https://github.com/paperclipai/paperclip/pull/17760 (issue #17759; related #14518). The upstream port adds selection regressions and follows current contribution rules; this entry retains the original deploy commits and does not claim patch-ID equivalence. The canary base replaced the pre-save probe with a healthy-account rule: configuration saves no longer send a hello prompt and only legacy adoption still needs proof. The fork keeps the normalized-identity comparison and the shared prospective-environment resolution, and its tests now exercise the legacy-adoption path."
     },
     {
       "id": "workspace-test-host-isolation",
@@ -235,7 +235,7 @@
       "reviewBy": "2026-11-30",
       "verifiedAt": "2026-10-26",
       "retireWhen": "The accepted upstream stable base supplies an equivalent company-level reference-rate editor and a separate estimate report for gateway and subscription usage.",
-      "notes": "Withdrawn at the operator request on 2026-10-26. The second commit reverses the reference-rate API, shared estimator, Providers editor, and related feature documentation from PR #17. Preserve the executed SQL migration, journal, snapshots, and schema as inert compatibility history. The running service and database were restored to the pre-r7 r6 baseline. A full billing proposal remains local until upstream scope review; no new billing feature is approved or implemented."
+      "notes": "Withdrawn at the operator request on 2026-10-26. The second commit reverses the reference-rate API, shared estimator, Providers editor, and related feature documentation from PR #17. The executed SQL migration stays as inert compatibility history; during the canary v2026.1104.0-canary.1 merge it was renumbered 0378 -> 0429 with a rebuilt journal entry and snapshot because upstream allocated 0378."
     },
     {
       "id": "codex-structured-launch-policy",
@@ -250,7 +250,7 @@
       "reviewBy": "2026-11-30",
       "verifiedAt": "2026-10-27",
       "retireWhen": "The accepted stable base carries an equivalent bounded structured launch-policy contract, frozen recovery identity and old-artifact rejection on both controller and Runner.",
-      "notes": "Carry the reviewed transport repair against the pinned canary.7 deployment pair. Preserves all assigned skill roots and argv bounds; fixed CLI and real old-artifact qualifications pass. Upstream integration must preserve the complete recovery and permission contract rather than cherry-picking only argv removal. Static contract imports preserve the server scenario closure. Canonical Copilot v59 identity records changed shared launch sources; all prior identity fixtures remain unchanged. v59 is pending live Copilot qualification and is not part of the Codex/Claude/OpenCode pilot. Synthetic handoff and damaged-session recovery fixtures implement the real preflight and assert its order before thread admission."
+      "notes": "During the canary v2026.1104.0-canary.1 merge, the generated profile/identity pinning that travelled with this patch was replaced by upstream's generic retained-profile handling (copilot pinned at v92); the structured launchPolicy transport, prepareConversationResume resume params, and attachRun identity proof remain fork-only."
     },
     {
       "id": "managed-claude-task-safety",
@@ -469,12 +469,31 @@
         "9fc714137d7e99f863e5e1e0c583790fcd043b17",
         "37ea5b2a3f7f16c189056f1859bc68c7702a9379",
         "8d4d97541f46512e06eb11942e00567572fb2a89",
-        "c98ae42183094a7ff683e8b7933d5844d48daf73"
+        "c98ae42183094a7ff683e8b7933d5844d48daf73",
+        "72979f57913eeccaed2177c90d8b62983d6f0ea4",
+        "36252b1ed758e6fd0db23adff957600e6eb2cc76"
       ],
       "owner": "hrygo",
       "reviewBy": "2026-11-30",
       "retireWhen": "An accepted stable base provides an immutable compatible shared CI workflow and routing contract without a fork snapshot.",
-      "notes": "Freeze the deploy-compatible PR workflow and its nested routing reference; check snapshot and caller consistency on each PR. Run an actual PR before relying on the change."
+      "notes": "Freeze the deploy-compatible PR workflow and its nested routing reference; check snapshot and caller consistency on each PR. Run an actual PR before relying on the change. The canary base changed pr-trusted.yml, so the snapshot and the routing pin were refreshed together; the routing now pins the commit that carries the current ci-routing.yml, and the caller also accepts the full-ci label.",
+      "verifiedAt": "2026-11-04"
+    },
+    {
+      "id": "canary-merge-repair",
+      "kind": "fork-only",
+      "status": "active",
+      "commits": [
+        "0f2ab4d6b8a4899aa01644817acb1fb6fc45de4c",
+        "95ecfde79c683405dc269892f2e66508a4fcd9cf",
+        "e3101a20eb0ab6aaa19b39bbac5b25bb0f14a9c2",
+        "ee67e95723a8e13c2353b20b289ac561a6df1b34"
+      ],
+      "owner": "hrygo",
+      "reviewBy": "2026-12-31",
+      "verifiedAt": "2026-11-04",
+      "retireWhen": "The next stable upgrade absorbs these repairs, or every repaired file matches the fork patch that owns the same behavior.",
+      "notes": "Repairs that only exist because of the canary/v2026.1104.0-canary.1 merge: close blocks the union dropped, dedupe imports and match arms, keep the fork's structured Codex launch policy on top of the current adapter process contract, extend the merged recovery probe with the Darwin generation check, route every Codex argument tail through the owned factory so disabled web search and project instruction limits survive, and restore two test bodies the merge interleaved. No new product behavior beyond the patches already registered for these files. The final repair settles the recovery-probe ordering and adopts upstream's save-time rule for managed accounts."
     }
   ]
 }

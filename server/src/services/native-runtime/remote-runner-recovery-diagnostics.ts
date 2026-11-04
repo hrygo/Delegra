@@ -69,8 +69,76 @@ export const REMOTE_RECOVERY_PROCESS_CHECK_SCRIPT = [
   'test -f "$identity_path" || exit 41',
   '{ IFS= read -r nonce; IFS= read -r pid; IFS= read -r started_at; IFS= read -r runner_id; } < "$identity_path" || exit 43',
   'test "$nonce" = "$expected_nonce" && test "$runner_id" = "$expected_runner_id" && test "$pid" = "$expected_pid" && test -n "$started_at" || exit 44',
-  'kill -0 "$pid" 2>/dev/null || exit 45',
-  'if test -r "/proc/$pid/cmdline"; then command_line=$(tr "\\000" "\\n" < "/proc/$pid/cmdline"); printf "%s\\n" "$command_line" | grep -Fqx -- "--runner-id" || exit 44; printf "%s\\n" "$command_line" | grep -Fqx -- "$expected_runner_id" || exit 44; fi',
+  String.raw`node -e '
+const fs = require("node:fs");
+const { execFileSync } = require("node:child_process");
+const [pid, runnerId, expectedGeneration] = process.argv.slice(1);
+if (!/^[1-9][0-9]*$/.test(pid) || !Number.isSafeInteger(Number(pid))) process.exit(44);
+function requireLiveProcess() {
+  try { process.kill(Number(pid), 0); }
+  catch (error) { process.exit(error.code === "ESRCH" ? 45 : 46); }
+}
+// The marker decides the generation format. A Linux marker is verified against
+// /proc, and a Darwin marker is verified against sysctl plus ps.
+const mode = expectedGeneration
+  ? (expectedGeneration.startsWith("darwin:") ? "darwin" : "linux")
+  : (process.platform === "darwin" ? "darwin" : "linux");
+const psOptions = { encoding: "utf8", timeout: 2000, maxBuffer: 65536, env: { ...process.env, LC_ALL: "C" } };
+function linuxFingerprint() {
+  try {
+    const stat = fs.readFileSync("/proc/" + pid + "/stat", "utf8");
+    const end = stat.lastIndexOf(") ");
+    const fields = stat.slice(end + 2).trim().split(/\s+/);
+    const ticks = fields[19];
+    const boot = fs.readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim();
+    if (end < 0 || !stat.startsWith(pid + " (") || !/^[0-9]+$/.test(ticks || "") || !/^[-a-fA-F0-9]+$/.test(boot)) process.exit(46);
+    return { generation: "linux:" + boot + ":" + ticks, zombie: fields[0] === "Z" };
+  } catch (error) {
+    if (error.code === "ENOENT") requireLiveProcess();
+    process.exit(46);
+  }
+}
+function darwinFingerprint() {
+  try {
+    const boot = execFileSync("/usr/sbin/sysctl", ["-n", "kern.boottime"], psOptions);
+    const seconds = /\bsec\s*=\s*(\d+)/.exec(boot)?.[1];
+    const micros = /\busec\s*=\s*(\d+)/.exec(boot)?.[1];
+    const start = Date.parse(execFileSync("/bin/ps", ["-p", pid, "-o", "lstart="], psOptions).trim());
+    if (!seconds || !micros || Number(micros) > 999999 || !Number.isSafeInteger(start)) process.exit(46);
+    return { generation: "darwin:" + seconds + "." + micros + ":" + start, zombie: false };
+  } catch {
+    requireLiveProcess();
+    process.exit(46);
+  }
+}
+function argvOf() {
+  const commandPath = "/proc/" + pid + "/cmdline";
+  if (fs.existsSync(commandPath)) {
+    try { return fs.readFileSync(commandPath, "utf8").split("\0"); }
+    catch (error) { if (error.code !== "ENOENT") process.exit(46); }
+  }
+  if (mode === "darwin") {
+    try { return execFileSync("/bin/ps", ["-ww", "-p", pid, "-o", "command="], psOptions).trim().split(/\s+/); }
+    catch { requireLiveProcess(); process.exit(46); }
+  }
+  return null;
+}
+requireLiveProcess();
+const argv = argvOf();
+// A saved generation decides first, because a zombie keeps no command line.
+if (expectedGeneration) {
+  const state = mode === "darwin" ? darwinFingerprint() : linuxFingerprint();
+  if (state.generation !== expectedGeneration) process.exit(47);
+  if (state.zombie) process.exit(45);
+}
+// A marker alone never authorizes a signal: the live command line must name
+// the exact Runner instance right after the runner-id option.
+const runnerOption = argv ? argv.indexOf("--runner-id") : -1;
+if (runnerOption < 0 || argv[runnerOption + 1] !== runnerId) {
+  requireLiveProcess();
+  process.exit(44);
+}
+' "$pid" "$expected_runner_id"` + ' "${5:-}"',
 ].join("; ");
 
 export function remoteRecoveryProbeReason(stage: RemoteRunnerRecoveryDiagnostic["stage"], exitCode: number | null, timedOut: boolean): RemoteRunnerRecoveryDiagnostic["reason"] {
