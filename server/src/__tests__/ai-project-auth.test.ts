@@ -18,14 +18,14 @@ describe.each(targets)("managed Codex project authentication (%s)", (mode) => {
     root = await realpath(await mkdtemp(path.join(os.tmpdir(), "paperclip-project-auth-")));
     if (mode === "remote") {
       vi.spyOn(executionTarget, "runAdapterExecutionTargetProcess").mockImplementation(
-        async (_runId, target, command, args) => {
-          const cwd = target.kind === "remote" ? target.remoteCwd : root;
+        async (_runId, _target, command, args, options) => {
+          const cwd = options.cwd ?? root;
           try {
             const result = await execute(command, args, { cwd, timeout: 5_000 });
-            return { ...result, exitCode: 0, signal: null, timedOut: false };
+            return { ...result, exitCode: 0, signal: null, timedOut: false, pid: null, startedAt: null };
           } catch (error) {
             const result = error as { code: number; stdout: string; stderr: string };
-            return { stdout: result.stdout, stderr: result.stderr, exitCode: result.code, signal: null, timedOut: false };
+            return { stdout: result.stdout, stderr: result.stderr, exitCode: result.code, signal: null, timedOut: false, pid: null, startedAt: null };
           }
         },
       );

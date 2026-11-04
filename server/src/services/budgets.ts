@@ -256,6 +256,8 @@ function unpricedUsageBlocks(policy: PolicyRow, observed: ObservedSpend) {
 
 function pendingAccountingBlocks(policy: PolicyRow, observed: ObservedSpend) {
   return policy.unpricedUsagePolicy !== "allow" && observed.pendingRunCount > observed.recoveringRunCount;
+}
+
 function shouldResolveSoftIncident(policy: PolicyRow, observed: ObservedSpend) {
   return !policy.isActive || !policy.notifyEnabled
     || compareCents(observed.totalExact, Math.ceil(policy.amount * policy.warnPercent / 100)) < 0;

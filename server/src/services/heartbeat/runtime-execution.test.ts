@@ -308,6 +308,8 @@ describe.skipIf(!support.supported)("heartbeat runtime execution boundary", () =
       info.mockRestore();
       warn.mockRestore();
     }
+  });
+
   it("preserves the retained sandbox while native admission waits for its current owner", async () => {
     const { input } = await fixture(true);
     const error = new NativeControllerRecoveryWaitingError(new Date(Date.now() + 60_000));

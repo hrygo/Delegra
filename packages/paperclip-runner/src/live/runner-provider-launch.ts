@@ -379,7 +379,7 @@ export function createRunnerProviderLaunch(
                                 ]
                               : []),
                           ],
-                        }),
+                        })),
                   cwd: input.cwd,
                   model: requirements.model,
                   approvalPolicy:

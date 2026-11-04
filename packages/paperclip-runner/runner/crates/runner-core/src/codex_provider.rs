@@ -1331,7 +1331,9 @@ impl CodexProvider {
                     MAX_INSTRUCTIONS_BYTES,
                 )),
             );
-            if provider.permission_profile == "paperclip-runner-external-sandbox" && config.launch_policy.is_none() {
+            if provider.permission_profile == "paperclip-runner-external-sandbox"
+                && config.launch_policy.is_none()
+            {
                 // The execution target (for example Daytona) is the OS sandbox.
                 // Codex must not try to create nested user/network namespaces,
                 // which correctly fail inside an unprivileged container.

@@ -43,7 +43,7 @@ describe.each(["local", "remote"] as const)("managed Claude project auth (%s)", 
     vi.spyOn(executionTarget, "runAdapterExecutionTargetProcess").mockImplementation(async (_id, _target, command, args) => {
       const result = spawnSync(command, args, { cwd, env: { PATH: process.env.PATH, HOME: hostHome }, encoding: "utf8" });
       if (result.error) throw result.error;
-      return { exitCode: result.status, stdout: result.stdout, stderr: result.stderr, signal: result.signal, timedOut: false };
+      return { exitCode: result.status, stdout: result.stdout, stderr: result.stderr, signal: result.signal, timedOut: false, pid: result.pid ?? null, startedAt: null };
     });
   });
 

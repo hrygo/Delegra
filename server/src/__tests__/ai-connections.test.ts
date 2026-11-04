@@ -100,7 +100,7 @@ describe("managed AI connections", () => {
       if (failure === "file") await writeFile(cwd, "not a directory");
       const target = failure === "remote-denied"
         ? { kind: "remote", transport: "sandbox", remoteCwd: "/workspace",
-          runner: { execute: vi.fn(async () => ({ exitCode: 1, stdout: "", stderr: "Permission denied", timedOut: false })) } } as const : undefined;
+          runner: { execute: vi.fn(async () => ({ exitCode: 1, stdout: "", stderr: "Permission denied", timedOut: false, signal: null, pid: null, startedAt: null })) } } as const : undefined;
       const adapter = vi.spyOn(requireServerAdapter(adapterType), "testEnvironment").mockResolvedValue({
         adapterType, status: "pass", testedAt: new Date().toISOString(), checks: [],
       });
@@ -190,7 +190,7 @@ describe("managed AI connections", () => {
         shell.mockImplementation(async (_id, checkedTarget, _command, args) => {
           expect(checkedTarget).toMatchObject({ kind: "remote", remoteCwd: cwd });
           expect(args).toContain(cwd);
-          return { stdout: "", stderr: "", exitCode: 0, signal: null, timedOut: false };
+          return { stdout: "", stderr: "", exitCode: 0, signal: null, timedOut: false, pid: null, startedAt: null };
         });
       }
       const serverCwd = mode === "local-default-conflict" ? vi.spyOn(process, "cwd").mockReturnValue(root) : undefined;

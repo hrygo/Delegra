@@ -345,58 +345,6 @@ export async function testEnvironment(
     checks.push({ code: "codex_managed_remote_env_failed", level: "error", message: "Could not prepare private remote HOME, cache and temporary directories; partial state retained." });
     return { adapterType: "codex_local", status: "fail", checks, testedAt: new Date().toISOString() };
   }
-    await ensureAdapterExecutionTargetCommandResolvable(command, target, cwd, runtimeEnv);
-    checks.push({
-      code: "codex_command_resolvable",
-      level: "info",
-      message: `Command is executable: ${command}`,
-    });
-  } catch (err) {
-    checks.push({
-      code: "codex_command_unresolvable",
-      ...(isAdapterExecutionTargetUnavailableError(err) ? { retryable: true } : {}),
-      level: "error",
-      message: err instanceof Error ? err.message : "Command is not executable",
-      detail: command,
-    });
-  }
-
-  const configOpenAiKey = env.OPENAI_API_KEY;
-  const hostOpenAiKey = targetIsRemote || Object.hasOwn(env, "OPENAI_API_KEY")
-    ? undefined : process.env.OPENAI_API_KEY;
-  if (config.managedAiRouting) {
-    checks.push({
-      code: "codex_managed_provider_configured",
-      level: "info",
-      message: "Testing the selected connection’s provider and model.",
-    });
-  } else if (isNonEmpty(configOpenAiKey) || isNonEmpty(hostOpenAiKey)) {
-    const source = isNonEmpty(configOpenAiKey) ? "adapter config env" : "server environment";
-    checks.push({
-      code: "codex_openai_api_key_present",
-      level: "info",
-      message: "OPENAI_API_KEY is set for Codex authentication.",
-      detail: `Detected in ${source}.`,
-    });
-  } else if (!targetIsRemote) {
-    // Local-only auth file check. On remote targets, the probe will surface
-    // any missing-auth errors directly from the remote `codex` invocation.
-    const codexHome = isNonEmpty(env.CODEX_HOME) ? env.CODEX_HOME : undefined;
-    const codexAuth = await readCodexAuthInfo(codexHome).catch(() => null);
-    if (codexAuth) {
-      checks.push({
-        code: "codex_native_auth_present",
-        level: "info",
-        message: "Codex is authenticated via its own auth configuration.",
-        detail: codexAuth.email ? `Logged in as ${codexAuth.email}.` : `Credentials found in ${path.join(codexHome ?? codexHomeDir(), "auth.json")}.`,
-      });
-    } else {
-      checks.push({
-        code: "codex_openai_api_key_missing",
-        level: "warn",
-        message: "OPENAI_API_KEY is not set. Codex runs may fail until authentication is configured.",
-        hint: "Set OPENAI_API_KEY in adapter env, shell environment, or run `codex auth` to log in.",
-      });
   try {
     const runtimeEnv = ensurePathInEnv({ ...process.env, ...env });
     const installCheck = await maybeRunSandboxInstallCommand({

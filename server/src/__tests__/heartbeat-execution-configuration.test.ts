@@ -425,6 +425,8 @@ describePostgres("heartbeat execution configuration through adapter dispatch", (
     expect(finished.error).toContain("claudeSafetyPolicy");
     expect(input).toBeUndefined();
     expect(finished.contextSnapshot?.skillVersions).toBeUndefined();
+  });
+
   it("delivers the Studio pin instead of ordinary assignments and recovers that exact native selection", async () => {
     const f = await seed(), skills = companySkillService(db);
     const selected = await skills.createLocalSkill(f.companyId, { name: "Unassigned Studio skill", markdown: "# Studio\nOriginal selected bytes.\n" });
