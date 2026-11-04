@@ -435,6 +435,21 @@
       "verifiedAt": "2026-10-28",
       "retireWhen": "The upstream dashboard API exposes per-agent run state and wakeup health with equivalent detail, or a stable base ships with a built-in fleet panel.",
       "notes": "A read-only bash+psql operator panel that renders per-agent run state, work cards, wakeup health and recovery status. Kept as a fork-only patch because it depends on direct SQL (not the HTTP API) and is sized for Delegra's operator workflow. The script enforces read-only sessions and bounded timeouts. Upstream contribution: https://github.com/paperclipai/paperclip/pull/18054. The upstream port carries the same decision rules, translates the panel into English, and makes the test suite hermetic so that no live instance is required. This entry retains the original deploy commits and does not claim patch-ID equivalence."
+    },
+    {
+      "id": "canary-merge-repair",
+      "kind": "fork-only",
+      "status": "active",
+      "commits": [
+        "0f2ab4d6b8a4899aa01644817acb1fb6fc45de4c",
+        "95ecfde79c683405dc269892f2e66508a4fcd9cf",
+        "e3101a20eb0ab6aaa19b39bbac5b25bb0f14a9c2"
+      ],
+      "owner": "hrygo",
+      "reviewBy": "2026-12-31",
+      "verifiedAt": "2026-11-04",
+      "retireWhen": "The next stable upgrade absorbs these repairs, or every repaired file matches the fork patch that owns the same behavior.",
+      "notes": "Repairs that only exist because of the canary/v2026.1104.0-canary.1 merge: close blocks the union dropped, dedupe imports and match arms, keep the fork's structured Codex launch policy on top of the current adapter process contract, extend the merged recovery probe with the Darwin generation check, route every Codex argument tail through the owned factory so disabled web search and project instruction limits survive, and restore two test bodies the merge interleaved. No new product behavior beyond the patches already registered for these files."
     }
   ]
 }
