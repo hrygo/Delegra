@@ -271,7 +271,13 @@ describe("PaperclipRunnerToolAuthority", () => {
     expect(ordinary.definitions().map(tool => tool.name)).toEqual(expect.arrayContaining([
       READ_CURRENT_WAKE_COMMENTS_TOOL_NAME, READ_CHAT_ATTACHMENT_TOOL_NAME,
     ]));
-    expect(ordinary.definitions()).toEqual(truncatedChat.definitions());
+    // The one documented exception is stage_api_artifact: Delegra advertises it
+    // only when the run carries its own attachment scope
+    // (patch: native-authorized-artifact-staging), and execution still fails
+    // closed without that scope. Compare the rest of the catalog.
+    const declaredNames = (authority: PaperclipRunnerToolAuthority) =>
+      authority.definitions().map(tool => tool.name).filter(name => name !== "stage_api_artifact");
+    expect(declaredNames(ordinary)).toEqual(declaredNames(truncatedChat));
   });
 
   it("reads current tool authority without transferring saved profiles or output", async () => {

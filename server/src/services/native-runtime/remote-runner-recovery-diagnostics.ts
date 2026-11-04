@@ -92,8 +92,7 @@ function linuxFingerprint() {
     const ticks = fields[19];
     const boot = fs.readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim();
     if (end < 0 || !stat.startsWith(pid + " (") || !/^[0-9]+$/.test(ticks || "") || !/^[-a-fA-F0-9]+$/.test(boot)) process.exit(46);
-    if (fields[0] === "Z") process.exit(45);
-    return "linux:" + boot + ":" + ticks;
+    return { generation: "linux:" + boot + ":" + ticks, zombie: fields[0] === "Z" };
   } catch (error) {
     if (error.code === "ENOENT") requireLiveProcess();
     process.exit(46);
@@ -106,7 +105,7 @@ function darwinFingerprint() {
     const micros = /\busec\s*=\s*(\d+)/.exec(boot)?.[1];
     const start = Date.parse(execFileSync("/bin/ps", ["-p", pid, "-o", "lstart="], psOptions).trim());
     if (!seconds || !micros || Number(micros) > 999999 || !Number.isSafeInteger(start)) process.exit(46);
-    return "darwin:" + seconds + "." + micros + ":" + start;
+    return { generation: "darwin:" + seconds + "." + micros + ":" + start, zombie: false };
   } catch {
     requireLiveProcess();
     process.exit(46);
@@ -126,17 +125,19 @@ function argvOf() {
 }
 requireLiveProcess();
 const argv = argvOf();
-if (argv) {
-  const runnerOption = argv.indexOf("--runner-id");
-  // A marker alone never authorizes a signal: the live command line must name
-  // the exact Runner instance right after the runner-id option.
-  if (runnerOption < 0 || argv[runnerOption + 1] !== runnerId) {
-    requireLiveProcess();
-    process.exit(44);
-  }
+// A saved generation decides first, because a zombie keeps no command line.
+if (expectedGeneration) {
+  const state = mode === "darwin" ? darwinFingerprint() : linuxFingerprint();
+  if (state.generation !== expectedGeneration) process.exit(47);
+  if (state.zombie) process.exit(45);
 }
-const generation = mode === "darwin" ? darwinFingerprint() : linuxFingerprint();
-if (expectedGeneration && generation !== expectedGeneration) process.exit(47);
+// A marker alone never authorizes a signal: the live command line must name
+// the exact Runner instance right after the runner-id option.
+const runnerOption = argv ? argv.indexOf("--runner-id") : -1;
+if (runnerOption < 0 || argv[runnerOption + 1] !== runnerId) {
+  requireLiveProcess();
+  process.exit(44);
+}
 ' "$pid" "$expected_runner_id"` + ' "${5:-}"',
 ].join("; ");
 

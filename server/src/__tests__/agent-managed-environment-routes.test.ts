@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { eq } from "drizzle-orm";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { agents, companies, companyMemberships, createDb, environments, secretAccessEvents } from "@paperclipai/db";
+import { agents, companies, companyMemberships, createDb, environments, secretAccessEvents, toolConnections } from "@paperclipai/db";
 import { startEmbeddedPostgresTestDatabase } from "./helpers/embedded-postgres.js";
 import { requireServerAdapter } from "../adapters/index.js";
 import { errorHandler } from "../middleware/index.js";
@@ -41,7 +41,7 @@ afterAll(async () => {
   if (home) await rm(home, { recursive: true, force: true });
 });
 
-async function fixture(adapterType: "codex_local" | "paperclip_runner", savedBinding: boolean) {
+async function fixture(adapterType: "codex_local" | "paperclip_runner", savedBinding: boolean, legacyAdoption = false) {
   const companyId = randomUUID(), agentId = randomUUID(), userId = randomUUID();
   await db.insert(companies).values({ id: companyId, name: "Environment save fixture", issuePrefix: `E${companyId.slice(0, 7)}` });
   await db.insert(companyMemberships).values({ companyId, principalType: "user", principalId: userId, membershipRole: "owner", status: "active" });
@@ -53,6 +53,10 @@ async function fixture(adapterType: "codex_local" | "paperclip_runner", savedBin
     apiKey: "fixture-account-key", allAgents: true, agentIds: [],
     routing: { kind: "gateway", protocol: "responses", auth: "bearer", baseUrl: "https://provider.example.test/v1", models: [] },
   }, "fixture-account-key");
+  if (legacyAdoption) {
+    const [connection] = await db.select().from(toolConnections).where(eq(toolConnections.id, account.connectionId));
+    await db.update(toolConnections).set({ config: { ...connection.config, aiLegacyAdoption: true } }).where(eq(toolConnections.id, account.connectionId));
+  }
   const binding = { provider: "openai", method: "api_key", mode: "delegated", ...account } as const;
   const config = { cwd: home, model: "gpt-6.1-sol", ...(adapterType === "paperclip_runner" ? { provider: "codex" } : { engine: "cli" }),
     env: { PATH: { type: "plain", value: "/fixture/toolchain/bin:/usr/bin:/bin" } },
@@ -94,7 +98,7 @@ describe("managed agent environment saves", () => {
   });
 
   it.each(["codex_local", "paperclip_runner"] as const)("resolves the same prospective %s env for connection adoption and independent testing", async adapterType => {
-    const f = await fixture(adapterType, false);
+    const f = await fixture(adapterType, false, true);
     const secret = await secretService(db).create(f.companyId, { name: "Synthetic env secret", provider: "local_encrypted", value: "fixture-business-secret" });
     const config = { ...f.config, env: { ...f.config.env,
       pnpm_config_store_dir: { type: "plain", value: "/fixture/pnpm-store" },
@@ -127,7 +131,7 @@ describe("managed agent environment saves", () => {
   });
 
   it.each(["connection", "model", "engine"] as const)("keeps a failed hello on a real %s change from persisting any configuration", async change => {
-    const f = await fixture("codex_local", change !== "connection");
+    const f = await fixture("codex_local", change !== "connection", true);
     const before = await f.readAgent();
     const probe = vi.spyOn(requireServerAdapter("codex_local"), "testEnvironment").mockResolvedValue({
       adapterType: "codex_local", status: "fail", testedAt: new Date().toISOString(),
@@ -143,7 +147,7 @@ describe("managed agent environment saves", () => {
   });
 
   it.each(["test", "save"] as const)("does not read environment secrets or probe when the %s execution target is unavailable", async operation => {
-    const f = await fixture("codex_local", operation === "save");
+    const f = await fixture("codex_local", operation === "save", operation === "save");
     const secret = await secretService(db).create(f.companyId, { name: "Target-scoped fixture", provider: "local_encrypted", value: "fixture-target-secret" });
     const envVars = { BUSINESS_SECRET: { type: "secret_ref", secretId: secret.id } };
     const [environment] = await db.insert(environments).values({ name: `Unavailable fixture SSH ${operation}`, driver: "ssh", config: {}, envVars }).returning();
@@ -166,7 +170,7 @@ describe("managed agent environment saves", () => {
   });
 
   it.each([true, false])("resolves prospective user secrets only for the acting owner (own value: %s)", async ownValue => {
-    const f = await fixture("codex_local", false);
+    const f = await fixture("codex_local", false, true);
     const secrets = secretService(db);
     const definition = await secrets.createUserSecretDefinition(f.companyId, { key: "business_token", name: "Synthetic user secret", provider: "local_encrypted" });
     const otherUserId = randomUUID();
@@ -192,7 +196,7 @@ describe("managed agent environment saves", () => {
   });
 
   it("rejects an environment with an undeclared secret binding before probing or persisting adoption", async () => {
-    const f = await fixture("codex_local", false);
+    const f = await fixture("codex_local", false, true);
     const secret = await secretService(db).create(f.companyId, { name: "Unbound environment fixture", provider: "local_encrypted", value: "fixture-unbound-value" });
     await db.update(environments).set({ envVars: { BUSINESS_SECRET: { type: "secret_ref", secretId: secret.id } } }).where(eq(environments.id, f.environment.id));
     const before = await f.readAgent();
