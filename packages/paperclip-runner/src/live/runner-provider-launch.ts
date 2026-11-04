@@ -252,6 +252,7 @@ export function createRunnerProviderLaunch(
     ? resolveAcpxProviderMode(acpxProfile!.agent, settings.acpxMode) : undefined;
   const codexLaunch = provider === "codex" && input.options.codexArgs === undefined
     ? createRunnerdCodexAppServerLaunch({ environment: input.options.environment, codexHome, externallySandboxed: input.options.externallySandboxed === true, readOnly: requirements.readOnly,
+      disableWebSearch: settings.disableCodexWebSearch,
       workingDirectory: input.cwd, runtimeStateRoot: input.options.runnerFilesystemRoot ?? input.root,
       codexCommand: effectiveCodexCommand, instructionWorkingCopyRoot: runtimeContext?.instructions.workingCopy?.rootPath,
       disableProjectInstructions: input.options.disableCodexProjectInstructions,
@@ -354,7 +355,7 @@ export function createRunnerProviderLaunch(
                   args:
                     provider === "opencode"
                       ? [opencodeProxyPath]
-                      : (codexLaunch?.args ?? input.options.codexArgs ??
+                      : (codexLaunch?.args ??
                         createRunnerdCodexAppServerArgs({
                           args: input.options.codexArgs,
                           disableWebSearch: settings.disableCodexWebSearch,
@@ -507,10 +508,20 @@ export function createRunnerdCodexAppServerLaunch(input: Parameters<typeof creat
     [...(input.readOnlyRoots ?? []), ...codexExecutableReadOnlyRoots(input.environment ?? {}, input.codexCommand)],
     input.instructionWorkingCopyRoot,
     usesPreconfiguredHome(input.environment) && input.runtimeStateRoot ? [input.runtimeStateRoot] : []);
-  if (input.readOnly) launch.args = launch.args.filter(arg => arg !== "--dangerously-bypass-approvals-and-sandbox");
-  if (input.disableProjectInstructions) launch.args.unshift("-c", "project_doc_max_bytes=0");
+  const args = input.readOnly
+    ? launch.args.filter(arg => arg !== "--dangerously-bypass-approvals-and-sandbox")
+    : [...launch.args];
   if (usesPreconfiguredHome(input.environment) && input.workingDirectory) {
-    launch.args.unshift("-c", `projects={${JSON.stringify(input.workingDirectory)}={trust_level="trusted"}}`);
+    args.unshift("-c", `projects={${JSON.stringify(input.workingDirectory)}={trust_level="trusted"}}`);
   }
+  // Place Core's restrictions through the owned argument factory, so the
+  // prepared launch and the launch validator always agree on the shape.
+  launch.args = createRunnerdCodexAppServerArgs({
+    environment: input.environment, codexHome: input.codexHome, codexCommand: input.codexCommand,
+    workingDirectory: input.workingDirectory, runtimeStateRoot: input.runtimeStateRoot,
+    readOnlyRoots: input.readOnlyRoots, instructionWorkingCopyRoot: input.instructionWorkingCopyRoot,
+    disableProjectInstructions: input.disableProjectInstructions, disableWebSearch: input.disableWebSearch,
+    args,
+  });
   return launch;
 }

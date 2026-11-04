@@ -822,20 +822,6 @@ describe("OpenCodeServerDriver", () => {
       received.push(request.headers);
       request.resume();
       response.writeHead(200, { "content-type": "text/event-stream" }).end("data: [DONE]\n\n");
-  it.each(["explicit", "ambient"])("keeps OpenRouter upstream credentials out of the child while preserving exact provider/model routing (%s)", async source => {
-    await chmod(fixture, 0o755);
-    const key = "synthetic-upstream-openrouter-key";
-    const model = "deepseek/deepseek-v4.1-flash-1017";
-    const received: Array<{ authorization?: string; body: unknown; referer?: string }> = [];
-    let redirect = false;
-    const upstream = createHttpServer((request, response) => {
-      void (async () => {
-        const chunks = [];
-        for await (const chunk of request) chunks.push(Buffer.from(chunk));
-        received.push({ authorization: request.headers.authorization, body: JSON.parse(Buffer.concat(chunks).toString("utf8")), referer: request.headers["http-referer"] as string });
-        if (redirect) response.writeHead(302, { location: "https://must-not-follow.invalid/" }).end();
-        else response.writeHead(200, { "content-type": "text/event-stream" }).end("data: [DONE]\n\n");
-      })().catch(() => response.destroy());
     });
     await new Promise<void>(resolve => upstream.listen(0, "127.0.0.1", resolve));
     const address = upstream.address();
@@ -860,6 +846,28 @@ describe("OpenCodeServerDriver", () => {
       expect(received[1]?.["x-opencode-session"]).toBeUndefined();
     } finally {
       await session?.close({ reason: "test" });
+      await new Promise<void>(resolve => { upstream.close(() => resolve()); upstream.closeAllConnections(); });
+    }
+  });
+
+  it.each(["explicit", "ambient"])("keeps OpenRouter upstream credentials out of the child while preserving exact provider/model routing (%s)", async source => {
+    await chmod(fixture, 0o755);
+    const key = "synthetic-upstream-openrouter-key";
+    const model = "deepseek/deepseek-v4.1-flash-1017";
+    const received: Array<{ authorization?: string; body: unknown; referer?: string }> = [];
+    let redirect = false;
+    const upstream = createHttpServer((request, response) => {
+      void (async () => {
+        const chunks = [];
+        for await (const chunk of request) chunks.push(Buffer.from(chunk));
+        received.push({ authorization: request.headers.authorization, body: JSON.parse(Buffer.concat(chunks).toString("utf8")), referer: request.headers["http-referer"] as string });
+        if (redirect) response.writeHead(302, { location: "https://must-not-follow.invalid/" }).end();
+        else response.writeHead(200, { "content-type": "text/event-stream" }).end("data: [DONE]\n\n");
+      })().catch(() => response.destroy());
+    });
+    await new Promise<void>(resolve => upstream.listen(0, "127.0.0.1", resolve));
+    const address = upstream.address();
+    if (!address || typeof address === "string") throw new Error("Missing fixture address");
     upstreamTransport.endpoint = `http://127.0.0.1:${address.port}/chat/completions`;
     upstreamTransport.urls = [];
     const root = await mkdtemp(join(tmpdir(), "paperclip-openrouter-custody-"));

@@ -71,13 +71,20 @@ export const REMOTE_RECOVERY_PROCESS_CHECK_SCRIPT = [
   'test "$nonce" = "$expected_nonce" && test "$runner_id" = "$expected_runner_id" && test "$pid" = "$expected_pid" && test -n "$started_at" || exit 44',
   String.raw`node -e '
 const fs = require("node:fs");
+const { execFileSync } = require("node:child_process");
 const [pid, runnerId, expectedGeneration] = process.argv.slice(1);
 if (!/^[1-9][0-9]*$/.test(pid) || !Number.isSafeInteger(Number(pid))) process.exit(44);
 function requireLiveProcess() {
   try { process.kill(Number(pid), 0); }
   catch (error) { process.exit(error.code === "ESRCH" ? 45 : 46); }
 }
-function verifyGeneration() {
+// The marker decides the generation format. A Linux marker is verified against
+// /proc, and a Darwin marker is verified against sysctl plus ps.
+const mode = expectedGeneration
+  ? (expectedGeneration.startsWith("darwin:") ? "darwin" : "linux")
+  : (process.platform === "darwin" ? "darwin" : "linux");
+const psOptions = { encoding: "utf8", timeout: 2000, maxBuffer: 65536, env: { ...process.env, LC_ALL: "C" } };
+function linuxFingerprint() {
   try {
     const stat = fs.readFileSync("/proc/" + pid + "/stat", "utf8");
     const end = stat.lastIndexOf(") ");
@@ -85,28 +92,51 @@ function verifyGeneration() {
     const ticks = fields[19];
     const boot = fs.readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim();
     if (end < 0 || !stat.startsWith(pid + " (") || !/^[0-9]+$/.test(ticks || "") || !/^[-a-fA-F0-9]+$/.test(boot)) process.exit(46);
-    if ("linux:" + boot + ":" + ticks !== expectedGeneration) process.exit(47);
     if (fields[0] === "Z") process.exit(45);
+    return "linux:" + boot + ":" + ticks;
   } catch (error) {
     if (error.code === "ENOENT") requireLiveProcess();
     process.exit(46);
   }
 }
+function darwinFingerprint() {
+  try {
+    const boot = execFileSync("/usr/sbin/sysctl", ["-n", "kern.boottime"], psOptions);
+    const seconds = /\bsec\s*=\s*(\d+)/.exec(boot)?.[1];
+    const micros = /\busec\s*=\s*(\d+)/.exec(boot)?.[1];
+    const start = Date.parse(execFileSync("/bin/ps", ["-p", pid, "-o", "lstart="], psOptions).trim());
+    if (!seconds || !micros || Number(micros) > 999999 || !Number.isSafeInteger(start)) process.exit(46);
+    return "darwin:" + seconds + "." + micros + ":" + start;
+  } catch {
+    requireLiveProcess();
+    process.exit(46);
+  }
+}
+function argvOf() {
+  const commandPath = "/proc/" + pid + "/cmdline";
+  if (fs.existsSync(commandPath)) {
+    try { return fs.readFileSync(commandPath, "utf8").split("\0"); }
+    catch (error) { if (error.code !== "ENOENT") process.exit(46); }
+  }
+  if (mode === "darwin") {
+    try { return execFileSync("/bin/ps", ["-ww", "-p", pid, "-o", "command="], psOptions).trim().split(/\s+/); }
+    catch { requireLiveProcess(); process.exit(46); }
+  }
+  return null;
+}
 requireLiveProcess();
-const commandPath = "/proc/" + pid + "/cmdline";
-if (process.platform !== "linux" && !expectedGeneration && !fs.existsSync(commandPath)) process.exit(0);
-let args;
-try { args = fs.readFileSync(commandPath, "utf8").split("\0"); }
-catch (error) {
-  requireLiveProcess();
-  if (error.code === "ENOENT" && expectedGeneration) verifyGeneration();
-  process.exit(46);
+const argv = argvOf();
+if (argv) {
+  const runnerOption = argv.indexOf("--runner-id");
+  // A marker alone never authorizes a signal: the live command line must name
+  // the exact Runner instance right after the runner-id option.
+  if (runnerOption < 0 || argv[runnerOption + 1] !== runnerId) {
+    requireLiveProcess();
+    process.exit(44);
+  }
 }
-if (expectedGeneration) verifyGeneration();
-if (!args.includes("--runner-id") || !args.includes(runnerId)) {
-  requireLiveProcess();
-  process.exit(44);
-}
+const generation = mode === "darwin" ? darwinFingerprint() : linuxFingerprint();
+if (expectedGeneration && generation !== expectedGeneration) process.exit(47);
 ' "$pid" "$expected_runner_id"` + ' "${5:-}"',
 ].join("; ");
 

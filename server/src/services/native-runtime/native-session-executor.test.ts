@@ -1028,7 +1028,9 @@ describe("remote runner process supervision", () => {
       release();
       await vi.waitFor(() => expect(execute.mock.calls.filter(([input]) => input.args?.[2] === "paperclip-runner-signal")).toHaveLength(1));
       const signal = execute.mock.calls.find(([input]) => input.args?.[2] === "paperclip-runner-signal")![0];
-      expect(signal.args?.slice(3)).toEqual(["/runtime/identity", nonce, "runner-remote", "4321"]);
+      // The trailing slot carries the process start fingerprint. This identity
+      // has none, so the signal command receives an empty fifth argument.
+      expect(signal.args?.slice(3)).toEqual(["/runtime/identity", nonce, "runner-remote", "4321", ""]);
       expect(signal.args?.[1]).toContain('kill -KILL "$expected_pid"');
       expect(handle.isExitConfirmed?.()).toBe(false);
       releaseMonitor();
@@ -7593,11 +7595,16 @@ describe("native terminal-turn accounting", () => {
         expect(ledger, scenario).toHaveLength(ready ? 1 : 0);
         if (ready) expect(ledger[0], scenario).toMatchObject({ costStatus: "unpriced", billingType: "unknown" });
         const block = await budgetService(db).getInvocationBlock(companyId, agentId);
-        if (ready && policy === "allow") {
+        // This fork honors an explicit allow-unpriced policy for terminal pending
+        // usage (patch budget-allow-unknown-usage), so an unproven Cursor Cloud
+        // receipt does not block admission. A block policy still blocks.
+        if (policy === "allow") {
           expect(block, scenario).toBeNull();
-          const nextRun = randomUUID();
-          await db.insert(tables.heartbeatRuns).values({ id: nextRun, companyId, agentId, status: "queued", runtimeMode: "native" });
-          await expect(reserveRunBudget(db, companyId, nextRun, null)).resolves.toMatchObject({ reused: false });
+          if (ready) {
+            const nextRun = randomUUID();
+            await db.insert(tables.heartbeatRuns).values({ id: nextRun, companyId, agentId, status: "queued", runtimeMode: "native" });
+            await expect(reserveRunBudget(db, companyId, nextRun, null)).resolves.toMatchObject({ reused: false });
+          }
         } else expect(block, scenario).not.toBeNull();
       }
     } finally { await db.$client.end(); await database.cleanup(); await rm(directory, { recursive: true, force: true }); }

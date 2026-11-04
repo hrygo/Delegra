@@ -8791,13 +8791,13 @@ async function verifyLiveRunnerAdoption(
   goalMidTurn = false,
   detachBeforeCleanup = false,
   startWithoutCheckpoint = false,
-  structuredPolicy = false,
   preparedTask = false,
   adoptionAuthorization: "allow" | "deny" | "legacy" | "legacy-missing" | "missing-binding" = "allow",
   toolHandlerOrder?: "before" | "after" | "completion-before" | "completion-after",
   uncertainAtClose = false,
   semanticRecoveryMode?: "denied-before-cancel" | "cleanup-only",
   stopExitProofFault?: "missing" | "false",
+  structuredPolicy = false,
 ) {
   const stateDirectory = await mkdtemp(join(tmpdir(), "runnerd-live-adopt-"));
   const pendingCompletion = toolHandlerOrder?.startsWith("completion-") === true;
@@ -9322,7 +9322,7 @@ it(
   30_000,
 );
 
-it("confirms a structured policy checkpoint via authenticated snapshot after identity event compaction", () => verifyLiveRunnerAdoption(false, false, false, false, false, true), 30_000);
+it("confirms a structured policy checkpoint via authenticated snapshot after identity event compaction", () => verifyLiveRunnerAdoption(false, false, false, false, false, false, "allow", undefined, false, undefined, undefined, true), 30_000);
 
 it("binds buffered mid-goal items only after the authenticated recovery snapshot", () => verifyLiveRunnerAdoption(false, false, true), 30_000);
 
