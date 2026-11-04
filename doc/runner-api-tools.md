@@ -176,6 +176,24 @@ real PostgreSQL and filesystem operations. Filesystem fault tests exercise the
 actual command with simulated provider transport; they do not establish a live
 Daytona RPC or deployed recovery.
 
+### Run-scoped artifact staging (Delegra)
+
+A standard local native run with its run-scoped attachment staging scope can
+use `stage_api_artifact` with a returned `artifactId` and `sha256`. The server
+rechecks the run and asset permissions, verifies the bytes and stages at most
+10 MiB in an opaque temporary workspace slot. The caller cannot select a path;
+the slot is cleared when the run ends. This tool is unavailable to remote runs,
+Dot, Muse, Grok, and restricted completion-review runs. The resulting bytes are
+untrusted input and should be inspected with the execution environment's normal
+tools. Authorization immediately before staging admits those exact bytes. If
+authorization is revoked during staging, the tool withholds the path and clears
+the slot, but bytes may already have been visible to the run during that window.
+Storage reads time out and stop waiting when the run scope closes. The storage
+interface cannot cancel a pending `getObject`; a stream returned later is destroyed.
+At most eight artifact storage opens may remain pending per server process. A
+timed-out open retains its slot until the storage call actually settles; when
+all slots are occupied, further attempts fail with `runner_api_artifact_storage_busy`.
+
 ### Media files and upload limits
 
 The 1 GiB limit covers new snapshots returned by `call_api`, such as large JSON

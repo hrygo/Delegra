@@ -124,7 +124,28 @@ does not complete a missing provider receipt or establish that a provider stoppe
 
 ## Deployment and rollback
 
-The current deployment is `deploy/v2026.1024.0-canary.7-r13`
+The current deployment is `deploy/v2026.1024.0-canary.7-r17`
+(`b246054c39e5da139ac55c9918e1338507684ca3`). It was activated on
+2026-11-02 at 09:33 Asia/Shanghai with `delegra service restart --instance
+delegra --wait`. The restart report had no lost, skipped, or adopted runs.
+The health endpoint returned `ok`, the expected commit, and `ready`; the UI
+returned HTTP 200 and a read-only database query succeeded. The release has
+25 active patch IDs recorded in `currentDeployment`.
+
+The pre-switch service ran from the retained r14 release directory, with r13
+as its Git base and the r14 Claude safety patch present as local changes. The
+r16 registry entry had recorded the tag and commit but did not include service
+activation evidence. The r17 source contains those local code changes. The old
+release directory and the launcher backup `~/.local/bin/delegra.bak-before-r17-20261102`
+are retained for source rollback. A source rollback does not restore database data.
+
+No database migration files changed from the running r13 base to r17. A fresh
+logical backup was created before the switch and passed `gzip -t`; no restore
+drill was performed. The backup is retained under
+`~/.local/share/delegra/pre-r17-backup-20261102-XTfGwU/` with SHA-256
+`defa16a4fae7402cd4273ba025ee7deff6a6a572ee72c7249803cd0e44b8fa6c`.
+
+The prior documented deployment was `deploy/v2026.1024.0-canary.7-r13`
 (`de2d1690f783bd6340eb6f1d7e37f25072c28851`). It replaced r12 on 2026-10-28 at
 09:48 Asia/Shanghai through `delegra service restart --instance delegra --wait`,
 which drained active work before the cutover and then adopted the native runs
@@ -287,15 +308,28 @@ files remain on a local-only branch pending upstream scope agreement.
 
 `scripts/fleet-status.sh` answers one question: who is working, who is idle, and
 what is waiting on a human. It renders a text table by default and the same
-facts as one JSON document with `--json`.
+facts as one JSON document with `--json`. Scope names in text output replace
+control characters with spaces; `scope.companies` in JSON retains the original
+names with JSON escaping.
 
 ```sh
 scripts/fleet-status.sh                      # one render
 scripts/fleet-status.sh --json               # same facts, machine-readable
 scripts/fleet-status.sh --watch 60           # re-render every minute
 scripts/fleet-status.sh --company Delegra    # one company, by name or id
-pnpm test:fleet-status                       # decision-rule tests
+node --test scripts/fleet-status.test.mjs    # decision-rule tests
 ```
+
+### Files
+
+| File | Role |
+| ---- | ---- |
+| `scripts/fleet-status.sh` | Argument parsing, the read-only queries and the decision rules |
+| `scripts/fleet-status-render.sh` | The text and JSON renderers. Sourced by the panel, never run on its own |
+| `scripts/fleet-status.test.mjs` | The test suite for both files |
+
+The panel resolves the renderer next to itself, so the two files have to stay in
+the same directory.
 
 ### Exit codes
 
@@ -306,10 +340,17 @@ pnpm test:fleet-status                       # decision-rule tests
 | `2`  | Panel unavailable: bad usage, `psql` missing, unreachable database, query or schema failure, unparsable row, or a scope that matches no agent |
 
 Text and JSON modes share one decision function, so they cannot disagree.
-`--watch` deliberately does not propagate these codes: it reports each failure
-on stderr and keeps the interval running. It clears the screen only when stdout
+`--watch` deliberately does not propagate these codes: each round runs in a
+subshell, so a failure that would end the shell (an archived company, a
+database that went away) ends that round only. The watcher reports it on stderr
+and retries on the next interval. It clears the screen only when stdout
 is a terminal, so redirecting a `--watch` run to a file yields plain frames
 instead of one escape sequence per frame.
+
+`--watch` stops when its output pipe closes (for example
+`fleet-status.sh --watch 1 | head -n 1`). The closed write is detected as
+SIGPIPE and the watcher exits instead of keeping the database busy after the
+reader leaves.
 
 An idle agent with no unfinished work exits `0`. Free capacity is the healthy
 case, not an item to action; the panel still lists it so work can be handed out.
@@ -327,17 +368,20 @@ cover the whole agent; a scheduled monitor (`monitor_next_check_at`) covers only
 the card it is attached to.
 
 - A live run older than `--running-slow`, or one silent for longer than
-  `--run-silent`. Reported for inspection only: the panel does not claim the run
-  is wedged, does not recommend interrupting it, and does not suggest rewriting
-  or clearing any field. Those calls need the run log, process state and
-  artifacts, which this tool does not read.
+  `--run-silent`. The two thresholds are independent: a run can go silent long
+  before it is old, and either one is reported. Reported for inspection only: the
+  panel does not claim the run is wedged, does not recommend interrupting it, and
+  does not suggest rewriting or clearing any field. Those calls need the run log,
+  process state and artifacts, which this tool does not read.
 - In-progress cards that no live run, fresh wakeup or recovery action covers and
   that carry no monitor of their own. A monitor on one card does not excuse the
   others, and the note counts only the uncovered cards.
 - `in_review` work that is not the card of the live run. A review card the
   assigned agent is currently running is not counted again, and the reported
   wait skips that card.
-- A paused agent that still holds unfinished work.
+- A paused agent that still holds unfinished work. A card parked on the agent
+  (`backlog` or `blocked`) counts as unfinished work here, the same as an active
+  or in-review card.
 - Agent status `error` or `pending_approval`.
 - Failed wakeup requests inside the `--wake-window` window.
 - Queued or deferred wakeups older than `--wake-stale` when the agent has no run
@@ -398,9 +442,11 @@ fleet always leaves one of those behind.
 
 The same values can be set through `FLEET_RUNNING_SLOW`, `FLEET_RUN_SILENT`,
 `FLEET_TODO_IDLE`, `FLEET_REVIEW_WAIT`, `FLEET_WAKE_WINDOW_H` and
-`FLEET_WAKE_STALE`, which keeps `--watch` invocations short. Every threshold is
-echoed in the header and in the JSON `thresholds` block, so a reading is always
-attributable to the numbers that produced it.
+`FLEET_WAKE_STALE`, which keeps `--watch` invocations short. An explicit flag
+wins over the environment variable, and the environment variable wins over the
+built-in default. Every threshold is echoed in the header and in the JSON
+`thresholds` block, so a reading is always attributable to the numbers that
+produced it.
 
 ### Known limits
 

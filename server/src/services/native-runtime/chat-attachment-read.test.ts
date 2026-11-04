@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, readFile, symlink, stat } from "node:fs/promises";
 import { Readable } from "node:stream";
+import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -35,6 +36,7 @@ import type { StorageService } from "../../storage/types.js";
 import { issueService } from "../issues.js";
 import { NativeChatAttachmentReadScope } from "./chat-attachment-read.js";
 import { PaperclipRunnerToolAuthority } from "./paperclip-runner-tool-authority.js";
+import { readApiArtifactBytes } from "./runner-api-artifact-read.js";
 
 const stagingControl = vi.hoisted(() => ({
   beforeStage: undefined as (() => Promise<void>) | undefined,
@@ -1101,6 +1103,41 @@ describe("native same-conversation historical attachment reading", () => {
       expect((await stat(stagedPath!)).size).toBe(0);
     } finally {
       release();
+      stagingControl.beforeStage = undefined;
+      stagingControl.afterStage = undefined;
+      await reader.close();
+    }
+  });
+
+  it.each(["pending", "stalled"] as const)("closes while API artifact storage is %s", async kind => {
+    const reader = scope();
+    let resolve!: (value: { stream: Readable }) => void;
+    const stream = new Readable({ read() {} });
+    let entered!: () => void;
+    const started = new Promise<void>(r => { entered = r; });
+    const mockStorage = { getObject: () => { entered(); return kind === "pending" ? new Promise<{ stream: Readable }>(r => { resolve = r; }) : Promise.resolve({ stream }); } } as unknown as StorageService;
+    const result = reader.stageApiArtifact(signal => readApiArtifactBytes(mockStorage, companyId, "key", 100, signal), async () => {});
+    const rejected = expect(result).rejects.toThrow("aborted_or_timed_out");
+    await started;
+    await reader.close();
+    await rejected;
+    if (kind === "pending") resolve({ stream });
+    await vi.waitFor(() => expect(stream.destroyed).toBe(true));
+  });
+
+  it("clears admitted API bytes if authorization is revoked during staging, without returning a path", async () => {
+    const reader = scope();
+    let revoked = false;
+    let stagedPath: string | undefined;
+    let visible: Buffer | undefined;
+    stagingControl.beforeStage = async () => { revoked = true; };
+    stagingControl.afterStage = relativePath => { stagedPath = path.join(workspaceRoot, relativePath); visible = readFileSync(stagedPath); };
+    try {
+      await expect(reader.stageApiArtifact(async () => Buffer.from("admitted"), async () => { if (revoked) throw new Error("revoked"); })).rejects.toThrow("revoked");
+      expect(stagedPath).toBeDefined();
+      expect(visible).toEqual(Buffer.from("admitted"));
+      expect((await stat(stagedPath!)).size).toBe(0);
+    } finally {
       stagingControl.beforeStage = undefined;
       stagingControl.afterStage = undefined;
       await reader.close();
