@@ -15,7 +15,7 @@ jobs:
   ci:
     if: github.event.action != 'labeled' || github.event.label.name == 'profile-ci' || github.event.label.name == 'full-ci'
     # Review and update the snapshot and its routing pin together.
-    uses: hrygo/Delegra/.github/workflows/pr-delegra-trusted.yml@72979f57913eeccaed2177c90d8b62983d6f0ea4
+    uses: hrygo/Delegra/.github/workflows/pr-delegra-trusted.yml@67653d5d3ac056d7f264c27186e1a0def0145a32
 
   shared_ci_consistency:
     name: Shared CI snapshot consistency
