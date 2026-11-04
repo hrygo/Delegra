@@ -533,7 +533,6 @@ impl CodexProviderConfig {
             ("codex", "codex_app_server")
                 | ("codex", POLICY_DRIVER)
                 | ("opencode", "opencode_server")
-                | ("opencode", "opencode_server")
                 | ("cursor_cloud", "cursor_cloud_api")
         ) {
             return Err(LocalRunnerError::invalid(
