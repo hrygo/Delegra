@@ -22,7 +22,7 @@ concurrency:
 
 jobs:
   gate:
-    uses: paperclipai/paperclip/.github/workflows/ci-routing.yml@aa25ac9be5785243836e2f4aec0ad09a8cf348d3
+    uses: paperclipai/paperclip/.github/workflows/ci-routing.yml@d7283e875772ca8c684dc86e471e6b48d543b7b1
 
   test_selection:
     name: Select Vitest files

@@ -20,8 +20,33 @@ if (snapshot !== committed) {
   throw new Error('Caller SHA does not contain the current shared CI snapshot');
 }
 const routingBaseline = readFileSync('.github/workflows/ci-routing.yml');
-const pinnedRouting = execFileSync('git', ['show', `${routingReferences[0][1]}:.github/workflows/ci-routing.yml`]);
+const routingPin = routingReferences[0][1];
+const pinnedRouting = execFileSync('git', ['show', `${routingPin}:.github/workflows/ci-routing.yml`]);
 if (!routingBaseline.equals(pinnedRouting)) {
   throw new Error('The pinned routing workflow differs from ci-routing.yml');
+}
+// GitHub resolves a cross-repository `uses` inside the called repository, so the
+// routing pin must name a commit in paperclipai/paperclip. Such a commit is
+// always an ancestor of the master mirror; a fork-only commit is not, and would
+// fail the caller workflow at startup with "workflow was not found".
+const mirrorRefs = ['origin/master', 'master'].filter(ref => {
+  try {
+    execFileSync('git', ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`], { stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
+  }
+});
+if (mirrorRefs.length === 0) {
+  console.warn('Skipping the routing provenance check: no master mirror ref is available');
+} else if (!mirrorRefs.some(ref => {
+  try {
+    execFileSync('git', ['merge-base', '--is-ancestor', routingPin, ref], { stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
+  }
+})) {
+  throw new Error(`Routing pin ${routingPin} is not an upstream commit: it is not an ancestor of the master mirror, so GitHub cannot resolve paperclipai/paperclip at that SHA`);
 }
 console.log('Shared CI snapshot and pinned caller agree; routing matches the baseline');
