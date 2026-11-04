@@ -256,6 +256,7 @@ function createCodexSecurityConfiguration(
   /** Server-registered run copy, never an environment/config-supplied root. */
   instructionWorkingCopyRoot?: string,
   protectedPaths: string[] = [],
+  disableWebSearch = false,
 ): { args: string[]; policy: CodexLaunchPolicy } {
   const explicitSource = source;
   source ??= process.env;
@@ -358,6 +359,7 @@ function createCodexSecurityConfiguration(
     ...(externalRunnerSandbox
       ? ["--dangerously-bypass-approvals-and-sandbox"]
       : []),
+    ...(disableWebSearch ? ["-c", 'web_search="disabled"'] : []),
     "app-server",
   ];
   const entries = (planning: boolean): CodexFilesystemEntry[] => [
@@ -381,14 +383,16 @@ function createCodexSecurityConfiguration(
 /** Frozen historical launches retain this argv representation. New launches use the paired API. */
 export function createIsolatedCodexAppServerArgs(
   source?: NodeJS.ProcessEnv, readOnlyRoots: string[] = [], instructionWorkingCopyRoot?: string, protectedPaths: string[] = [],
+  disableWebSearch = false,
 ): string[] {
-  return createCodexSecurityConfiguration(source, readOnlyRoots, instructionWorkingCopyRoot, protectedPaths).args;
+  return createCodexSecurityConfiguration(source, readOnlyRoots, instructionWorkingCopyRoot, protectedPaths, disableWebSearch).args;
 }
 
 export function createIsolatedCodexAppServerLaunch(
   source?: NodeJS.ProcessEnv, readOnlyRoots: string[] = [], instructionWorkingCopyRoot?: string, protectedPaths: string[] = [],
+  disableWebSearch = false,
 ): { args: string[]; launchPolicy: CodexLaunchPolicy } {
-  const launchPolicy = normalizeCodexLaunchPolicy(createCodexSecurityConfiguration(source, readOnlyRoots, instructionWorkingCopyRoot, protectedPaths).policy);
+  const launchPolicy = normalizeCodexLaunchPolicy(createCodexSecurityConfiguration(source, readOnlyRoots, instructionWorkingCopyRoot, protectedPaths, disableWebSearch).policy);
   return { args: codexLaunchPolicyArgs(launchPolicy), launchPolicy };
 }
 

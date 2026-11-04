@@ -107,13 +107,15 @@ export class CodexHarnessSession
     this.assertProtocolIntegrity();
     const transportOwnsQuiescence = this.transport.attachRun !== undefined;
     if (
-      this.turnStartPending ||
+      this.turnStartPending || this.pendingRunAttachment !== null ||
       (!transportOwnsQuiescence &&
         (this.activeTurnId !== null || this.pendingRuntimeRequestMap.size > 0))
     ) {
       throw new Error("codex_run_attach_busy");
     }
     if (!input.runId) throw new Error("codex_run_attach_invalid");
+    let settle!: () => void;
+    this.pendingRunAttachment = { runId: input.runId, settled: new Promise<void>(resolve => { settle = resolve; }) };
     try {
       await this.transport.attachRun?.({
         runId: input.runId,
@@ -122,6 +124,16 @@ export class CodexHarnessSession
         ...(input.currentRunGrant ? { currentRunGrant: structuredClone(input.currentRunGrant) } : {}),
       });
       this.assertProtocolIntegrity();
+      if (transportOwnsQuiescence) {
+        // Runnerd's attachment contract performs two durable readiness probes,
+        // drains the settled provider tail, and rotates authority atomically.
+        // Its proof supersedes host reducer state that can remain stale when a
+        // semantic-result consumer stops before the interrupt terminal arrives.
+        // Drop only the prior run's already-proven-settled buffered suffix.
+        this.activeTurnId = null;
+        this.pendingRuntimeRequestMap.clear();
+        this.eventQueue.clear();
+      }
       if (transportOwnsQuiescence && this.opened.providerIdentity?.kind === "codex_launch_policy_v1") {
         // A settled new run may replace its run-scoped policy. Freeze the new
         // authenticated identity before exposing a checkpoint for that run.
@@ -131,40 +143,33 @@ export class CodexHarnessSession
           || identity?.kind !== "codex_launch_policy_v1") throw new Error("codex_run_attach_identity_unproven");
         this.opened.providerIdentity = identity;
       }
+      if (this.codexUsageBaseline && input.runId !== this.runId) {
+        this.codexUsageBaseline = { baseline: { ...this.codexUsageBaseline.latest }, latest: { ...this.codexUsageBaseline.latest } };
+        this.usageSnapshot = codexRunUsage(this.codexUsageBaseline);
+      }
+      this.runId = input.runId;
+      this.result = null;
+      this.resultFingerprint = null;
+      this.resultCallId = null;
+      this.resultTurnId = null;
+      this.dispositionOnlyRecoveryConsumed = false;
+      this.dispositionOnlyRecoveryTurnId = null;
+      this.terminal = false;
+      this.terminalTurns.clear();
+      this.turnStarted = false;
+      this.protocolFailed = false;
+      this.protocolFailureCode = null;
+      this.protocolFailureMessage = null;
+      this.emit("run.attached", { runId: input.runId, sameSession: true });
     } catch (error) {
       if (this.opened.providerIdentity?.kind === "codex_launch_policy_v1") {
         this.failProtocol("codex_run_attach_unproven", "Structured policy attachment could not prove its new session identity");
       }
       throw error;
+    } finally {
+      this.pendingRunAttachment = null;
+      settle();
     }
-    if (transportOwnsQuiescence) {
-      // Runnerd's attachment contract performs two durable readiness probes,
-      // drains the settled provider tail, and rotates authority atomically.
-      // Its proof supersedes host reducer state that can remain stale when a
-      // semantic-result consumer stops before the interrupt terminal arrives.
-      // Drop only the prior run's already-proven-settled buffered suffix.
-      this.activeTurnId = null;
-      this.pendingRuntimeRequestMap.clear();
-      this.eventQueue.clear();
-    }
-    if (this.codexUsageBaseline && input.runId !== this.runId) {
-      this.codexUsageBaseline = { baseline: { ...this.codexUsageBaseline.latest }, latest: { ...this.codexUsageBaseline.latest } };
-      this.usageSnapshot = codexRunUsage(this.codexUsageBaseline);
-    }
-    this.runId = input.runId;
-    this.result = null;
-    this.resultFingerprint = null;
-    this.resultCallId = null;
-    this.resultTurnId = null;
-    this.dispositionOnlyRecoveryConsumed = false;
-    this.dispositionOnlyRecoveryTurnId = null;
-    this.terminal = false;
-    this.terminalTurns.clear();
-    this.turnStarted = false;
-    this.protocolFailed = false;
-    this.protocolFailureCode = null;
-    this.protocolFailureMessage = null;
-    this.emit("run.attached", { runId: input.runId, sameSession: true });
   }
 
   contextSnapshot(): CodexModelContextSnapshot {

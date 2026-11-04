@@ -1,3 +1,4 @@
+import { resolveExternalTestDatabaseUrl } from "./helpers/external-test-database.js";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -48,7 +49,8 @@ import { instanceSettingsService } from "../services/instance-settings.js";
 import { withNativeWorkspaceFinalizationOwnership } from "../services/native-runtime/native-workspace-finalization-ownership.js";
 import { noticeMetadataReferencesRecoveryAction } from "../services/recovery/successful-run-handoff.js";
 
-const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
+const external = resolveExternalTestDatabaseUrl("PAPERCLIP_RECOVERY_ACTION_TEST_DATABASE_URL");
+const embeddedPostgresSupport = external ? { supported: true, reason: undefined } : await getEmbeddedPostgresTestSupport();
 const describeEmbeddedPostgres = embeddedPostgresSupport.supported ? describe : describe.skip;
 
 function makeRecoveryActionRow(overrides: Record<string, unknown> = {}) {
@@ -83,6 +85,9 @@ function makeRecoveryActionRow(overrides: Record<string, unknown> = {}) {
     ...overrides,
   };
 }
+
+// Stranded-run fixtures began before anything the test later records.
+const LATEST_RUN_TIMES = { startedAt: new Date(), createdAt: new Date() };
 
 describe("issueRecoveryActionService", () => {
   it("does not reactivate an action resolved between the active read and update", async () => {
@@ -154,8 +159,8 @@ describeEmbeddedPostgres("issue recovery actions", () => {
   beforeAll(async () => {
     operationLogRoot = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-recovery-operation-logs-"));
     process.env.WORKSPACE_OPERATION_LOG_BASE_PATH = operationLogRoot;
-    tempDb = await startEmbeddedPostgresTestDatabase("paperclip-issue-recovery-actions-");
-    db = createDb(tempDb.connectionString);
+    if (!external) tempDb = await startEmbeddedPostgresTestDatabase("paperclip-issue-recovery-actions-");
+    db = createDb(external ?? tempDb!.connectionString);
   }, 30_000);
 
   afterEach(async () => {
@@ -182,6 +187,7 @@ describeEmbeddedPostgres("issue recovery actions", () => {
   });
 
   afterAll(async () => {
+    await db?.$client.end({ timeout: 1 });
     await tempDb?.cleanup();
     if (priorOperationLogRoot === undefined) delete process.env.WORKSPACE_OPERATION_LOG_BASE_PATH;
     else process.env.WORKSPACE_OPERATION_LOG_BASE_PATH = priorOperationLogRoot;
@@ -554,6 +560,7 @@ describeEmbeddedPostgres("issue recovery actions", () => {
       errorCode: "adapter_failed",
       contextSnapshot: { retryReason: "issue_continuation_needed" },
       livenessState: "needs_followup",
+      ...LATEST_RUN_TIMES,
     } as const;
 
     const results = await Promise.all([
@@ -616,8 +623,8 @@ describeEmbeddedPostgres("issue recovery actions", () => {
       await db.update(agents).set({ status: "paused" }).where(eq(agents.id, coderId));
       const enqueueWakeup = vi.fn(async () => null);
       const recovery = recoveryService(db, { enqueueWakeup });
-      const operatorDb = createDb(tempDb!.connectionString, { maxConnections: 1 });
-      const probeDb = createDb(tempDb!.connectionString, { maxConnections: 1 });
+      const operatorDb = createDb(external ?? tempDb!.connectionString, { maxConnections: 1 });
+      const probeDb = createDb(external ?? tempDb!.connectionString, { maxConnections: 1 });
       let release!: () => void;
       let ready!: () => void;
       let holderPid = 0;
@@ -766,7 +773,7 @@ describeEmbeddedPostgres("issue recovery actions", () => {
         .where(eq(issues.id, sourceIssue.id));
     }
     const [observed] = await db.select().from(issues).where(eq(issues.id, sourceIssue.id));
-    const singleConnectionDb = createDb(tempDb!.connectionString, { maxConnections: 1 });
+    const singleConnectionDb = createDb(external ?? tempDb!.connectionString, { maxConnections: 1 });
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       const work = recoveryService(singleConnectionDb, { enqueueWakeup: async () => null })
@@ -800,6 +807,7 @@ describeEmbeddedPostgres("issue recovery actions", () => {
         errorCode: "configuration_incomplete",
         contextSnapshot: { issueId },
         livenessState: "needs_followup",
+        ...LATEST_RUN_TIMES,
         resultJson: {
           configurationIncomplete: {
             reason: "workspace_base_ref_unresolved",
@@ -990,6 +998,7 @@ describeEmbeddedPostgres("issue recovery actions", () => {
         errorCode,
         contextSnapshot: { retryReason: "issue_continuation_needed" },
         livenessState: "needs_followup",
+        ...LATEST_RUN_TIMES,
         resultJson: errorCode === "workspace_validation_failed"
           ? { workspaceValidation: { reason: "missing_workspace", fingerprint: "workspace:test" } }
           : null,
@@ -1656,6 +1665,7 @@ describeEmbeddedPostgres("issue recovery actions", () => {
       errorCode: "adapter_failed",
       contextSnapshot: { retryReason: "issue_continuation_needed" },
       livenessState: "needs_followup",
+      ...LATEST_RUN_TIMES,
     } as const;
     const secondLatestRun = {
       ...firstLatestRun,
@@ -1729,6 +1739,7 @@ describeEmbeddedPostgres("issue recovery actions", () => {
       errorCode: "workspace_validation_failed",
       contextSnapshot: {},
       livenessState: "failed",
+      ...LATEST_RUN_TIMES,
       resultJson: { workspaceValidation },
     } as const;
     const secondLatestRun = {
@@ -1822,6 +1833,7 @@ describeEmbeddedPostgres("issue recovery actions", () => {
       errorCode: "adapter_failed",
       contextSnapshot: { retryReason: "issue_continuation_needed" },
       livenessState: "needs_followup",
+      ...LATEST_RUN_TIMES,
     } as const;
 
     await recovery.escalateStrandedAssignedIssue({
@@ -1903,6 +1915,7 @@ describeEmbeddedPostgres("issue recovery actions", () => {
         errorCode: "adapter_failed",
         contextSnapshot: { retryReason: "issue_continuation_needed" },
         livenessState: "needs_followup",
+        ...LATEST_RUN_TIMES,
       },
     });
 
@@ -2725,7 +2738,7 @@ describeEmbeddedPostgres("issue recovery actions", () => {
     const recovery = recoveryService(db, { enqueueWakeup: vi.fn(async () => null) });
     let firstAction: typeof issueRecoveryActions.$inferSelect | undefined;
     for (let tick = 0; tick < 3; tick += 1) {
-      expect(await withNativeWorkspaceFinalizationOwnership({ db, companyId, runId }, copyback)).toEqual({ acquired: false });
+      expect(await withNativeWorkspaceFinalizationOwnership({ db, companyId, runId }, copyback)).toEqual({ acquired: false, reason: "owner_unverified" });
       const detail = await request(app).get(`/api/issues/${sourceIssueId}`).expect(200);
       expect(detail.body.activeRecoveryAction).toMatchObject({
         cause: "native_workspace_finalization_owner_unverified", status: "active", attemptCount: 1,
