@@ -215,10 +215,10 @@ describe("native backend factory", () => {
     const input = preparedExecution(execution());
     if (input.provider.kind !== "codex") throw new Error("Codex fixture required");
     if (webSearch) Object.assign(input.provider, { webSearch });
-    const buildArgs = codexSecurity.createIsolatedCodexAppServerArgs;
+    const buildLaunch = codexSecurity.createIsolatedCodexAppServerLaunch;
     let generated: string[] | undefined;
-    const spy = vi.spyOn(codexSecurity, "createIsolatedCodexAppServerArgs").mockImplementation((...args) => {
-      generated = buildArgs(...args);
+    const spy = vi.spyOn(codexSecurity, "createIsolatedCodexAppServerLaunch").mockImplementation((...args) => {
+      generated = buildLaunch(...args).args;
       throw new Error("offline-stop-before-process-spawn");
     });
     try {

@@ -35,6 +35,8 @@ fn only_the_launch_flag_adds_the_note_and_the_monitor() {
         provider: "codex".to_owned(),
         driver: "codex_app_server".to_owned(),
         provider_version: "fake-1".to_owned(),
+        launch_policy: None,
+        include_collaboration_mode_instructions: None,
         command: PathBuf::from(env!("CARGO_BIN_EXE_fake-codex-app-server")),
         args: vec![
             "--state-file".to_owned(),
