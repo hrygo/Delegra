@@ -87,6 +87,15 @@ ancestry in both `upstream/master` and `deploy`, and continues to require
 registration of fork commits. Replace the overlay when a suitable stable tag
 contains it or an independently verified equivalent.
 
+### Trusted PR CI
+
+The fork calls immutable snapshots of the upstream PR workflow and its routing
+workflow. The routing snapshot loads planner inputs from an accepted upstream
+base or overlay commit, and the candidate task matrix must match that source.
+The consistency check verifies both snapshot commits, the upstream ancestry
+and the permitted differences from the upstream workflows. Refresh the routing
+snapshot, its caller, and their pins together when accepting a new source.
+
 ## 4. Normal workflows
 
 ### 4.1 Refresh the upstream mirror

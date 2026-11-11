@@ -8,10 +8,13 @@ import { dirname, join, resolve } from 'node:path';
 const root = resolve(import.meta.dirname, '../..');
 const gitDir = execFileSync('git', ['rev-parse', '--absolute-git-dir'], { cwd: root, encoding: 'utf8' }).trim();
 const paths = [
+  '.delegra/patches.json',
+  '.github/ci-task-matrix.json',
   '.github/workflows/pr.yml',
   '.github/workflows/pr-trusted.yml',
   '.github/workflows/pr-delegra-trusted.yml',
   '.github/workflows/ci-routing.yml',
+  '.github/workflows/ci-routing-delegra.yml',
   'scripts/check-delegra-shared-ci.mjs',
 ];
 
@@ -32,6 +35,15 @@ function check(dir) {
     encoding: 'utf8',
   });
 }
+
+test('the fork routing snapshot pins trusted planner inputs to the accepted overlay', () => {
+  const caller = readFileSync(join(root, '.github/workflows/pr-delegra-trusted.yml'), 'utf8');
+  assert.match(caller, /hrygo\/Delegra\/\.github\/workflows\/ci-routing-delegra\.yml@[0-9a-f]{40}/);
+  const routing = readFileSync(join(root, '.github/workflows/ci-routing-delegra.yml'), 'utf8');
+  const config = JSON.parse(readFileSync(join(root, '.delegra/patches.json'), 'utf8'));
+  assert.match(routing, new RegExp(`trusted="${config.upstreamOverlays[0].commit}"`));
+  assert.doesNotMatch(routing, /^\s*trusted="\$\(/m);
+});
 
 test('accepts a matching snapshot and pinned caller', (t) => {
   const result = check(fixture(t));
@@ -63,7 +75,7 @@ test('rejects a moving nested routing reference', (t) => {
   const dir = fixture(t);
   const file = join(dir, '.github/workflows/pr-delegra-trusted.yml');
   const snapshot = readFileSync(file, 'utf8');
-  writeFileSync(file, snapshot.replace(/(ci-routing\.yml@)[0-9a-f]{40}/, '$1master'));
+  writeFileSync(file, snapshot.replace(/(ci-routing-delegra\.yml@)[0-9a-f]{40}/, '$1master'));
   const result = check(dir);
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /caller and routing must each use one full commit SHA/);
@@ -75,10 +87,20 @@ test('rejects routing baseline drift from the pinned workflow', (t) => {
   writeFileSync(file, readFileSync(file, 'utf8') + '# new routing rule\n');
   const result = check(dir);
   assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /pinned routing workflow differs from ci-routing.yml/);
+  assert.match(result.stderr, /Fork routing snapshot differs from ci-routing.yml/);
 });
 
-test('rejects a routing pin that is not reachable from the master mirror', (t) => {
+test('rejects a planner pin outside the accepted upstream sources', (t) => {
+  const dir = fixture(t);
+  const file = join(dir, '.github/workflows/ci-routing-delegra.yml');
+  const snapshot = readFileSync(file, 'utf8');
+  writeFileSync(file, snapshot.replace(/trusted="[0-9a-f]{40}"/, 'trusted="123ee31552e16507d520ca7344db5bbadfdf3a73"'));
+  const result = check(dir);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /not an accepted upstream base or overlay/);
+});
+
+test('rejects a planner pin that is not reachable from the master mirror', (t) => {
   const mirror = ['origin/master', 'master'].find((ref) => {
     try {
       execFileSync('git', ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`], { cwd: root, stdio: 'ignore' });
@@ -92,12 +114,33 @@ test('rejects a routing pin that is not reachable from the master mirror', (t) =
     return;
   }
   const dir = fixture(t);
-  const file = join(dir, '.github/workflows/pr-delegra-trusted.yml');
+  const file = join(dir, '.github/workflows/ci-routing-delegra.yml');
   const snapshot = readFileSync(file, 'utf8');
-  // A Delegra-only merge commit: it carries an identical ci-routing.yml, so only
-  // the provenance rule can tell it apart from an upstream commit.
-  writeFileSync(file, snapshot.replace(/(ci-routing\.yml@)[0-9a-f]{40}/, '$1aa25ac9be5785243836e2f4aec0ad09a8cf348d3'));
+  const forkCommit = 'aa25ac9be5785243836e2f4aec0ad09a8cf348d3';
+  writeFileSync(file, snapshot.replace(/trusted="[0-9a-f]{40}"/, `trusted="${forkCommit}"`));
+  const registryPath = join(dir, '.delegra/patches.json');
+  const registry = JSON.parse(readFileSync(registryPath, 'utf8'));
+  registry.upstreamOverlays[0].commit = forkCommit;
+  writeFileSync(registryPath, JSON.stringify(registry));
   const result = check(dir);
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /not an upstream commit/);
+});
+
+test('rejects a moving planner input', (t) => {
+  const dir = fixture(t);
+  const file = join(dir, '.github/workflows/ci-routing-delegra.yml');
+  writeFileSync(file, readFileSync(file, 'utf8').replace(/trusted="[0-9a-f]{40}"/, 'trusted="master"'));
+  const result = check(dir);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /Trusted planner input must use one full commit SHA/);
+});
+
+test('rejects a candidate task matrix that differs from the trusted source', (t) => {
+  const dir = fixture(t);
+  const file = join(dir, '.github/ci-task-matrix.json');
+  writeFileSync(file, readFileSync(file, 'utf8') + '\n');
+  const result = check(dir);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /trusted CI task matrix differs from the candidate matrix/);
 });
