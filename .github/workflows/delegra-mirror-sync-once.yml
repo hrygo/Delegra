@@ -28,13 +28,10 @@ jobs:
             echo "Mirror changed since preparation; refusing to update."
             exit 1
           fi
-          if [ "$target" != "a4e89288ec0f2c67fc900b4a0f130e330d196eaa" ]; then
-            echo "Upstream changed since inspection; refusing to update."
-            exit 1
-          fi
           git merge-base --is-ancestor "$current" "$target"
-          changed_workflows="$(git diff --name-only "$current" "$target" -- .github/workflows)"
-          if [ "$changed_workflows" != ".github/workflows/backup-checkpoint-qualification.yml" ]; then
+          approved_tree="$(git rev-parse a4e89288ec0f2c67fc900b4a0f130e330d196eaa:.github/workflows)"
+          target_tree="$(git rev-parse "$target:.github/workflows")"
+          if [ "$target_tree" != "$approved_tree" ]; then
             echo "Unexpected upstream workflow changes; refusing to update."
             exit 1
           fi
