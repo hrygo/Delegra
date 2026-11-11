@@ -78,6 +78,15 @@ fn provider_config(directory: &Path, switches: &[&str]) -> CodexProviderConfig {
     }
 }
 
+fn structured_policy_fixture() -> Value {
+    let json = if cfg!(windows) {
+        include_str!("../../../../test/fixtures/codex-launch-policy-unicode-windows.json")
+    } else {
+        include_str!("../../../../test/fixtures/codex-launch-policy-unicode.json")
+    };
+    serde_json::from_str(json).unwrap()
+}
+
 #[test]
 fn structured_policy_survives_json_and_reaches_start_resume_and_turn() {
     for (read_only, external, network_access) in [
@@ -93,17 +102,15 @@ fn structured_policy_survives_json_and_reaches_start_resume_and_turn() {
         let directory = temporary_directory("structured-policy");
         let log = directory.join("requests.jsonl");
         let base = provider_config(&directory, &["--request-log", log.to_str().unwrap()]);
-        let fixture: Value = serde_json::from_str(include_str!(
-            "../../../../test/fixtures/codex-launch-policy-unicode.json"
-        ))
-        .unwrap();
+        let fixture = structured_policy_fixture();
         let mut value = serde_json::to_value(base).unwrap();
         value["driver"] = json!(paperclip_runner_core::codex_launch_policy::POLICY_DRIVER);
         value["launchPolicy"] = fixture["policy"].clone();
         for key in ["defaultFilesystem", "planningFilesystem"] {
             let entries = value["launchPolicy"][key].as_array_mut().unwrap();
             for index in 0..20 {
-                entries.push(json!({"path": format!("/skills/{index}-{}-😀", "x".repeat(180)), "access": "read"}));
+                let prefix = if cfg!(windows) { "C:" } else { "" };
+                entries.push(json!({"path": format!("{prefix}/skills/{index}-{}-😀", "x".repeat(180)), "access": "read"}));
             }
             entries.sort_by(|a, b| a["path"].as_str().unwrap().cmp(b["path"].as_str().unwrap()));
         }
@@ -231,10 +238,7 @@ fn private_config_trace_subprocess() {
     if mode == "unsupported" {
         config.args.push("--unavailable-policy-preflight".into());
     }
-    let fixture: Value = serde_json::from_str(include_str!(
-        "../../../../test/fixtures/codex-launch-policy-unicode.json"
-    ))
-    .unwrap();
+    let fixture = structured_policy_fixture();
     let mut policy = fixture["policy"].clone();
     policy["shellEnvironmentPolicy"]["includeOnly"] = json!(["GH_TOKEN"]);
     config.driver = paperclip_runner_core::codex_launch_policy::POLICY_DRIVER.to_owned();
@@ -272,10 +276,7 @@ fn structured_policy_rebind_is_paired_and_preserves_protected_identity() {
     let directory = temporary_directory("policy-rebind");
     let log = directory.join("requests.jsonl");
     let mut config = provider_config(&directory, &["--request-log", log.to_str().unwrap()]);
-    let fixture: Value = serde_json::from_str(include_str!(
-        "../../../../test/fixtures/codex-launch-policy-unicode.json"
-    ))
-    .unwrap();
+    let fixture = structured_policy_fixture();
     config.driver = paperclip_runner_core::codex_launch_policy::POLICY_DRIVER.to_owned();
     config.launch_policy = Some(serde_json::from_value(fixture["policy"].clone()).unwrap());
     let runner = durable_config(&directory);
@@ -359,10 +360,7 @@ fn structured_policy_requires_positive_active_profile_attestation() {
     ] {
         let directory = temporary_directory("policy-attestation");
         let mut config = provider_config(&directory, &switches);
-        let fixture: Value = serde_json::from_str(include_str!(
-            "../../../../test/fixtures/codex-launch-policy-unicode.json"
-        ))
-        .unwrap();
+        let fixture = structured_policy_fixture();
         config.driver = paperclip_runner_core::codex_launch_policy::POLICY_DRIVER.to_owned();
         config.launch_policy = Some(serde_json::from_value(fixture["policy"].clone()).unwrap());
         let error = match CodexProvider::start(&config, None) {

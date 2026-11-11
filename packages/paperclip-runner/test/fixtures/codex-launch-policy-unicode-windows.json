@@ -1,0 +1,67 @@
+{
+  "policy": {
+    "schema": "paperclip.codex.launch-policy.v1",
+    "defaultFilesystem": [
+      {
+        "path": ":minimal",
+        "access": "read"
+      },
+      {
+        "path": ":root",
+        "access": "none"
+      },
+      {
+        "path": ":tmpdir",
+        "access": "none"
+      },
+      {
+        "path": ":workspace_roots",
+        "access": "write"
+      },
+      {
+        "path": "C:/skills/",
+        "access": "read"
+      },
+      {
+        "path": "C:/skills/😀",
+        "access": "read"
+      }
+    ],
+    "planningFilesystem": [
+      {
+        "path": ":minimal",
+        "access": "read"
+      },
+      {
+        "path": ":root",
+        "access": "none"
+      },
+      {
+        "path": ":tmpdir",
+        "access": "none"
+      },
+      {
+        "path": ":workspace_roots",
+        "access": "read"
+      },
+      {
+        "path": "C:/skills/",
+        "access": "read"
+      },
+      {
+        "path": "C:/skills/😀",
+        "access": "read"
+      }
+    ],
+    "networkAccess": false,
+    "externallySandboxed": false,
+    "shellEnvironmentPolicy": {
+      "inherit": "none",
+      "ignoreDefaultExcludes": false,
+      "includeOnly": [],
+      "set": {}
+    }
+  },
+  "canonical": "{\"defaultFilesystem\":[{\"access\":\"read\",\"path\":\":minimal\"},{\"access\":\"none\",\"path\":\":root\"},{\"access\":\"none\",\"path\":\":tmpdir\"},{\"access\":\"write\",\"path\":\":workspace_roots\"},{\"access\":\"read\",\"path\":\"C:/skills/\"},{\"access\":\"read\",\"path\":\"C:/skills/😀\"}],\"externallySandboxed\":false,\"networkAccess\":false,\"planningFilesystem\":[{\"access\":\"read\",\"path\":\":minimal\"},{\"access\":\"none\",\"path\":\":root\"},{\"access\":\"none\",\"path\":\":tmpdir\"},{\"access\":\"read\",\"path\":\":workspace_roots\"},{\"access\":\"read\",\"path\":\"C:/skills/\"},{\"access\":\"read\",\"path\":\"C:/skills/😀\"}],\"schema\":\"paperclip.codex.launch-policy.v1\",\"shellEnvironmentPolicy\":{\"ignoreDefaultExcludes\":false,\"includeOnly\":[],\"inherit\":\"none\",\"set\":{}}}",
+  "digest": "sha256:71f1b5282ca83a04c16c1e692b7bc70d4d71f629e0f34285b0c4e03e8c8daa72"
+}

@@ -6,10 +6,13 @@ import { codexLaunchPolicyConfig, codexLaunchPolicyProfiles, checkCodexLaunchCon
 
 describe("bounded Codex launch policy", () => {
   it("shares canonical UTF-8 bytes and namespace with the native owner fixture", () => {
-    const fixture = JSON.parse(readFileSync(new URL("../../../test/fixtures/codex-launch-policy-unicode.json", import.meta.url), "utf8"));
-    const policy = validateCodexLaunchPolicy(fixture.policy);
-    expect(canonicalCodexLaunchJson(policy)).toBe(fixture.canonical);
-    expect(codexLaunchDigest(policy)).toBe(fixture.digest);
+    for (const [name, native] of [["codex-launch-policy-unicode.json", process.platform !== "win32"],
+      ["codex-launch-policy-unicode-windows.json", process.platform === "win32"]] as const) {
+      const fixture = JSON.parse(readFileSync(new URL(`../../../test/fixtures/${name}`, import.meta.url), "utf8"));
+      const policy = native ? validateCodexLaunchPolicy(fixture.policy) : fixture.policy;
+      expect(canonicalCodexLaunchJson(policy)).toBe(fixture.canonical);
+      expect(codexLaunchDigest(policy)).toBe(fixture.digest);
+    }
   });
   it.each(["/local", "/ssh/agent", "/container/runtime"])("retains every long skill root at %s outside argv", prefix => {
     const roots = Array.from({ length: 20 }, (_, i) => `${prefix}/skills/${i}-${"x".repeat(180)}-\"-😀`);
