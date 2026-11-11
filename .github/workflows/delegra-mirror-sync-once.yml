@@ -24,11 +24,15 @@ jobs:
           current="$(git rev-parse refs/remotes/origin/master)"
           target="$(git rev-parse refs/remotes/upstream/master)"
           if [ "$current" = "$target" ]; then exit 0; fi
-          if [ "$current" != "e968131efa7e63d321f3bcca8d47a62513c2efb4" ]; then
+          if [ "$current" != "123ee31552e16507d520ca7344db5bbadfdf3a73" ]; then
             echo "Mirror changed since preparation; refusing to update."
             exit 1
           fi
           git merge-base --is-ancestor "$current" "$target"
+          if ! git diff --quiet "$current" "$target" -- .github/workflows; then
+            echo "Upstream workflow files changed; refusing to update with this token."
+            exit 1
+          fi
           git push origin "$target:refs/heads/master"
           actual="$(git ls-remote --exit-code origin refs/heads/master | cut -f 1)"
           [ "$actual" = "$target" ]
