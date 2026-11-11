@@ -48,6 +48,10 @@ function short(commit) {
   return commit.slice(0, 12);
 }
 
+function isStableTag(ref) {
+  return /^v\d{4}\.\d{3,4}\.\d+$/.test(ref);
+}
+
 function isAncestor(ancestor, descendant) {
   try {
     git(["merge-base", "--is-ancestor", ancestor, descendant]);
@@ -115,7 +119,10 @@ const base = registry.base;
 if (!base?.ref || !base?.commit || !base?.kind) {
   errors.push("Registry base must define kind, ref, and commit.");
 } else {
-  const resolvedBase = resolveCommit(base.ref);
+  if (base.kind === "stable" && !isStableTag(base.ref)) {
+    errors.push(`Registry base marked stable must use a stable release tag: ${base.ref}.`);
+  }
+  const resolvedBase = resolveCommit(base.kind === "stable" ? `refs/tags/${base.ref}` : base.ref);
   if (!resolvedBase) {
     errors.push(`Registry base ref does not resolve: ${base.ref}.`);
   } else if (resolvedBase !== resolveCommit(base.commit)) {
@@ -165,6 +172,9 @@ for (const overlay of Array.isArray(registry.upstreamOverlays) ? registry.upstre
   if (!overlay?.ref || !overlay?.commit || !["stable", "canary"].includes(overlay?.kind)) {
     errors.push("Each upstream overlay must define a stable or canary kind, ref, and commit.");
     continue;
+  }
+  if (overlay.kind === "stable" && !isStableTag(overlay.ref)) {
+    errors.push(`Upstream overlay marked stable must use a stable release tag: ${overlay.ref}.`);
   }
   const commit = resolveCommit(overlay.commit);
   const tagged = resolveCommit(`refs/tags/${overlay.ref}`);

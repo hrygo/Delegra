@@ -69,6 +69,24 @@ test("rejects an overlay whose tag and recorded commit differ", (t) => {
   assert.match(result.stderr, /overlay.*does not match/i);
 });
 
+test("rejects a canary tag mislabeled as a stable overlay", (t) => {
+  const f = fixture(t);
+  f.registry.upstreamOverlays[0].kind = "stable";
+  delete f.registry.upstreamOverlays[0].transitionalWaiver;
+  const result = f.check();
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /overlay.*stable.*tag/i);
+});
+
+test("rejects a canary tag mislabeled as the stable base", (t) => {
+  const f = fixture(t);
+  f.registry.base = { kind: "stable", ref: "canary/v2026.1104.0-canary.1", commit: f.canary };
+  f.registry.upstreamOverlays = [];
+  const result = f.check();
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /base.*stable.*tag/i);
+});
+
 test("rejects a tagged fork commit masquerading as an upstream overlay", (t) => {
   const f = fixture(t);
   f.git("tag", "canary/not-upstream", f.fork);
