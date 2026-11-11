@@ -13,8 +13,9 @@ Owner: Delegra platform
 3. `upstream/master` is a canary line. It is never a deployment input and is
    never merged directly into `deploy`.
 4. A deployment runs an immutable `deploy/*` tag, not a moving branch tip.
-5. Every code commit on `deploy` that is not from an upstream stable tag is
-   registered in [`.delegra/patches.json`](../.delegra/patches.json).
+5. Every code commit on `deploy` is from the recorded upstream stable base, a
+   recorded and verified upstream overlay, or a registered fork patch in
+   [`.delegra/patches.json`](../.delegra/patches.json).
 6. Every registered patch has an owner, a review date, and a condition for
    retirement. A patch with no exit condition is technical debt, not a policy.
 
@@ -77,10 +78,14 @@ tag is the reviewable unit that Delegra accepts. Do not use
 `canary/*`, `nightly/*`, `candidate/release-*`, or `upstream/master` as an
 upgrade base.
 
-The current `deploy` baseline is a documented exception because the existing
-managed Codex fix was built on a canary commit newer than the latest stable
-tag. The exception expires on the date in `.delegra/patches.json` and must be
-replaced by the first suitable stable tag.
+The current integration retains a documented upstream canary overlay on the
+stable base because the stable tag's source predates the previously accepted
+canary and its database migrations. The overlay is not a pure stable release.
+Its ref, exact commit, and time-limited waiver are recorded separately in
+`.delegra/patches.json`. The branch policy verifies the overlay's tag and its
+ancestry in both `upstream/master` and `deploy`, and continues to require
+registration of fork commits. Replace the overlay when a suitable stable tag
+contains it or an independently verified equivalent.
 
 ## 4. Normal workflows
 

@@ -151,6 +151,60 @@ if (!base?.ref || !base?.commit || !base?.kind) {
   }
 }
 
+// An older stable tag can underlie a previously accepted upstream canary.
+// Keep that layer explicit and time-limited rather than calling its commits
+// fork patches or implying that the resulting tree is the stable release.
+const upstreamCommits = new Set();
+if (registry.upstreamOverlays !== undefined && !Array.isArray(registry.upstreamOverlays)) {
+  errors.push("upstreamOverlays must be an array.");
+}
+let overlayParent = base?.commit ? resolveCommit(base.commit) : null;
+const upstreamHead = resolveCommit("refs/remotes/upstream/master");
+for (const overlay of Array.isArray(registry.upstreamOverlays) ? registry.upstreamOverlays : []) {
+  const priorErrors = errors.length;
+  if (!overlay?.ref || !overlay?.commit || !["stable", "canary"].includes(overlay?.kind)) {
+    errors.push("Each upstream overlay must define a stable or canary kind, ref, and commit.");
+    continue;
+  }
+  const commit = resolveCommit(overlay.commit);
+  const tagged = resolveCommit(`refs/tags/${overlay.ref}`);
+  if (!commit || !tagged || commit !== tagged) {
+    errors.push(`Upstream overlay ${overlay.ref}: tag does not match its recorded commit.`);
+  } else {
+    if (!overlayParent || !isAncestor(overlayParent, commit)) {
+      errors.push(`Upstream overlay ${overlay.ref} must descend from the preceding base or overlay.`);
+    }
+    if (!isAncestor(commit, head)) {
+      errors.push(`Upstream overlay ${overlay.ref} is not contained in HEAD.`);
+    }
+    if (!upstreamHead || !isAncestor(commit, upstreamHead)) {
+      errors.push(`Upstream overlay ${overlay.ref} is not contained in upstream/master.`);
+    }
+  }
+  if (overlay.kind !== "stable") {
+    const waiver = overlay.transitionalWaiver;
+    if (!waiver?.reason || !waiver?.expiresOn || !waiver?.replaceWith) {
+      errors.push(`Upstream overlay ${overlay.ref} requires a transitionalWaiver with reason, expiresOn, and replaceWith.`);
+    } else {
+      const expiry = new Date(`${waiver.expiresOn}T23:59:59Z`);
+      if (Number.isNaN(expiry.getTime())) {
+        errors.push(`Upstream overlay ${overlay.ref} has an invalid waiver expiry: ${waiver.expiresOn}.`);
+      } else if (Date.now() > expiry.getTime()) {
+        errors.push(`Upstream overlay ${overlay.ref} waiver expired on ${waiver.expiresOn}.`);
+      } else {
+        warnings.push(`Upstream overlay ${overlay.ref} is non-stable until ${waiver.expiresOn}; replace it with ${waiver.replaceWith}.`);
+      }
+    }
+  }
+  if (errors.length === priorErrors) {
+    for (const sha of git(["rev-list", "--no-merges", `${overlayParent}..${commit}`]).split("\n").filter(Boolean)) {
+      upstreamCommits.add(sha);
+    }
+    overlayParent = commit;
+    console.log(`upstream overlay: ${overlay.ref} (${short(commit)}, ${overlay.kind})`);
+  }
+}
+
 const patches = Array.isArray(registry.patches) ? registry.patches : [];
 const patchIds = new Set();
 const registeredCommits = new Set();
@@ -280,7 +334,7 @@ if (base?.commit) {
       .filter(Boolean);
     const internalPaths = Array.isArray(registry.internalPaths) ? registry.internalPaths : [];
     for (const commit of localCommits) {
-      if (registeredCommits.has(commit)) continue;
+      if (registeredCommits.has(commit) || upstreamCommits.has(commit)) continue;
       const files = changedPaths(commit);
       if (files.length > 0 && files.every((file) => matchesInternalPath(file, internalPaths))) {
         continue;
