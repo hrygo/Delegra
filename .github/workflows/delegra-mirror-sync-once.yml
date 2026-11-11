@@ -24,12 +24,12 @@ jobs:
           current="$(git rev-parse refs/remotes/origin/master)"
           target="$(git rev-parse refs/remotes/upstream/master)"
           if [ "$current" = "$target" ]; then exit 0; fi
-          if [ "$current" != "fa3cd6f3302d1a7a647394d3359c869a6ca0f223" ]; then
+          if [ "$current" != "e2cf9a670fc5d5f5058fd0972beb71650f77c554" ]; then
             echo "Mirror changed since preparation; refusing to update."
             exit 1
           fi
           git merge-base --is-ancestor "$current" "$target"
-          approved_tree="$(git rev-parse a4e89288ec0f2c67fc900b4a0f130e330d196eaa:.github/workflows)"
+          approved_tree="$(git rev-parse e2cf9a670fc5d5f5058fd0972beb71650f77c554:.github/workflows)"
           target_tree="$(git rev-parse "$target:.github/workflows")"
           if [ "$target_tree" != "$approved_tree" ]; then
             echo "Unexpected upstream workflow changes; refusing to update."
