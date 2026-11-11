@@ -37,15 +37,22 @@
     ]
   },
   "base": {
-    "kind": "canary",
-    "ref": "canary/v2026.1104.0-canary.1",
-    "commit": "d7283e875772ca8c684dc86e471e6b48d543b7b1",
-    "transitionalWaiver": {
-      "reason": "No stable tag contains the managed Codex project-auth stack, the structured Codex launch policy transport, or the native recovery fixes this deploy depends on. v2026.1104.0-canary.1 is the tag whose release-manifest sourceRevision matches the artifact verified end to end on the clean remote Mac.",
-      "expiresOn": "2026-12-31",
-      "replaceWith": "The first stable tag published after v2026.1104.0-canary.1 that contains the managed Codex project-auth patch stack"
-    }
+    "kind": "stable",
+    "ref": "v2026.1106.0",
+    "commit": "d69631b01b9c658f80bf8bed389863dce82643e1"
   },
+  "upstreamOverlays": [
+    {
+      "kind": "canary",
+      "ref": "canary/v2026.1104.0-canary.1",
+      "commit": "d7283e875772ca8c684dc86e471e6b48d543b7b1",
+      "transitionalWaiver": {
+        "reason": "The stable tag's source predates the accepted canary. Retain its managed Codex fixes, native recovery behavior, and database migration history until a suitable stable release contains them.",
+        "expiresOn": "2026-12-31",
+        "replaceWith": "A stable tag containing the accepted canary commit or an independently verified equivalent"
+      }
+    }
+  ],
   "internalPaths": [
     ".delegra/",
     "doc/DELEGRA-",
@@ -498,6 +505,32 @@
       "verifiedAt": "2026-11-04",
       "retireWhen": "The next stable upgrade absorbs these repairs, or every repaired file matches the fork patch that owns the same behavior.",
       "notes": "Repairs that only exist because of the canary/v2026.1104.0-canary.1 merge: close blocks the union dropped, dedupe imports and match arms, keep the fork's structured Codex launch policy on top of the current adapter process contract, extend the merged recovery probe with the Darwin generation check, route every Codex argument tail through the owned factory so disabled web search and project instruction limits survive, and restore two test bodies the merge interleaved. No new product behavior beyond the patches already registered for these files. The final repair settles the recovery-probe ordering and adopts upstream's save-time rule for managed accounts."
+    },
+    {
+      "id": "stable-base-upstream-overlay-policy",
+      "kind": "fork-only",
+      "status": "active",
+      "commits": [
+        "8ebfeed32070606774b0c6e679e4a7c4c5e6afb9"
+      ],
+      "owner": "hrygo",
+      "reviewBy": "2026-12-31",
+      "verifiedAt": "2026-11-11",
+      "retireWhen": "An accepted stable tag contains the retained upstream overlay and the overlay-specific policy is no longer needed.",
+      "notes": "Records the stable source tag separately from the previously accepted canary layer. The policy verifies immutable refs, upstream and candidate ancestry, the non-stable waiver, and continued registration of fork commits."
+    },
+    {
+      "id": "codex-web-search-and-runner-ci-repair",
+      "kind": "fork-only",
+      "status": "active",
+      "commits": [
+        "950893f3c8132198bf48876446ff4a1521563301"
+      ],
+      "owner": "hrygo",
+      "reviewBy": "2026-11-30",
+      "verifiedAt": "2026-11-11",
+      "retireWhen": "An accepted stable release preserves the Codex web-search setting in the structured launch path and updates the Rust task-memory test fixture equivalently.",
+      "notes": "Restores the saved web-search disablement to default and recovered Codex launch arguments, updates the affected factory regression test to observe the current launch boundary, and supplies the fields required by the Rust task-memory fixture."
     }
   ]
 }
