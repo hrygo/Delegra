@@ -548,6 +548,19 @@
       "verifiedAt": "2026-11-11",
       "retireWhen": "An accepted stable release supplies runner binary staging fixtures that work with multicall coreutils.",
       "notes": "Exercises atomic replacement and rebuild with independently executable shell fixtures instead of assuming system coreutils retain their behavior after being renamed."
+    },
+    {
+      "id": "portable-codex-policy-fixtures",
+      "kind": "fork-only",
+      "status": "active",
+      "commits": [
+        "322f8100e2684ff27c7481afd22887e0196490f2"
+      ],
+      "owner": "hrygo",
+      "reviewBy": "2026-11-30",
+      "verifiedAt": "2026-11-11",
+      "retireWhen": "An accepted upstream release provides native Windows Codex launch-policy fixtures with equivalent cross-language digest coverage.",
+      "notes": "Select platform-appropriate absolute paths for native runner policy tests while retaining shared Unicode canonical-byte and digest fixtures in Rust and TypeScript."
     }
   ]
 }
