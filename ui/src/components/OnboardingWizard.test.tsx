@@ -526,7 +526,7 @@ describe("OnboardingWizard restore-gate (stale localStorage across accounts)", (
         expect(next?.disabled).toBe(true);
         expect(mockAgentsApi.hire).not.toHaveBeenCalled();
         const saved = JSON.parse(window.localStorage.getItem(ONBOARDING_STORAGE_KEY)!);
-        expect(saved).toMatchObject({ adapterType: "claude_local", runner: "auto", model: "" });
+        expect(saved).toMatchObject({ adapterType: savedCopilot ? "claude_local" : "codex_local", runner: "auto", model: "" });
         expect(saved).not.toHaveProperty("onboardingCopilot");
       } finally { await act(async () => root.unmount()); }
     });
@@ -912,7 +912,7 @@ describe("OnboardingWizard restore-gate (stale localStorage across accounts)", (
     });
   });
 
-  describe("hire gate: adapter authentication (claude_local, the default onboarding adapter)", () => {
+  describe("hire gate: adapter authentication", () => {
     /** Drives the wizard to the Connect step, agent name already filled in. */
     async function openConnectStep({ useApiKeys = false } = {}) {
       // The tile row is built from this registry, and the suite's default is
