@@ -43,10 +43,13 @@ function readTrustedPrWorkflow() {
 function readRoutingWorkflow() {
   const workflow = readTrustedPrWorkflow();
   const match = workflow.match(
-    /^\s+uses: paperclipai\/paperclip\/\.github\/workflows\/ci-routing\.yml@([0-9a-f]{40})\s*$/m,
+    /^\s+uses: hrygo\/Delegra\/\.github\/workflows\/ci-routing-delegra\.yml@([0-9a-f]{40})\s*$/m,
   );
   assert.ok(match, "snapshot must call the routing workflow by full commit SHA");
-  return readPinnedFile(match[1], ".github/workflows/ci-routing.yml");
+  const file = ".github/workflows/ci-routing-delegra.yml";
+  const calledWorkflow = readPinnedFile(match[1], file);
+  assert.equal(calledWorkflow, readFileSync(path.join(repoRoot, file), "utf8"), "routing snapshot must match the called commit");
+  return calledWorkflow;
 }
 
 function readWorkflowJobs(workflow) {
@@ -242,7 +245,7 @@ test("runner selection has reserved AWS capacity and executes metadata checks on
 test("the trusted PR workflow limits full CI to merge-relevant stack layers", () => {
   const workflow = readTrustedPrWorkflow();
   const jobs = readWorkflowJobs(workflow);
-  assert.match(jobs.get("gate"), /uses: paperclipai\/paperclip\/\.github\/workflows\/ci-routing\.yml@[0-9a-f]{40}/);
+  assert.match(jobs.get("gate"), /uses: hrygo\/Delegra\/\.github\/workflows\/ci-routing-delegra\.yml@[0-9a-f]{40}/);
   const gate = readWorkflowJobs(readRoutingWorkflow()).get("gate");
 
   assert.match(gate, /^ {6}full_ci: \$\{\{ steps\.scope\.outputs\.full_ci \}\}$/m);
