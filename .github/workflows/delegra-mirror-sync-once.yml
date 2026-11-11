@@ -4,6 +4,7 @@ on:
     branches: [local/mirror-sync-once-v2026.1106.0-20261111]
 permissions:
   contents: write
+  actions: write
 jobs:
   sync:
     if: github.repository == 'hrygo/Delegra' && github.ref == 'refs/heads/local/mirror-sync-once-v2026.1106.0-20261111'
@@ -16,6 +17,8 @@ jobs:
           persist-credentials: true
       - name: Fast-forward the mirror without publishing
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           git remote add upstream https://github.com/paperclipai/paperclip.git
@@ -24,7 +27,7 @@ jobs:
           current="$(git rev-parse refs/remotes/origin/master)"
           target="$(git rev-parse refs/remotes/upstream/master)"
           if [ "$current" = "$target" ]; then exit 0; fi
-          if [ "$current" != "e2cf9a670fc5d5f5058fd0972beb71650f77c554" ]; then
+          if [ "$current" != "6ce953ca5212f81953db4c82a92298e722af90f9" ]; then
             echo "Mirror changed since preparation; refusing to update."
             exit 1
           fi
@@ -38,3 +41,4 @@ jobs:
           git push origin "$target:refs/heads/master"
           actual="$(git ls-remote --exit-code origin refs/heads/master | cut -f 1)"
           [ "$actual" = "$target" ]
+          gh api --method POST /repos/hrygo/Delegra/actions/jobs/130619033458/rerun >/dev/null
