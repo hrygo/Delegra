@@ -532,6 +532,19 @@
       "verifiedAt": "2026-11-11",
       "retireWhen": "An accepted stable release preserves the Codex web-search setting in the structured launch path and updates the Rust task-memory test fixture equivalently.",
       "notes": "Restores the saved web-search disablement to default and recovered Codex launch arguments, updates the affected factory regression test to observe the current launch boundary, and supplies the fields required by the Rust task-memory fixture."
+    },
+    {
+      "id": "portable-runner-binary-fixtures",
+      "kind": "fork-only",
+      "status": "active",
+      "commits": [
+        "079ef586db51e2f9c4e10d096b471b0f4247b4d8"
+      ],
+      "owner": "hrygo",
+      "reviewBy": "2026-11-30",
+      "verifiedAt": "2026-11-11",
+      "retireWhen": "An accepted stable release supplies runner binary staging fixtures that work with multicall coreutils.",
+      "notes": "Exercises atomic replacement and rebuild with independently executable shell fixtures instead of assuming system coreutils retain their behavior after being renamed."
     }
   ]
 }
