@@ -1,0 +1,34 @@
+name: Delegra one-time upstream mirror sync
+on:
+  push:
+    branches: [local/mirror-sync-once-v2026.1106.0-20261111]
+permissions:
+  contents: write
+jobs:
+  sync:
+    if: github.repository == 'hrygo/Delegra' && github.ref == 'refs/heads/local/mirror-sync-once-v2026.1106.0-20261111'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+      - name: Fast-forward the mirror without publishing
+        shell: bash
+        run: |
+          set -euo pipefail
+          git remote add upstream https://github.com/paperclipai/paperclip.git
+          git fetch --no-tags upstream refs/heads/master:refs/remotes/upstream/master
+          git fetch --no-tags origin refs/heads/master:refs/remotes/origin/master
+          current="$(git rev-parse refs/remotes/origin/master)"
+          target="$(git rev-parse refs/remotes/upstream/master)"
+          if [ "$current" = "$target" ]; then exit 0; fi
+          if [ "$current" != "e968131efa7e63d321f3bcca8d47a62513c2efb4" ]; then
+            echo "Mirror changed since preparation; refusing to update."
+            exit 1
+          fi
+          git merge-base --is-ancestor "$current" "$target"
+          git push origin "$target:refs/heads/master"
+          actual="$(git ls-remote --exit-code origin refs/heads/master | cut -f 1)"
+          [ "$actual" = "$target" ]
