@@ -37,15 +37,22 @@
     ]
   },
   "base": {
-    "kind": "canary",
-    "ref": "canary/v2026.1104.0-canary.1",
-    "commit": "d7283e875772ca8c684dc86e471e6b48d543b7b1",
-    "transitionalWaiver": {
-      "reason": "No stable tag contains the managed Codex project-auth stack, the structured Codex launch policy transport, or the native recovery fixes this deploy depends on. v2026.1104.0-canary.1 is the tag whose release-manifest sourceRevision matches the artifact verified end to end on the clean remote Mac.",
-      "expiresOn": "2026-12-31",
-      "replaceWith": "The first stable tag published after v2026.1104.0-canary.1 that contains the managed Codex project-auth patch stack"
-    }
+    "kind": "stable",
+    "ref": "v2026.1106.0",
+    "commit": "d69631b01b9c658f80bf8bed389863dce82643e1"
   },
+  "upstreamOverlays": [
+    {
+      "kind": "canary",
+      "ref": "canary/v2026.1104.0-canary.1",
+      "commit": "d7283e875772ca8c684dc86e471e6b48d543b7b1",
+      "transitionalWaiver": {
+        "reason": "The stable tag's source predates the accepted canary. Retain its managed Codex fixes, native recovery behavior, and database migration history until a suitable stable release contains them.",
+        "expiresOn": "2026-12-31",
+        "replaceWith": "A stable tag containing the accepted canary commit or an independently verified equivalent"
+      }
+    }
+  ],
   "internalPaths": [
     ".delegra/",
     "doc/DELEGRA-",
@@ -475,13 +482,16 @@
         "67653d5d3ac056d7f264c27186e1a0def0145a32",
         "318fc52347190d1fce8eca2f483f50b29f9bca11",
         "a2e6367ce3a69ced91c94624ea1e406ddc88afd8",
-        "a93417b03ba5ac7ffcb8b3c32c86795070206d7f"
+        "a93417b03ba5ac7ffcb8b3c32c86795070206d7f",
+        "d4b315b8fe603604f9851b3ccb4dbf623cfa9271",
+        "bd9c437aee017caf895e2fa7fcdde0e907800ea7",
+        "006f149d0296f6b85db19475b51a1490e0e1c6ef"
       ],
       "owner": "hrygo",
       "reviewBy": "2026-11-30",
       "retireWhen": "An accepted stable base provides an immutable compatible shared CI workflow and routing contract without a fork snapshot.",
-      "notes": "Freeze the deploy-compatible PR workflow and its nested routing reference; check snapshot and caller consistency on each PR. Run an actual PR before relying on the change. The canary base changed pr-trusted.yml, so the snapshot and the routing pin were refreshed together. The routing pin must name an upstream commit: GitHub resolves a cross-repository reusable workflow inside the called repository, and a fork-only commit makes the caller fail at startup with 'workflow was not found'. The consistency check proves that by requiring the pin to be an ancestor of the master mirror. The caller also accepts the full-ci label, and a scope job keeps the full matrix for changes to the workflows, composite actions, or scripts, or for the full-ci and profile-ci labels.",
-      "verifiedAt": "2026-11-04"
+      "notes": "Freeze the deploy-compatible PR workflow and its fork routing snapshot at immutable fork commits. The routing snapshot reads trusted planner inputs from the accepted upstream base or overlay, and the consistency check validates upstream provenance, both committed snapshots, and agreement with the candidate task matrix. The caller also accepts the full-ci label, and a scope job keeps the full matrix for changes to workflows, composite actions, or scripts, or for the full-ci and profile-ci labels.",
+      "verifiedAt": "2026-11-11"
     },
     {
       "id": "canary-merge-repair",
@@ -498,6 +508,72 @@
       "verifiedAt": "2026-11-04",
       "retireWhen": "The next stable upgrade absorbs these repairs, or every repaired file matches the fork patch that owns the same behavior.",
       "notes": "Repairs that only exist because of the canary/v2026.1104.0-canary.1 merge: close blocks the union dropped, dedupe imports and match arms, keep the fork's structured Codex launch policy on top of the current adapter process contract, extend the merged recovery probe with the Darwin generation check, route every Codex argument tail through the owned factory so disabled web search and project instruction limits survive, and restore two test bodies the merge interleaved. No new product behavior beyond the patches already registered for these files. The final repair settles the recovery-probe ordering and adopts upstream's save-time rule for managed accounts."
+    },
+    {
+      "id": "stable-base-upstream-overlay-policy",
+      "kind": "fork-only",
+      "status": "active",
+      "commits": [
+        "8ebfeed32070606774b0c6e679e4a7c4c5e6afb9",
+        "07fe27591d346669a6b05bb9ffe621fa66edf395"
+      ],
+      "owner": "hrygo",
+      "reviewBy": "2026-12-31",
+      "verifiedAt": "2026-11-11",
+      "retireWhen": "An accepted stable tag contains the retained upstream overlay and the overlay-specific policy is no longer needed.",
+      "notes": "Records the stable source tag separately from the previously accepted canary layer. The policy verifies immutable refs, upstream and candidate ancestry, the non-stable waiver, and continued registration of fork commits."
+    },
+    {
+      "id": "codex-web-search-and-runner-ci-repair",
+      "kind": "fork-only",
+      "status": "active",
+      "commits": [
+        "950893f3c8132198bf48876446ff4a1521563301"
+      ],
+      "owner": "hrygo",
+      "reviewBy": "2026-11-30",
+      "verifiedAt": "2026-11-11",
+      "retireWhen": "An accepted stable release preserves the Codex web-search setting in the structured launch path and updates the Rust task-memory test fixture equivalently.",
+      "notes": "Restores the saved web-search disablement to default and recovered Codex launch arguments, updates the affected factory regression test to observe the current launch boundary, and supplies the fields required by the Rust task-memory fixture."
+    },
+    {
+      "id": "portable-runner-binary-fixtures",
+      "kind": "fork-only",
+      "status": "active",
+      "commits": [
+        "079ef586db51e2f9c4e10d096b471b0f4247b4d8"
+      ],
+      "owner": "hrygo",
+      "reviewBy": "2026-11-30",
+      "verifiedAt": "2026-11-11",
+      "retireWhen": "An accepted stable release supplies runner binary staging fixtures that work with multicall coreutils.",
+      "notes": "Exercises atomic replacement and rebuild with independently executable shell fixtures instead of assuming system coreutils retain their behavior after being renamed."
+    },
+    {
+      "id": "portable-codex-policy-fixtures",
+      "kind": "fork-only",
+      "status": "active",
+      "commits": [
+        "322f8100e2684ff27c7481afd22887e0196490f2"
+      ],
+      "owner": "hrygo",
+      "reviewBy": "2026-11-30",
+      "verifiedAt": "2026-11-11",
+      "retireWhen": "An accepted upstream release provides native Windows Codex launch-policy fixtures with equivalent cross-language digest coverage.",
+      "notes": "Select platform-appropriate absolute paths for native runner policy tests while retaining shared Unicode canonical-byte and digest fixtures in Rust and TypeScript."
+    },
+    {
+      "id": "portable-sandbox-shell-status",
+      "kind": "fork-only",
+      "status": "active",
+      "commits": [
+        "63b40d6d0496763cbfc0d3fca2ba932aacc062cd"
+      ],
+      "owner": "hrygo",
+      "reviewBy": "2026-11-30",
+      "verifiedAt": "2026-11-11",
+      "retireWhen": "An accepted upstream release verifies sandbox write denial without assuming a shell-specific exit code.",
+      "notes": "Require a normal, unsuccessful shell exit and an unchanged protected file when a workspace command attempts an external write; shells may return different nonzero redirection statuses."
     }
   ]
 }

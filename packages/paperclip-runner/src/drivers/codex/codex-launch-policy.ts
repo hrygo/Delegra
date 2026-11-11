@@ -92,8 +92,9 @@ export function codexLaunchPermission(policy: CodexLaunchPolicy, mode: "default"
   const profiles = codexLaunchPolicyProfiles(policy);
   return mode === "plan" ? profiles.plan : policy.externallySandboxed ? profiles.external : profiles.default;
 }
-export function codexLaunchPolicyArgs(policy: CodexLaunchPolicy): string[] {
-  return ["--disable", "image_generation", ...(policy.externallySandboxed ? ["--dangerously-bypass-approvals-and-sandbox"] : []), "app-server"];
+export function codexLaunchPolicyArgs(policy: CodexLaunchPolicy, disableWebSearch = false): string[] {
+  return ["--disable", "image_generation", ...(policy.externallySandboxed ? ["--dangerously-bypass-approvals-and-sandbox"] : []),
+    ...(disableWebSearch ? ["-c", 'web_search="disabled"'] : []), "app-server"];
 }
 export function codexLaunchPolicyConfig(policy: CodexLaunchPolicy): Record<string, unknown> {
   const profiles = codexLaunchPolicyProfiles(policy);

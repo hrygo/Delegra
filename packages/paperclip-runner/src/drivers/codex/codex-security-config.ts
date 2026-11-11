@@ -393,7 +393,7 @@ export function createIsolatedCodexAppServerLaunch(
   disableWebSearch = false,
 ): { args: string[]; launchPolicy: CodexLaunchPolicy } {
   const launchPolicy = normalizeCodexLaunchPolicy(createCodexSecurityConfiguration(source, readOnlyRoots, instructionWorkingCopyRoot, protectedPaths, disableWebSearch).policy);
-  return { args: codexLaunchPolicyArgs(launchPolicy), launchPolicy };
+  return { args: codexLaunchPolicyArgs(launchPolicy, disableWebSearch), launchPolicy };
 }
 
 export function createSecuredCodexThreadParams(

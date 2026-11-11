@@ -27,4 +27,6 @@ jobs:
           git fetch --tags upstream master:refs/remotes/upstream/master
           git fetch origin master:refs/remotes/origin/master
       - name: Check branch and patch policy
-        run: node scripts/check-delegra-branch-policy.mjs
+        run: |
+          node --test scripts/__tests__/delegra-branch-policy.test.mjs
+          node scripts/check-delegra-branch-policy.mjs

@@ -760,7 +760,7 @@ export class CodexAppServerDriver implements HarnessDriver {
     }
     if (this.#options.transportFactory) return this.#options.transportFactory(context);
     const generated = context?.frozenLaunchContext
-      ? { args: codexLaunchPolicyArgs(context.frozenLaunchContext.policy), launchPolicy: context.frozenLaunchContext.policy }
+      ? { args: codexLaunchPolicyArgs(context.frozenLaunchContext.policy, this.#options.disableWebSearch), launchPolicy: context.frozenLaunchContext.policy }
       : createIsolatedCodexAppServerLaunch(this.#options.environment, codexExecutableReadOnlyRoots(this.#options.environment ?? process.env), this.#options.instructionWorkingCopyRoot, [], this.#options.disableWebSearch);
     const transport = new ProcessCodexAppServerTransport({
         workingDirectory,
