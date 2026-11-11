@@ -574,6 +574,19 @@
       "verifiedAt": "2026-11-11",
       "retireWhen": "An accepted upstream release verifies sandbox write denial without assuming a shell-specific exit code.",
       "notes": "Require a normal, unsuccessful shell exit and an unchanged protected file when a workspace command attempts an external write; shells may return different nonzero redirection statuses."
+    },
+    {
+      "id": "default-codex-app-server",
+      "kind": "fork-only",
+      "status": "active",
+      "commits": [
+        "830b983039baaa50e80488648d71dabc61af0385"
+      ],
+      "owner": "hrygo",
+      "reviewBy": "2026-12-11",
+      "verifiedAt": "2026-11-11",
+      "retireWhen": "An accepted upstream release can express the Delegra default without a fork-only change.",
+      "notes": "Delegra's operator preference is to start new agents with the Codex app-server through Paperclip Runner on supported targets. The picker keeps explicit choices and existing agents unchanged. This fork-specific product default is not imposed on upstream installations."
     }
   ]
 }
