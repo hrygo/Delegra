@@ -55,6 +55,7 @@ export function AiConnectionField({
   legacy = false,
   readOnly = false,
   preferAdvanced = false,
+  defaultCustomGateway = false,
   routerAdapterType,
 }: {
   companyId: string;
@@ -68,6 +69,7 @@ export function AiConnectionField({
   legacy?: boolean;
   readOnly?: boolean;
   preferAdvanced?: boolean;
+  defaultCustomGateway?: boolean;
   routerAdapterType?: string;
 }) {
   const provider = aiProviderForAdapter(adapterType);
@@ -76,6 +78,9 @@ export function AiConnectionField({
   const [adopting, setAdopting] = useState(false);
   const [pendingAdoption, setPendingAdoption] = useState<AiRuntimeConnectionBinding>();
   const [connecting, setConnecting] = useState(false);
+  const [settingUpDefaultGateway, setSettingUpDefaultGateway] = useState(
+    () => defaultCustomGateway && adapterType === "codex_local" && !value && !legacy && !readOnly,
+  );
   const [advancedSetup, setAdvancedSetup] = useState(false);
   const [reconnecting, setReconnecting] = useState<AiManagedConnectionSummary>();
   const [allAgents, setAllAgents] = useState(true);
@@ -150,7 +155,21 @@ export function AiConnectionField({
         </select>
         {value?.mode === "router" && <span className="text-muted-foreground">New tasks rotate. Existing tasks keep their account.</span>}
       </label>}
-      {value?.mode !== "router" && <AiConnectionSelect
+      {settingUpDefaultGateway && !value ? <>
+        <Button type="button" variant="ghost" onClick={() => setSettingUpDefaultGateway(false)}>
+          Choose an existing connection
+        </Button>
+        <AiProviderSetup
+          companyId={companyId} agentId={agentId} environmentId={environmentId}
+          initialProvider="gateway" initialProtocol="responses"
+          submitLabel="Save connection"
+          onCancel={() => setSettingUpDefaultGateway(false)}
+          onComplete={binding => {
+            setSettingUpDefaultGateway(false);
+            changeBinding(binding);
+          }}
+        />
+      </> : value?.mode !== "router" && <AiConnectionSelect
         adapterType={adapterType}
           model={model}
         requirement={{ companyId, provider }}

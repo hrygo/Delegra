@@ -35,6 +35,7 @@ describe("New agent setup", () => {
     }] } as any);
     await renderCurrentParams();
     await click("AdvancedCustom Gateway");
+    if (adapter === "codex_local") await click("Choose an existing connection");
     expect(container.querySelector('[role="combobox"][aria-label="Connection"]')).toBeTruthy();
     await click(`${provider}API key`);
     expect(container.querySelector('[aria-label="API key"]')).toBeTruthy();
@@ -45,6 +46,86 @@ describe("New agent setup", () => {
     await click("Finish setup");
     expect(api.hire).toHaveBeenCalledExactlyOnceWith("company-1", expect.objectContaining({ setupAgentId: id, defaultEnvironmentId: "remote" }));
     expect(api.create).not.toHaveBeenCalled();
+  });
+
+  it("starts a new Codex agent with a custom Responses gateway and saves only its connection binding", async () => {
+    await render("codex_local");
+    expect(container.querySelector('[role="radio"][aria-checked="true"]')?.textContent).toBe("AdvancedCustom Gateway");
+    await vi.waitFor(() => expect(container.querySelector('[aria-label="Provider URL"]')).toBeTruthy());
+    expect(container.textContent).toContain("OpenAI Responses · Codex");
+    expect(managedApi.create).not.toHaveBeenCalled();
+    expect(api.testEnvironment).not.toHaveBeenCalled();
+    await fill("Provider URL", "https://gateway.example.test/v1");
+    await fill("API key", "fixture-gateway-key");
+    await click("Save connection");
+    await vi.waitFor(() => expect(managedApi.create).toHaveBeenCalledExactlyOnceWith("company-1", expect.objectContaining({
+      provider: "openai", method: "api_key", apiKey: "fixture-gateway-key",
+      routing: expect.objectContaining({ kind: "gateway", protocol: "responses", auth: "bearer", baseUrl: "https://gateway.example.test/v1" }),
+    })));
+    await click("Use connection");
+    expect(container.textContent).toContain("Configure your agent");
+    expect(api.update).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+      runtimeConfig: expect.objectContaining({ aiConnection: expect.objectContaining({
+        provider: "openai", method: "api_key", connectionId: "managed-connection", grantId: "managed-grant",
+      }) }),
+    }), "company-1");
+    expect(JSON.stringify(api.update.mock.calls)).not.toContain("fixture-gateway-key");
+    expect(JSON.stringify(window.localStorage)).not.toContain("fixture-gateway-key");
+    await click("1Connect");
+    expect(container.querySelector('[aria-label="Provider URL"]')).toBeNull();
+    const useConnection = [...container.querySelectorAll("button")].find(button => button.textContent?.trim() === "Use connection");
+    expect(useConnection?.disabled).toBe(false);
+  });
+
+  it("retains an explicitly chosen Codex sign-in method when returning to Connect", async () => {
+    await render("codex_local");
+    await click("OpenAIAPI key");
+    await click("2Configure");
+    await click("Connect model");
+    expect(container.querySelector('[role="radio"][aria-checked="true"]')?.textContent).toBe("OpenAIAPI key");
+    expect(container.querySelector('[aria-label="API key"]')).toBeTruthy();
+  });
+
+  it("restores an existing Codex subscription rather than replacing it with the new default", async () => {
+    const id = "00000000-0000-4000-8000-000000000093";
+    const binding = { provider: "openai", method: "subscription", mode: "responsible_user" };
+    state.params = new URLSearchParams({ name: "Atlas", adapterType: "codex_local", runner: "auto", setupAgentId: id });
+    api.get.mockResolvedValue({ id, companyId: "company-1", name: "Atlas", role: "general", adapterType: "paperclip_runner",
+      adapterConfig: { provider: "codex" }, runtimeConfig: { aiConnection: binding }, lifecycleState: "paused",
+      pauseReason: "setup", defaultEnvironmentId: null, status: "paused" });
+    await renderCurrentParams();
+    expect(container.textContent).toContain("Configure your agent");
+    expect(api.update).not.toHaveBeenCalled();
+    await click("1Connect");
+    expect(container.querySelector('[role="radio"][aria-checked="true"]')?.textContent).toBe("OpenAISubscription");
+    expect(managedApi.create).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["CODEX_HOME", "OpenAISubscription"],
+    ["OPENAI_API_KEY", "OpenAIAPI key"],
+  ])("retains a legacy Codex draft's %s credential method", async (key, expectedMode) => {
+    const id = "00000000-0000-4000-8000-000000000093";
+    state.params = new URLSearchParams({ name: "Atlas", adapterType: "codex_local", runner: "auto", setupAgentId: id });
+    api.get.mockResolvedValue({ id, companyId: "company-1", name: "Atlas", role: "general", adapterType: "codex_local",
+      adapterConfig: { env: { [key]: { type: "secret_ref", secretId: "saved-secret", version: "latest" } } },
+      runtimeConfig: {}, lifecycleState: "paused", pauseReason: "setup", defaultEnvironmentId: null, status: "paused" });
+    await renderCurrentParams();
+    expect(container.querySelector('[role="radio"][aria-checked="true"]')?.textContent).toBe(expectedMode);
+    expect(api.update).not.toHaveBeenCalled();
+    expect(managedApi.create).not.toHaveBeenCalled();
+  });
+
+  it("preserves a legacy Codex subscription binding when saving its restored draft", async () => {
+    const id = "00000000-0000-4000-8000-000000000093";
+    const codexHome = { type: "secret_ref", secretId: "saved-secret", version: "latest" };
+    state.params = new URLSearchParams({ name: "Atlas", adapterType: "codex_local", runner: "auto", setupAgentId: id });
+    api.get.mockResolvedValue({ id, companyId: "company-1", name: "Atlas", role: "general", adapterType: "codex_local",
+      adapterConfig: { env: { CODEX_HOME: codexHome } }, runtimeConfig: {}, lifecycleState: "paused",
+      pauseReason: "setup", defaultEnvironmentId: null, status: "paused" });
+    await renderCurrentParams();
+    await click("Back");
+    expect(api.update.mock.calls.at(-1)![1].adapterConfig.env.CODEX_HOME).toEqual(codexHome);
   });
 
   it("retains the selected account while a company requires approval before preparing the computer", async () => {
@@ -823,6 +904,7 @@ describe("New agent setup", () => {
     envApi.capabilities.mockResolvedValue({ sandboxProviders: { daytona: { supportsLoginPty: true } } });
     api.getAdapterAuthSignal.mockResolvedValue({ status: "missing" });
     await render(adapterType);
+    if (adapterType === "codex_local") await click("OpenAISubscription");
     expect(container.textContent).toContain("does not support browser sign-in");
     expect(container.querySelector('select[aria-label="Environment"]')).toBeNull();
     await click("2Configure");
@@ -1369,7 +1451,6 @@ describe("New agent setup", () => {
     expect(secrets.rotateMyUserSecret).not.toHaveBeenCalled();
   });
   it.each(["codex_local", "paperclip_runner"])("keeps a saved connection chosen in Connect when hiring %s", async (adapter) => {
-    await render(adapter, "codex");
     managedApi.list.mockResolvedValue({
       currentUserId: "user-1",
       connections: [{
@@ -1379,7 +1460,9 @@ describe("New agent setup", () => {
         routing: { kind: "openrouter", protocol: "responses", auth: "bearer", models: [] },
       }],
     } as any);
+    await render(adapter, "codex");
     await click("AdvancedCustom Gateway");
+    await click("Choose an existing connection");
     const picker = container.querySelector('[role="combobox"][aria-label="Connection"]')!;
     await act(async () => picker.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true })));
     await settle();
@@ -1397,13 +1480,14 @@ describe("New agent setup", () => {
     expect(api.hire.mock.calls[0][1].runtimeConfig.aiConnection).toEqual(binding);
   });
   it("requires the current connection choice to connect before Configure can save it", async () => {
-    await render("codex_local");
     managedApi.list.mockResolvedValue({ currentUserId: "user-1", connections: [{
       id: "00000000-0000-4000-8000-000000000021", grantId: "00000000-0000-4000-8000-000000000022", companyId: "company-1",
       provider: "openrouter", method: "api_key", name: "Company OpenRouter", ownership: "shared", isDefault: false, status: "connected",
       routing: { kind: "openrouter", protocol: "responses", auth: "bearer", models: [] },
     }] } as any);
+    await render("codex_local");
     await click("AdvancedCustom Gateway");
+    await click("Choose an existing connection");
     const picker = container.querySelector('[role="combobox"][aria-label="Connection"]')!;
     await act(async () => picker.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true })));
     await settle();

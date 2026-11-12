@@ -665,6 +665,14 @@ function OnboardingWizardInner({
       ? saved.credentialModeChoice as CredentialMode | null
       : saved?.credentialMode as CredentialMode | undefined) ?? null,
   );
+  // A fresh Codex setup starts with a custom Responses gateway. Keep this
+  // separate from credentialMode: an ordinary API key is also an API mode.
+  const [gatewayDefaultPending, setGatewayDefaultPending] = useState(
+    () => saved ? saved.gatewayDefaultPending === true : true,
+  );
+  const [gatewayOpen, setGatewayOpen] = useState(false);
+  const credentialChoiceChanged = useRef(false);
+  const gatewayDefaultOpened = useRef(false);
   /**
    * Where the connect step's sign-in sequence is.
    *
@@ -713,14 +721,15 @@ function OnboardingWizardInner({
   const savedSubscription = savedKeys.subscriptions.find((option) => option.aiConnection?.mode === "responsible_user")
     ?? (savedKeys.subscriptions.length === 1 ? savedKeys.subscriptions[0] : undefined);
   const [selectedSavedKey, setSelectedSavedKey] = useState<{ companyId: string; envKey: string; id: string } | null>(null);
+  const pendingCodexGateway = gatewayDefaultPending && adapterType === "codex_local";
   const selectedApiKeyId = selectedSavedKey?.companyId === createdCompanyId && selectedSavedKey?.envKey === apiKeyEnvKeyFor(adapterType)
     ? selectedSavedKey.id
-    : savedKeys.options[0]?.id;
+    : pendingCodexGateway ? "" : savedKeys.options[0]?.id;
   const selectedApiKey = savedKeys.options.find((option) => option.id === selectedApiKeyId);
-  const credentialMode = credentialModeChoice ?? (
+  const credentialMode = credentialModeChoice ?? (pendingCodexGateway ? "api" : (
     (savedKeys.subscriptions.length > 0 || (adapterType === "claude_local" && savedKeys.storedLogin.data))
       ? "subscription" : savedKeys.options.length || adapterType === "opencode_local" ? "api" : "subscription"
-  );
+  ));
   const [createdCompanyPrefix, setCreatedCompanyPrefix] = useState<
     string | null
   >((saved?.createdCompanyPrefix as string) ?? null);
@@ -836,6 +845,18 @@ function OnboardingWizardInner({
   function clearCompanyScopedState() {
     setRestoredSetup(null);
     setGatewayConnection(undefined);
+    setGatewayOpen(false);
+    setGatewayDefaultPending(true);
+    setCredentialMode(null);
+    credentialChoiceChanged.current = false;
+    gatewayDefaultOpened.current = false;
+    setSelectedSavedKey(null);
+    setApiKey("");
+    apiKeySecretRef.current = null;
+    managedSubscriptionRef.current = null;
+    setSourcePicked(false);
+    setConnectPhase("idle");
+    setConnectAuthUrl(null);
     setAgentAppearance(randomAgentAppearance());
     setCreatedCompanyPrefix(null);
     setCompanyName("");
@@ -954,7 +975,7 @@ function OnboardingWizardInner({
       step, companyName,
       agentName, agentAppearance, agentRole, adapterType, runner, cwd, model, command, args, url,
       // The mode, never the key: this blob is localStorage.
-      credentialMode, credentialModeChoice,
+      credentialMode, credentialModeChoice, gatewayDefaultPending,
       createdCompanyId, createdCompanyPrefix, createdAgentId, setupAgentId,
       createdCompanyGoalId, createdProjectId, createdIssueRef,
     };
@@ -962,7 +983,7 @@ function OnboardingWizardInner({
   }, [
     effectiveOnboardingOpen, step, companyName,
     agentName, agentAppearance, agentRole, adapterType, runner, cwd, model, command, args, url,
-    credentialMode, credentialModeChoice,
+    credentialMode, credentialModeChoice, gatewayDefaultPending,
     createdCompanyId, createdCompanyPrefix, createdAgentId, setupAgentId,
     createdCompanyGoalId, createdProjectId, createdIssueRef,
   ]);
@@ -1095,7 +1116,7 @@ function OnboardingWizardInner({
   // Sandbox provider capabilities for the login pseudo-terminal gate, loaded
   // only when the adapter declares a login capability — the same query the
   // agent configuration form runs (AgentConfigForm.tsx:652-658).
-  const { data: loginEnvironmentCapabilities } = useQuery({
+  const { data: loginEnvironmentCapabilities, isFetched: loginCapabilitiesFetched } = useQuery({
     queryKey: createdCompanyId
       ? queryKeys.environments.capabilities(createdCompanyId)
       : ["environment-capabilities", "none"],
@@ -1346,10 +1367,12 @@ function OnboardingWizardInner({
             setRunner(ONBOARDING_ADAPTER_TYPES.has(agentHarnessType(agent.adapterType, config))
               ? agent.adapterType === "paperclip_runner" ? "paperclip" : "legacy" : "auto");
             const binding = agent.runtimeConfig?.aiConnection as AiConnectionBinding | undefined;
-            if (binding) setCredentialMode(binding.method === "api_key" ? "api" : "subscription");
-            else if ((config.env as Record<string, unknown> | undefined)?.[apiKeyEnvKeyFor(adapterType)]) setCredentialMode("api");
-            else if ((config.env as Record<string, unknown> | undefined)?.[CLAUDE_OAUTH_TOKEN_ENV_KEY]
-              || (config.env as Record<string, unknown> | undefined)?.CODEX_HOME) setCredentialMode("subscription");
+            if (!credentialChoiceChanged.current) {
+              if (binding) { setGatewayDefaultPending(false); setCredentialMode(binding.method === "api_key" ? "api" : "subscription"); }
+              else if ((config.env as Record<string, unknown> | undefined)?.[apiKeyEnvKeyFor(adapterType)]) { setGatewayDefaultPending(false); setCredentialMode("api"); }
+              else if ((config.env as Record<string, unknown> | undefined)?.[CLAUDE_OAUTH_TOKEN_ENV_KEY]
+                || (config.env as Record<string, unknown> | undefined)?.CODEX_HOME) { setGatewayDefaultPending(false); setCredentialMode("subscription"); }
+            }
           }
         }
       } else setCreatedAgentId(agent.id);
@@ -1387,6 +1410,25 @@ function OnboardingWizardInner({
       createdCompanyId &&
       resolvedLoginEnvironmentId,
   );
+
+  useEffect(() => {
+    if (!gatewayDefaultPending || gatewayDefaultOpened.current || adapterType !== "codex_local" || !sourceSelected ||
+        !setupPrepared || !loginEnvironmentSettingsReady || savedKeys.loading ||
+        (resolvedLoginEnvironment?.driver === "sandbox" && !loginCapabilitiesFetched) ||
+        (canShowAdapterLogin && (!activeLoginSessionQuery.isFetched || activeLoginSessionQuery.isFetching))) return;
+    if (canShowAdapterLogin && activeLoginSessionQuery.isError) return;
+    if (activeLoginSessionQuery.data) {
+      setCredentialMode("subscription");
+      setGatewayDefaultPending(false);
+    } else {
+      if (createdCompanyId) setSelectedSavedKey({ companyId: createdCompanyId, envKey: apiKeyEnvKeyFor(adapterType), id: "" });
+      gatewayDefaultOpened.current = true;
+      setGatewayOpen(true);
+    }
+  }, [gatewayDefaultPending, adapterType, sourceSelected, setupPrepared, savedKeys.loading,
+    activeLoginSessionQuery.isFetching, activeLoginSessionQuery.isFetched, activeLoginSessionQuery.isError,
+    activeLoginSessionQuery.data, createdCompanyId, loginEnvironmentSettingsReady,
+    resolvedLoginEnvironment?.driver, loginCapabilitiesFetched, canShowAdapterLogin]);
 
   /**
    * Whether the source's login ends by taking a code back from the customer.
@@ -1574,7 +1616,7 @@ function OnboardingWizardInner({
                 label: "Connect",
                 icon: "arrow",
                 disabled:
-                  !connectStepReady || (credentialMode === "api" && !apiKey.trim() && !selectedApiKey && !restoredApiCredential && !managedBindingForStep()),
+                  !connectStepReady || pendingCodexGateway || (credentialMode === "api" && !apiKey.trim() && !selectedApiKey && !restoredApiCredential && !managedBindingForStep()),
               }
           : // Nothing is chosen on arrival, and the row is what chooses. Until
             // it has been answered the button has nothing to do.
@@ -1619,6 +1661,7 @@ function OnboardingWizardInner({
    */
   function handleConnectStepPrimary() {
     if (setupError) { setSetupError(false); setSetupAttempt(value => value + 1); setError(null); return; }
+    if (pendingCodexGateway) return;
     // Mid-sequence the button belongs to the sign-in, not to the step.
     if (connectPhase === "ready" && connectStepNeedsLogin) {
       if (connectAuthUrl) window.open(connectAuthUrl, "_blank", "noreferrer,noopener");
@@ -1808,16 +1851,15 @@ function OnboardingWizardInner({
 
   function reset() {
     onboardingDraftStorage.clear();
+    clearCompanyScopedState();
     // Back to the first step — "Name your organization". There is no front
     // door before it anymore, so a fresh run opens here.
     setStep(1);
     setLoading(false);
     setError(null);
-    setCompanyName("");
     // Back to the mount defaults: an empty name (the step's only question, and
     // what its CTA gates on) and the neutral role every onboarding hire uses.
     setAgentName("");
-    setAgentAppearance(randomAgentAppearance());
     setAgentRole(DEFAULT_AGENT_ROLE);
     setAdapterType("codex_local");
     setRunner("auto");
@@ -1833,14 +1875,6 @@ function OnboardingWizardInner({
     setUnsetAnthropicLoading(false);
     setClaudeOAuthStatus(null);
     setCreatedCompanyId(null);
-    setCreatedCompanyPrefix(null);
-    setCreatedAgentId(null);
-    setSetupAgentId(null);
-    setSetupPrepared(false);
-    setSetupError(false);
-    setCreatedCompanyGoalId(null);
-    setCreatedProjectId(null);
-    setCreatedIssueRef(null);
   }
 
   function handleClose() {
@@ -2987,7 +3021,8 @@ function OnboardingWizardInner({
                       label="Model source"
                       sources={recommendedAdapters.map((opt) => ({
                         id: opt.type,
-                        label: CONNECT_SOURCE_NAMES[opt.type] ?? opt.label,
+                        label: opt.type === "codex_local" && gatewayDefaultPending ? "Codex" : CONNECT_SOURCE_NAMES[opt.type] ?? opt.label,
+                        credentialMode: opt.type === "codex_local" && gatewayDefaultPending ? "advanced" : undefined,
                         icon: <ModelSourceMark type={opt.type} Fallback={opt.icon} />,
                       }))}
                       mode={credentialMode}
@@ -3043,7 +3078,7 @@ function OnboardingWizardInner({
                       transition={{ opacity: SOURCE_LINK_EXIT, height: MAKE_ROOM }}
                     >
                       <div className="-ml-3 mt-1">
-                        <CredentialModeLink mode={credentialMode} onChange={setCredentialMode} />
+                        <CredentialModeLink mode={credentialMode} onChange={mode => { credentialChoiceChanged.current = true; setGatewayDefaultPending(false); setGatewayOpen(false); setCredentialMode(mode); }} />
                         {savedKeys.options.length > 0 && <p className="px-3 text-sm text-muted-foreground">{savedKeys.options.length} saved API {savedKeys.options.length === 1 ? "key available" : "keys available"}.</p>}
                         {credentialMode === "subscription" && authSignalStatus === "present" && <p className="px-3 text-sm text-muted-foreground">An existing provider connection is available.</p>}
                       </div>
@@ -3093,17 +3128,17 @@ function OnboardingWizardInner({
                       </p>
                     ) : credentialMode === "api" ? (
                       <OnboardingLoginCard
-                        instruction={hasGatewaySelection || connectionModels ? "Choose a model for your saved connection" : savedKeys.options.length ? "Choose a saved API key or enter a new one" : `Provide your ${
+                        instruction={pendingCodexGateway ? "Set up your custom Responses gateway" : hasGatewaySelection || connectionModels ? "Choose a model for your saved connection" : savedKeys.options.length ? "Choose a saved API key or enter a new one" : `Provide your ${
                           CONNECT_SOURCE_NAMES[adapterType] ?? adapterType
                         } API key to connect`}
                       >
-                        {!hasGatewaySelection && <SavedProviderKeySelect {...savedKeys} disabled={loading || adapterEnvLoading} value={selectedApiKey?.id ?? ""} onChange={(id) => {
+                        {!pendingCodexGateway && !hasGatewaySelection && <SavedProviderKeySelect {...savedKeys} disabled={loading || adapterEnvLoading} value={selectedApiKey?.id ?? ""} onChange={(id) => {
                           setGatewayConnection(undefined);
                           if (connectionModels) setModel("");
                           setSelectedSavedKey(createdCompanyId ? { companyId: createdCompanyId, envKey: apiKeyEnvKeyFor(adapterType), id } : null);
                           setApiKey("");
                         }} />}
-                        {!selectedApiKey && !hasGatewaySelection && !connectionModels && <OnboardingCardField
+                        {!pendingCodexGateway && !selectedApiKey && !hasGatewaySelection && !connectionModels && <OnboardingCardField
                           label="API key"
                           placeholder="Enter API key here"
                           masked
@@ -3130,9 +3165,21 @@ function OnboardingWizardInner({
                           onChange={setModel} open={modelOpen} onOpenChange={setModelOpen}
                           allowDefault={false} required groupByProvider={false}
                           creatable={connectionModels.models.length === 0} presentation="native" />}
+                        {pendingCodexGateway && canShowAdapterLogin && activeLoginSessionQuery.isError && <>
+                          <p role="alert" className="text-sm text-destructive">Could not check for an existing Codex sign-in. Retry or open the custom gateway manually.</p>
+                          <Button type="button" variant="outline" onClick={() => { void activeLoginSessionQuery.refetch(); }}>Retry sign-in check</Button>
+                        </>}
                         {createdCompanyId && (adapterType === "codex_local" || adapterType === "claude_local") && <OnboardingGatewaySetup
                           companyId={createdCompanyId} agentId={setupAgentId ?? undefined} environmentId={resolvedLoginEnvironmentId ?? undefined}
                           adapterType={adapterType} disabled={loading || adapterEnvLoading}
+                          open={gatewayOpen} onOpenChange={open => {
+                            if (open && pendingCodexGateway) gatewayDefaultOpened.current = true;
+                            setGatewayOpen(open);
+                            if (!open && gatewayDefaultPending) {
+                              setGatewayDefaultPending(false);
+                              setCredentialMode("api");
+                            }
+                          }}
                           onComplete={binding => {
                             setGatewayConnection({ companyId: createdCompanyId, adapterType, binding });
                             setApiKey("");

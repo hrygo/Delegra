@@ -47,6 +47,8 @@ export function AgentProviderConnection({
   testError,
   managedAccount,
   advancedConnection,
+  initialMode,
+  onModeChange,
 }: {
   companyId: string;
   adapterType: "claude_local" | "codex_local" | "grok_local" | "antigravity_runtime";
@@ -59,6 +61,8 @@ export function AgentProviderConnection({
   testConnection: (connection: ProviderConnection) => Promise<boolean>;
   testError?: string | null;
   advancedConnection?: { content: ReactNode; value?: AiConnectionBinding };
+  initialMode?: ModelConnectionMode;
+  onModeChange?: (mode: ModelConnectionMode) => void;
   /** Connections supplies its access intent; presentation and login controllers stay shared. */
   managedAccount?: {
     intent: AiConnectionLoginIntent;
@@ -85,8 +89,12 @@ export function AgentProviderConnection({
     setAuthorizationUrl(null);
     setLoginPhase("preparing");
   };
-  const [methodChoice, setMethod] = useState<"subscription" | "api" | null>(managedAccount?.initialMethod === "api_key" ? "api" : managedAccount ? "subscription" : null);
-  const [advanced, setAdvanced] = useState(false);
+  const [methodChoice, setMethod] = useState<"subscription" | "api" | null>(
+    initialMode === "subscription" || initialMode === "api" ? initialMode : managedAccount?.initialMethod === "api_key" ? "api" : managedAccount ? "subscription" : null,
+  );
+  const [advanced, setAdvanced] = useState(
+    () => initialMode ? initialMode === "advanced" : adapterType === "codex_local" && Boolean(advancedConnection) && !managedAccount,
+  );
   // Connections already selected the provider before showing this step.
   const [opened, setOpened] = useState(Boolean(advancedConnection || managedAccount));
   const [authorizationUrl, setAuthorizationUrl] = useState<string | null>(null);
@@ -238,6 +246,7 @@ export function AgentProviderConnection({
     (Boolean(managedAccount) || auth.data?.status !== "present" || subscriptionId === "");
   const switchMode = (next: ModelConnectionMode) => {
     if (advancedConnection && next === (advanced ? "advanced" : method)) return;
+    onModeChange?.(next);
     onDraftChanged?.();
     cancel();
     setAdvanced(next === "advanced");

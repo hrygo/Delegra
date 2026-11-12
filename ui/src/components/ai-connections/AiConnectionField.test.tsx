@@ -7,9 +7,11 @@ import type { ComponentProps } from "react";
 import type { AiManagedConnectionSummary } from "@paperclipai/shared";
 import { AiConnectionField, aiProviderForAdapter } from "./AiConnectionField";
 import type { AiConnectionCredentialStep } from "./AiConnectionCredentialStep";
+import type { AiProviderSetup } from "./AiProviderSetup";
 
 const mocks = vi.hoisted(() => ({ list: vi.fn(), setDefault: vi.fn() }));
 let credentialProps: ComponentProps<typeof AiConnectionCredentialStep> | undefined;
+let providerSetupProps: ComponentProps<typeof AiProviderSetup> | undefined;
 vi.mock("@/api/ai-connections", () => ({ aiConnectionsApi: mocks }));
 vi.mock("./AiConnectionCredentialStep", () => ({
   AiConnectionCredentialStep: (props: ComponentProps<typeof AiConnectionCredentialStep>) => {
@@ -17,7 +19,7 @@ vi.mock("./AiConnectionCredentialStep", () => ({
     return <div>Provider sign-in</div>;
   },
 }));
-vi.mock("./AiProviderSetup", () => ({ AiProviderSetup: () => <div>Advanced provider setup</div> }));
+vi.mock("./AiProviderSetup", () => ({ AiProviderSetup: (props: ComponentProps<typeof AiProviderSetup>) => { providerSetupProps = props; return <div>Advanced provider setup</div>; } }));
 vi.mock("@/pages/apps/AppLogo", () => ({ AppLogo: () => null }));
 
 let root: Root;
@@ -63,6 +65,7 @@ async function click(label: string) {
 beforeEach(() => {
   vi.clearAllMocks();
   credentialProps = undefined;
+  providerSetupProps = undefined;
   mocks.setDefault.mockResolvedValue({});
   container = document.createElement("div");
   document.body.append(container);
@@ -113,6 +116,32 @@ it("opens provider setup directly when connecting from the advanced mode", async
   await click("Connect another account");
   expect(document.body.textContent).toContain("Advanced provider setup");
   expect(credentialProps).toBeUndefined();
+});
+
+it("starts a fresh Codex connection with an empty custom Responses gateway", async () => {
+  mocks.list.mockResolvedValue({ currentUserId: "owner", connections: [], canManageConnections: true });
+  flushSync(() => root.render(<QueryClientProvider client={client}>
+    <AiConnectionField companyId="company" agentName="Nova" adapterType="codex_local"
+      preferAdvanced defaultCustomGateway onChange={onChange} />
+  </QueryClientProvider>));
+  await settle();
+  expect(providerSetupProps).toMatchObject({ initialProvider: "gateway", initialProtocol: "responses" });
+  expect(onChange).not.toHaveBeenCalled();
+  await click("Choose an existing connection");
+  expect(document.querySelector('[role="combobox"][aria-label="Connection"]')).not.toBeNull();
+});
+
+it("does not replace a supplied Codex connection with a new gateway", async () => {
+  const saved = account({ provider: "openai", method: "subscription", status: "connected" });
+  mocks.list.mockResolvedValue({ currentUserId: "owner", connections: [saved], canManageConnections: true });
+  flushSync(() => root.render(<QueryClientProvider client={client}>
+    <AiConnectionField companyId="company" agentName="Nova" adapterType="codex_local"
+      preferAdvanced defaultCustomGateway value={{ provider: "openai", method: "subscription", mode: "responsible_user" }} onChange={onChange} />
+  </QueryClientProvider>));
+  await settle();
+  expect(providerSetupProps).toBeUndefined();
+  expect(onChange).not.toHaveBeenCalled();
+  expect(container.textContent).toContain("Responsible user’s default");
 });
 
 it("selects the returned new grant and actual method before adopting the personal default", async () => {
