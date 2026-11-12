@@ -271,23 +271,49 @@ describe("Connectors landing page", () => {
     expect(container.querySelector('[data-app-slug="openai"]')).not.toBeNull();
   });
 
-  it("hides unrelated sales and advertising connectors but keeps model and relevant choices", async () => {
+  it("shows selected connectors and hides other previous catalog choices", async () => {
     enforceDelegraCatalogPolicy.enabled = true;
-    listGalleryMock.mockResolvedValue({ apps: ["shopify", "stripe", "openai", "responses-api", "notion", "clickhouse", "tavily", "context7"].map(getAppStoreDefinition) });
+    listGalleryMock.mockResolvedValue({ apps: ["shopify", "stripe", "openai", "responses-api", "notion", "clickhouse", "tavily", "context7", "exa"].map(getAppStoreDefinition) });
     aggregatorCatalogMock.push(
       { ...indexedApp("Google Ads"), slug: "googleads" },
       indexedApp("Gitea"), indexedApp("Postgres", ["arcade"]), indexedApp("DeepSeek"), indexedApp("Dify"),
       indexedApp("Bika"), indexedApp("Manus"), indexedApp("Genderize"), indexedApp("CometAPI"),
+      indexedApp("TiDB Cloud"), indexedApp("Exa"), indexedApp("Figma"),
       { ...indexedApp("TikHub"), slug: "tik-hub" },
       { ...indexedApp("BytePlus Ark"), slug: "byte-plus-ark" },
     );
-    await renderBrowse();
-    for (const slug of ["shopify", "stripe", "googleads", "dify", "bika", "manus", "genderize", "tik-hub"]) {
+    await renderBrowse(false);
+    expect(container.querySelector('[aria-checked="true"]')?.textContent).toBe("All");
+    for (const slug of ["shopify", "stripe", "googleads", "dify", "bika", "manus", "genderize", "tik-hub", "notion", "gitea", "byte-plus-ark", "cometapi"]) {
       expect(container.querySelector(`[data-app-slug="${slug}"]`)).toBeNull();
     }
-    for (const slug of ["openai", "responses-api", "notion", "gitea", "clickhouse", "postgres", "tavily", "context7", "deepseek", "byte-plus-ark", "cometapi"]) {
-      expect(container.querySelector(`[data-app-slug="${slug}"]`)).not.toBeNull();
+    for (const slug of ["openai", "responses-api", "clickhouse", "postgres", "tavily", "context7", "deepseek", "tidb-cloud", "exa", "figma"]) {
+      expect(container.querySelector(`[data-app-slug="${slug}"]`), slug).not.toBeNull();
     }
+  });
+
+  it("shows all requested current catalog entries in the default view", async () => {
+    enforceDelegraCatalogPolicy.enabled = true;
+    const selected = [
+      "deepseek", "openai", "openrouter", "ollama", "hugging-face", "anthropic", "google", "context7",
+      "postgres", "responses-api", "chat-completions-api", "local", "custom-mcp", "assistant-connection",
+      "messages-api", "github", "gitlab", "docker-hub", "grafana", "postman", "supabase", "tidb-cloud",
+      "clickhouse", "tavily", "elasticsearch", "excel", "exa", "neo4j", "figma", "excalidraw-mcp",
+      "mermaid-chart-mcp",
+    ];
+    const catalog = await vi.importActual<typeof import("@paperclipai/shared/aggregator-app-catalog")>("@paperclipai/shared/aggregator-app-catalog");
+    aggregatorCatalogMock.push(...catalog.AGGREGATOR_APP_CATALOG.filter(app => selected.includes(app.slug)));
+    listGalleryMock.mockResolvedValue({ apps: selected.flatMap(slug => {
+      const definition = getAppStoreDefinition(slug);
+      return definition ? [definition] : [];
+    }) });
+    await renderBrowse(false);
+    for (const slug of selected) {
+      expect(container.querySelector(`[data-app-slug="${slug}"]`), slug).not.toBeNull();
+    }
+    expect(container.querySelector('[aria-label="Connector catalog pages"]')?.textContent).toContain("1–29 of 29 catalog connectors");
+    expect(container.querySelector('[aria-label="Connector catalog pages"]')?.textContent).toContain("Connected and setup entries shown separately");
+    expect(container.querySelectorAll('[aria-label="Connector list"] > [data-app-slug]')).toHaveLength(31);
   });
 
   it("keeps requested model providers visible if added to the catalog", async () => {
@@ -494,10 +520,13 @@ describe("Connectors landing page", () => {
     return document.querySelector<HTMLElement>('[role="menu"]')!;
   }
 
-  it("defaults to Paperclip with five chips, expands search to All, and retains explicit source scope", async () => {
+  it("defaults to All with five chips, expands Paperclip search, and retains explicit source scope", async () => {
     aggregatorCatalogMock.push(indexedApp("Remote App", ["composio"]));
     await renderBrowse(false);
     expect(container.querySelector('[aria-label="App filters"]')?.textContent).toBe("PaperclipComposioArcadeInstalledAll");
+    expect(container.querySelector('[aria-checked="true"]')?.textContent).toBe("All");
+    expect(container.querySelector('[data-app-slug="remote-app"]')).toBeTruthy();
+    await clickButton("Paperclip", container);
     expect(container.querySelector('[data-app-slug="remote-app"]')).toBeNull();
     await search("Remote App");
     expect(container.querySelector('[aria-checked="true"]')?.textContent).toBe("All");
@@ -745,6 +774,52 @@ describe("Connectors landing page", () => {
     expect(container.textContent).toContain("Page 1 of 1");
     expect(container.querySelector('[data-app-slug="indexed-app-59"]')).not.toBeNull();
     await search("no-such-app");
+    expect(container.textContent).toContain("No connectors match");
+    expect(container.querySelector('[aria-label="Connector catalog pages"]')).toBeNull();
+  });
+
+  it("filters the real curated catalog before counting and paginating it", async () => {
+    enforceDelegraCatalogPolicy.enabled = true;
+    const selected = [
+      "anthropic", "chat-completions-api", "clickhouse", "context7", "deepseek", "docker-hub",
+      "elasticsearch", "exa", "excalidraw-mcp", "excel", "figma", "github", "gitlab", "google",
+      "grafana", "hugging-face", "local", "mermaid-chart-mcp", "messages-api", "neo4j", "ollama",
+      "openai", "openrouter", "postgres", "postman", "responses-api", "supabase", "tavily", "tidb-cloud",
+      "alibaba", "alibaba-cloud", "aliyun", "baidu", "bailian", "bigmodel", "bigmodel-cn", "dashscope",
+      "doubao", "glm", "huawei", "hunyuan", "kimi", "kimi-code", "minimax", "minimax-ai", "modelscope",
+      "moonshot", "moonshot-ai", "moonshotai", "open-code", "opencode", "qwen",
+    ];
+    aggregatorCatalogMock.push(
+      ...selected.map(slug => indexedApp(slug)),
+      ...Array.from({ length: 75 }, (_, index) => indexedApp(`Hidden App ${index}`)),
+    );
+    listGalleryMock.mockResolvedValue({ apps: [
+      getAppStoreDefinition("notion"),
+      ...selected.flatMap(slug => {
+        const definition = getAppStoreDefinition(slug);
+        return definition ? [definition] : [];
+      }),
+    ] });
+    listApplicationsMock.mockResolvedValue({ applications: [application()] });
+    listConnectionsMock.mockResolvedValue({ connections: [connection()] });
+    await renderBrowse();
+
+    const catalogCards = () => container.querySelectorAll('[data-connected="false"][data-app-slug]:not([data-app-slug="custom-mcp"]):not([data-app-slug="assistant-connection"])');
+    const pages = () => container.querySelector('[aria-label="Connector catalog pages"]')?.textContent;
+    expect(catalogCards()).toHaveLength(50);
+    expect(pages()).toContain("1–50 of 52 catalog connectors");
+    expect(container.querySelector('[data-app-slug="hidden-app-0"]')).toBeNull();
+    expect(container.querySelector('[data-app-slug="notion"]')).not.toBeNull();
+
+    await clickButton("Next", container);
+    expect(catalogCards()).toHaveLength(2);
+    expect(pages()).toContain("51–52 of 52 catalog connectors");
+    expect(container.querySelector('[data-app-slug="notion"]')).not.toBeNull();
+
+    await search("tidb-cloud");
+    expect(pages()).toContain("1–1 of 1 catalog connectors");
+    expect(container.querySelector('[data-app-slug="tidb-cloud"]')).not.toBeNull();
+    await search("Hidden App 0");
     expect(container.textContent).toContain("No connectors match");
     expect(container.querySelector('[aria-label="Connector catalog pages"]')).toBeNull();
   });

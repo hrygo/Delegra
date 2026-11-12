@@ -373,7 +373,7 @@ export function Browse({ renderAccountDetails = (connection) => connection.conne
   const { setBreadcrumbs } = useBreadcrumbs();
   const [query, setQuery] = useState("");
   const [page, setPage] = useState(1);
-  const [source, setSource] = useState<CatalogSource>("paperclip");
+  const [source, setSource] = useState<CatalogSource>("all");
   const [expandedSearch, setExpandedSearch] = useState(false);
   const [executorToConfigure, setExecutorToConfigure] = useState<ToolConnection | null>(null);
   const [arcadeToConfigure, setArcadeToConfigure] = useState<ToolConnection | null>(null);
@@ -389,7 +389,7 @@ export function Browse({ renderAccountDetails = (connection) => connection.conne
     return () => setBreadcrumbs([]);
   }, [setBreadcrumbs]);
 
-  useEffect(() => { setQuery(""); setPage(1); setSource("paperclip"); setExpandedSearch(false); setArcadeToConfigure(null); setAggregatorToConnect(null); setAggregatorToManage(null); setInitialAggregatorProvider(undefined); setConnectionToRemove(null); }, [selectedCompanyId]);
+  useEffect(() => { setQuery(""); setPage(1); setSource("all"); setExpandedSearch(false); setArcadeToConfigure(null); setAggregatorToConnect(null); setAggregatorToManage(null); setInitialAggregatorProvider(undefined); setConnectionToRemove(null); }, [selectedCompanyId]);
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     if (params.get("source") === "installed") setSource("installed");
@@ -984,7 +984,10 @@ export function Browse({ renderAccountDetails = (connection) => connection.conne
       {accountLoadErrors.length ? <p role="alert" className="text-sm text-destructive">Couldn’t load {Array.from(new Set(accountLoadErrors)).join(" or ")} accounts. Use Refresh in the connection’s menu to try again.</p> : null}
 
       {!loading && catalogRows.length > 0 ? <nav aria-label="Connector catalog pages" className="flex flex-wrap items-center justify-between gap-3 text-sm">
-        <p className="text-muted-foreground" role="status">{pageStart + 1}–{Math.min(pageStart + CATALOG_PAGE_SIZE, catalogRows.length)} of {catalogRows.length.toLocaleString()} connectors</p>
+        <p className="text-muted-foreground" role="status">
+          {pageStart + 1}–{Math.min(pageStart + CATALOG_PAGE_SIZE, catalogRows.length)} of {catalogRows.length.toLocaleString()} catalog connectors
+          {installedRows.length > 0 || showAssistantConnection || showCustomConnector ? " · Connected and setup entries shown separately" : null}
+        </p>
         <div className="flex items-center gap-2">
           <Button variant="outline" size="sm" disabled={currentPage === 1} onClick={() => { setPage(currentPage - 1); catalogTop.current?.scrollIntoView?.({ block: "start" }); }}>Previous</Button>
           <span className="text-xs text-muted-foreground">Page {currentPage} of {pageCount}</span>

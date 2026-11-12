@@ -31,27 +31,26 @@ commands, branch protection, stable-upgrade process, and patch lifecycle.
 
 The Delegra Browse view shows the entries curated in
 `ui/src/pages/apps/delegra-catalog-policy.ts`. Unreviewed entries are hidden
-by default. Saved applications and connections bypass this additional filter;
+by default. The initial source is All so native and selected aggregator entries
+are visible together. Saved applications and connections bypass this filter;
 other existing availability rules still apply. The policy affects presentation
 only; it does not revoke access, disconnect accounts, or restrict direct API use.
+The view filters the assembled entries before calculating catalog pages. Connected
+entries and the fixed assistant and custom connector cards appear separately
+from the paginated catalog count.
 
-When an upstream catalog changes, review new entries against the curated list,
-including the Chinese services and model providers required by the deployment.
-The current selection keeps identified China-related products and selected other
-services within the category limits, excluding categories explicitly omitted
-from the catalog.
-The catalog index does not reliably identify provider country or popularity.
-Until reviewed, a new provider without an existing connection is hidden.
+When an upstream catalog changes, review new entries against the curated list
+and the deployment's requirements. Until reviewed, a new provider without an
+existing connection is hidden.
 
-Keep Gitea, ClickHouse, Postgres, Tavily, Context7, and DeepSeek available in
-the catalog, along with the selected model providers. The names for GLM,
-Volcengine, Alibaba, MiniMax, and Kimi are reserved when catalog entries are
-present. OpenCode and Kimi Code remain agent runtime choices. Catalog visibility
-does not add a provider or install a runtime.
-Gitea, Postgres, and DeepSeek use hosted aggregator routes in the current
-catalog; the native ClickHouse entry targets ClickHouse Cloud. For an intranet,
-connect an appropriate self-hosted MCP server or compatible gateway instead
-where one is available and authorized.
+The curated list includes ClickHouse, Postgres, Tavily, Context7, DeepSeek, and
+the other selected services. The names for GLM, Volcengine, Alibaba, MiniMax,
+and Kimi are reserved when catalog entries are present. OpenCode and Kimi Code
+remain agent runtime choices. Catalog visibility does not add a provider or
+install a runtime. Postgres and DeepSeek use hosted aggregator routes in the
+current catalog; the native ClickHouse entry targets ClickHouse Cloud. For an
+intranet, connect an appropriate self-hosted MCP server or compatible gateway
+instead where one is available and authorized.
 
 ## Codex account and workspace configuration
 
