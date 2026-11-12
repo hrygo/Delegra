@@ -31,20 +31,23 @@ commands, branch protection, stable-upgrade process, and patch lifecycle.
 
 The Delegra Browse view shows the entries curated in
 `ui/src/pages/apps/delegra-catalog-policy.ts`. Unreviewed entries are hidden
-by default. Native AI connection definitions and routers remain visible, as
-do saved applications and connections. This is a presentation preference; it
-does not revoke access, disconnect accounts, or restrict direct API use.
+by default. Saved applications and connections bypass this additional filter;
+other existing availability rules still apply. The policy affects presentation
+only; it does not revoke access, disconnect accounts, or restrict direct API use.
 
-When an upstream catalog changes, review the new entries and add relevant
-services to the list. The third-party index in this version does not describe
-which entries are model providers, so add every newly identified model provider
-to the list. Until reviewed, a new third-party provider without an existing
-connection is hidden.
+When an upstream catalog changes, review new entries against the curated list,
+including the Chinese services and model providers required by the deployment.
+The current selection keeps identified China-related products and selected other
+services within the category limits, excluding categories explicitly omitted
+from the catalog.
+The catalog index does not reliably identify provider country or popularity.
+Until reviewed, a new provider without an existing connection is hidden.
 
 Keep Gitea, ClickHouse, Postgres, Tavily, Context7, and DeepSeek available in
-the catalog, along with identified model providers including GLM, Volcengine,
-Alibaba, MiniMax, and Kimi when their entries are present. OpenCode and Kimi Code remain
-agent runtime choices. Catalog visibility does not add a provider or install a runtime.
+the catalog, along with the selected model providers. The names for GLM,
+Volcengine, Alibaba, MiniMax, and Kimi are reserved when catalog entries are
+present. OpenCode and Kimi Code remain agent runtime choices. Catalog visibility
+does not add a provider or install a runtime.
 Gitea, Postgres, and DeepSeek use hosted aggregator routes in the current
 catalog; the native ClickHouse entry targets ClickHouse Cloud. For an intranet,
 connect an appropriate self-hosted MCP server or compatible gateway instead

@@ -277,13 +277,15 @@ describe("Connectors landing page", () => {
     aggregatorCatalogMock.push(
       { ...indexedApp("Google Ads"), slug: "googleads" },
       indexedApp("Gitea"), indexedApp("Postgres", ["arcade"]), indexedApp("DeepSeek"), indexedApp("Dify"),
+      indexedApp("Bika"), indexedApp("Manus"), indexedApp("Genderize"), indexedApp("CometAPI"),
+      { ...indexedApp("TikHub"), slug: "tik-hub" },
       { ...indexedApp("BytePlus Ark"), slug: "byte-plus-ark" },
     );
     await renderBrowse();
-    for (const slug of ["shopify", "stripe", "googleads"]) {
+    for (const slug of ["shopify", "stripe", "googleads", "dify", "bika", "manus", "genderize", "tik-hub"]) {
       expect(container.querySelector(`[data-app-slug="${slug}"]`)).toBeNull();
     }
-    for (const slug of ["openai", "responses-api", "notion", "gitea", "clickhouse", "postgres", "tavily", "context7", "deepseek", "dify", "byte-plus-ark"]) {
+    for (const slug of ["openai", "responses-api", "notion", "gitea", "clickhouse", "postgres", "tavily", "context7", "deepseek", "byte-plus-ark", "cometapi"]) {
       expect(container.querySelector(`[data-app-slug="${slug}"]`)).not.toBeNull();
     }
   });
@@ -297,7 +299,7 @@ describe("Connectors landing page", () => {
     }
   });
 
-  it("keeps an unlisted native AI provider visible", async () => {
+  it("hides unlisted native AI providers until they are selected", async () => {
     enforceDelegraCatalogPolicy.enabled = true;
     listGalleryMock.mockResolvedValue({
       apps: [
@@ -306,8 +308,8 @@ describe("Connectors landing page", () => {
       ],
     });
     await renderBrowse();
-    expect(container.querySelector('[data-app-slug="new-native-ai-provider"]')).not.toBeNull();
-    expect(container.querySelector('[data-app-slug="new-tagged-model-provider"]')).not.toBeNull();
+    expect(container.querySelector('[data-app-slug="new-native-ai-provider"]')).toBeNull();
+    expect(container.querySelector('[data-app-slug="new-tagged-model-provider"]')).toBeNull();
   });
 
   it("keeps an existing connection visible even if its catalog entry is hidden", async () => {

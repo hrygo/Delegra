@@ -804,10 +804,7 @@ export function Browse({ renderAccountDetails = (connection) => connection.conne
   const trimmed = query.trim().toLocaleLowerCase();
   const visibleRows = useMemo(() => {
     const scoped = rows.filter((row) => {
-      const isNativeAi = row.entry?.methods?.some((method) => method.purpose === "ai")
-        || row.entry?.tags?.includes("model-provider")
-        || Boolean(row.entry?.aiConnectionRouter);
-      if (!isDelegraCatalogVisible(row.slug) && !isNativeAi && !isInstalled(row) && row.applications.length === 0) return false;
+      if (!isDelegraCatalogVisible(row.slug) && !isInstalled(row) && row.applications.length === 0) return false;
       if (source === "all") return true;
       if (source === "installed") return isInstalled(row);
       if (source === "paperclip") return !row.aggregatorApp || isInstalled(row);
