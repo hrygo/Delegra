@@ -603,6 +603,22 @@
       "verifiedAt": "2026-11-12",
       "retireWhen": "An accepted upstream release handles Git workspace discovery and restore diagnostics independently of the host language.",
       "notes": "Normalize Git diagnostics at workspace sync, hardened referenced-source scan, and worktree management boundaries so localized hosts correctly distinguish ordinary directories, recoverable bundle failures, missing refs, and other errors. Operator shell commands retain their configured locale."
+    },
+    {
+      "id": "enterprise-intranet-connector-catalog",
+      "kind": "fork-only",
+      "status": "active",
+      "commits": [
+        "65994d93f8ff733b348475403dd27df6c926dae9",
+        "5dc586e76601c83e73e3e7f9dbc9488a0c90847b",
+        "61baff98fff14c79eb5591a7b6cd0a3066681622",
+        "a5e763af9ba8a588543c46c95d8dd00c8d11e8b3"
+      ],
+      "owner": "hrygo",
+      "reviewBy": "2026-12-12",
+      "verifiedAt": "2026-11-12",
+      "retireWhen": "An accepted upstream release offers an equivalent configurable catalog that preserves existing applications and connections, or Delegra no longer needs this catalog policy.",
+      "notes": "Curate the Browse catalog for intranet and personal workflows. Show explicitly selected entries across sources, hide other unreviewed entries before pagination, and preserve saved applications and connections. The policy does not change the server catalog, credentials, authorization, or agent runtimes."
     }
   ]
 }
