@@ -719,6 +719,27 @@ describe("resolveRuntimeProvisionCommand", () => {
 });
 
 describe("refreshRemoteTrackingBaseRef git auth", () => {
+  it("recognizes a missing remote branch when Git messages are localized", async () => {
+    const { repoRoot } = await createClonedRepoWithRemote();
+    const bin = path.join(repoRoot, "localized-git-bin");
+    await fs.mkdir(bin);
+    // Simulate translations without depending on the host's installed locales.
+    await fs.writeFile(path.join(bin, "git"), `#!${process.execPath}
+const english = process.env.LC_ALL === "C";
+process.stderr.write(english ? "fatal: couldn't find remote ref refs/heads/main\\n" : "致命错误：无法找到远程引用 refs/heads/main\\n", () => { process.exitCode = 128; });
+`);
+    await fs.chmod(path.join(bin, "git"), 0o700);
+    const warnings = await refreshRemoteTrackingBaseRef(repoRoot, "origin/main", async () => ({
+      configArgs: [],
+      env: { PATH: `${bin}${path.delimiter}${process.env.PATH}`, LC_ALL: "zh_CN.UTF-8", LANGUAGE: "zh_CN" },
+      source: "server_environment",
+      secretName: null,
+    }));
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("couldn't find remote ref refs/heads/main");
+    expect(warnings[0]).not.toContain("rejected");
+  });
+
   it("does not diagnose a missing remote branch as a rejected credential", async () => {
     const { repoRoot } = await createClonedRepoWithRemote();
     const warnings = await refreshRemoteTrackingBaseRef(repoRoot, "origin/main", async () => ({
