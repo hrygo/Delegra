@@ -609,13 +609,14 @@
       "kind": "fork-only",
       "status": "active",
       "commits": [
-        "65994d93f8ff733b348475403dd27df6c926dae9"
+        "65994d93f8ff733b348475403dd27df6c926dae9",
+        "5dc586e76601c83e73e3e7f9dbc9488a0c90847b"
       ],
       "owner": "hrygo",
       "reviewBy": "2026-12-12",
       "verifiedAt": "2026-11-12",
       "retireWhen": "An accepted upstream release offers an equivalent configurable catalog that preserves existing applications and connections, or Delegra no longer needs this catalog policy.",
-      "notes": "Hide explicitly listed public marketing and commerce connectors in Browse only when no saved application or connection exists. Keep model providers and uncertain entries visible. The policy does not change the server catalog, credentials, authorization, or agent runtimes."
+      "notes": "Curate the Browse catalog for intranet and personal workflows. Hide unreviewed entries by default while preserving native AI connection definitions, listed model providers, and all saved applications and connections. The policy does not change the server catalog, credentials, authorization, or agent runtimes."
     }
   ]
 }
