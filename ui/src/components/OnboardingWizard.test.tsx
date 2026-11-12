@@ -2132,6 +2132,144 @@ describe("OnboardingWizard restore-gate (stale localStorage across accounts)", (
       return { root, queryClient };
     }
 
+    it("opens a Responses gateway for a new Codex selection and allows cancelling it", async () => {
+      mockAgentsApi.getAdapterAuthSignal.mockResolvedValue({ status: "absent" });
+      const handles = await openStep4({ adapterType: "codex_local", credentialModeChoice: null, gatewayDefaultPending: true });
+      try {
+        await pickSource(/Custom Gateway/);
+        await vi.waitFor(() => expect(document.querySelector('input[aria-label="Provider URL"]')).toBeTruthy());
+        expect(document.querySelector('input[aria-label="API key"]')).toBeTruthy();
+        expect(document.body.textContent).toContain("OpenAI Responses · Codex");
+        expect(managedApi.create).not.toHaveBeenCalled();
+        expect(mockAgentsApi.hire).not.toHaveBeenCalled();
+        const dialog = document.querySelector('input[aria-label="Provider URL"]')!.closest('[role="dialog"]')!;
+        const cancel = [...dialog.querySelectorAll("button")].find(button => button.textContent?.trim() === "Back")!;
+        await act(async () => cancel.click());
+        await flushReact();
+        expect(document.querySelector('input[aria-label="Provider URL"]')).toBeNull();
+        expect(document.querySelector('input[placeholder="Enter API key here"]')).toBeTruthy();
+        expect(managedApi.create).not.toHaveBeenCalled();
+      } finally {
+        await act(async () => handles.root.unmount());
+      }
+    });
+
+    it("does not automatically select a saved account for a new Codex setup", async () => {
+      managedApi.list.mockResolvedValue({ currentUserId: "user-1", connections: [{
+        id: "saved", grantId: "grant", companyId: "company-new", provider: "openai", method: "api_key",
+        name: "Saved account", ownership: "personal", ownerUserId: "user-1", status: "connected", isDefault: true,
+      }, {
+        id: "saved-sub", grantId: "grant-sub", companyId: "company-new", provider: "openai", method: "subscription",
+        name: "Saved subscription", ownership: "personal", ownerUserId: "user-1", status: "connected", isDefault: true,
+      }] } as never);
+      const handles = await openStep4({ adapterType: "codex_local", credentialModeChoice: null, gatewayDefaultPending: true });
+      try {
+        await pickSource(/Custom Gateway/);
+        await vi.waitFor(() => expect(document.querySelector('input[aria-label="Provider URL"]')).toBeTruthy());
+        expect(mockAgentsApi.testEnvironment).not.toHaveBeenCalled();
+        expect(mockAgentsApi.hire).not.toHaveBeenCalled();
+        const dialog = document.querySelector('input[aria-label="Provider URL"]')!.closest('[role="dialog"]')!;
+        await act(async () => [...dialog.querySelectorAll("button")].find(button => button.textContent?.trim() === "Back")!.click());
+        expect((document.querySelector('select[aria-label="Saved API key"]') as HTMLSelectElement).value).toBe("");
+        await flushReact();
+        expect(mockAgentsApi.testEnvironment).not.toHaveBeenCalled();
+        expect(mockAgentsApi.hire).not.toHaveBeenCalled();
+        expect(managedApi.create).not.toHaveBeenCalled();
+      } finally {
+        await act(async () => handles.root.unmount());
+        managedApi.list.mockResolvedValue({ currentUserId: "user-1", connections: [] });
+      }
+    });
+
+    it("keeps the gateway choice pending in the draft while its form is open", async () => {
+      const handles = await openStep4({ adapterType: "codex_local", credentialModeChoice: null, gatewayDefaultPending: true });
+      try {
+        await pickSource(/Custom Gateway/);
+        await vi.waitFor(() => expect(document.querySelector('input[aria-label="Provider URL"]')).toBeTruthy());
+        expect(JSON.parse(window.localStorage.getItem(ONBOARDING_STORAGE_KEY)!)).toMatchObject({ gatewayDefaultPending: true, credentialModeChoice: null });
+      } finally {
+        await act(async () => handles.root.unmount());
+      }
+    });
+
+    it("reopens an unfinished default gateway after restoring the draft", async () => {
+      const first = await openStep4({ adapterType: "codex_local", credentialModeChoice: null, gatewayDefaultPending: true });
+      await pickSource(/Custom Gateway/);
+      await vi.waitFor(() => expect(document.querySelector('input[aria-label="Provider URL"]')).toBeTruthy());
+      await act(async () => first.root.unmount());
+      const resumed = render();
+      try {
+        await renderWizardView(resumed.root, resumed.queryClient);
+        for (let i = 0; i < 5; i++) await flushReact();
+        await pickSource(/Custom Gateway/);
+        await vi.waitFor(() => expect(document.querySelector('input[aria-label="Provider URL"]')).toBeTruthy());
+        expect(managedApi.create).not.toHaveBeenCalled();
+      } finally {
+        await act(async () => resumed.root.unmount());
+      }
+    });
+
+    it("starts a new gateway choice when switching companies", async () => {
+      const handles = await openStep4({ adapterType: "codex_local", credentialModeChoice: "subscription", gatewayDefaultPending: false });
+      try {
+        mockCompany.companies.push({ id: "company-other", name: "Other", issuePrefix: "OTH" });
+        mockDialog.onboardingOptions = { initialStep: 4, companyId: "company-other" };
+        await act(async () => handles.root.render(<QueryClientProvider client={handles.queryClient}><OnboardingWizard /></QueryClientProvider>));
+        await vi.waitFor(() => expect(JSON.parse(window.localStorage.getItem(ONBOARDING_STORAGE_KEY)!)).toMatchObject({
+          createdCompanyId: "company-other", credentialModeChoice: null, gatewayDefaultPending: true,
+        }));
+        expect(document.body.textContent).toContain("Custom Gateway");
+      } finally {
+        await act(async () => handles.root.unmount());
+      }
+    });
+
+    it("honors an explicit subscription choice before selecting Codex", async () => {
+      const handles = await openStep4({ adapterType: "codex_local", credentialModeChoice: null, gatewayDefaultPending: true });
+      try {
+        const switcher = document.querySelector('[aria-label="Use subscription instead"]') as HTMLButtonElement;
+        expect(switcher).toBeTruthy();
+        await act(async () => switcher.click());
+        await pickSource(/OpenAI/);
+        expect(document.querySelector('input[aria-label="Provider URL"]')).toBeNull();
+        expect(JSON.parse(window.localStorage.getItem(ONBOARDING_STORAGE_KEY)!).credentialModeChoice).toBe("subscription");
+      } finally {
+        await act(async () => handles.root.unmount());
+      }
+    });
+
+    it("resumes an active Codex login instead of opening the default gateway", async () => {
+      mockAgentsApi.getAdapterAuthSignal.mockResolvedValue({ status: "unknown" });
+      mockAgentsApi.getActiveAdapterAuthLoginSession.mockResolvedValue({ sessionId: "codex-session-1", status: "pending" } as never);
+      const handles = await openStep4({ adapterType: "codex_local", credentialModeChoice: null, gatewayDefaultPending: true });
+      try {
+        await pickSource(/Custom Gateway/);
+        await vi.waitFor(() => expect(mockAgentsApi.getActiveAdapterAuthLoginSession).toHaveBeenCalled());
+        await flushReact();
+        expect(document.querySelector('input[aria-label="Provider URL"]')).toBeNull();
+        expect(JSON.parse(window.localStorage.getItem(ONBOARDING_STORAGE_KEY)!).credentialModeChoice).toBe("subscription");
+      } finally {
+        await act(async () => handles.root.unmount());
+      }
+    });
+
+    it("does not show a native API-key form when checking for an existing login fails", async () => {
+      mockAgentsApi.getAdapterAuthSignal.mockResolvedValue({ status: "unknown" });
+      mockAgentsApi.getActiveAdapterAuthLoginSession.mockRejectedValue(new Error("lookup failed"));
+      const handles = await openStep4({ adapterType: "codex_local", credentialModeChoice: null, gatewayDefaultPending: true });
+      try {
+        await pickSource(/Custom Gateway/);
+        await vi.waitFor(() => expect(document.body.textContent).toContain("Could not check for an existing Codex sign-in"));
+        expect(document.querySelector('input[placeholder="Enter API key here"]')).toBeNull();
+        expect(document.body.textContent).toContain("Retry sign-in check");
+        expect(mockAgentsApi.testEnvironment).not.toHaveBeenCalled();
+        expect(mockAgentsApi.hire).not.toHaveBeenCalled();
+        expect(managedApi.create).not.toHaveBeenCalled();
+      } finally {
+        await act(async () => handles.root.unmount());
+      }
+    });
+
     it.each([["successful refresh", false], ["failed refresh and retry", true]] as const)("saves a custom gateway without probing, then explicitly tests and hires with its selected model: %s", async (_scenario, failRefresh) => {
       const gatewayAccounts: import("@paperclipai/shared").AiConnectionList = {
         currentUserId: "user-1", canManageConnections: true, connections: [],

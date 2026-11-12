@@ -11,6 +11,8 @@ export function OnboardingGatewaySetup({
   adapterType,
   disabled,
   onComplete,
+  open: controlledOpen,
+  onOpenChange,
 }: {
   companyId: string;
   agentId?: string;
@@ -18,8 +20,12 @@ export function OnboardingGatewaySetup({
   adapterType: "codex_local" | "claude_local";
   disabled?: boolean;
   onComplete: (binding: Exclude<AiConnectionBinding, { mode: "responsible_user" }>) => void;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
 }) {
-  const [open, setOpen] = useState(false);
+  const [localOpen, setLocalOpen] = useState(false);
+  const open = controlledOpen ?? localOpen;
+  const setOpen = onOpenChange ?? setLocalOpen;
   return <>
     <Button type="button" variant="ghost" disabled={disabled} onClick={() => setOpen(true)}>
       Use a custom gateway

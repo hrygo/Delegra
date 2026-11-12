@@ -591,6 +591,19 @@
       "notes": "Delegra's operator preference is to start new agents with the Codex app-server through Paperclip Runner on supported targets. The picker keeps explicit choices and existing agents unchanged. This fork-specific product default is not imposed on upstream installations. Fresh isolated test drives use the same Codex runner default with their existing API-key credential flow; explicitly selected harnesses and reused data remain unchanged."
     },
     {
+      "id": "default-codex-responses-gateway",
+      "kind": "fork-only",
+      "status": "active",
+      "commits": [
+        "fdcadc7e9af28ff7ca3b195a1b69b5986c47ed33"
+      ],
+      "owner": "hrygo",
+      "reviewBy": "2026-12-11",
+      "verifiedAt": "2026-11-12",
+      "retireWhen": "An accepted upstream release can express the Delegra new-Codex custom Responses connection default without a fork-only change.",
+      "notes": "Delegra-specific preference for new Codex agents. Users supply the gateway URL and credentials. Existing agents and explicit connected choices remain unchanged. This preference is not imposed on upstream installations."
+    },
+    {
       "id": "localized-git-workspace-recovery",
       "kind": "fork-only",
       "status": "active",

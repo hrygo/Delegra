@@ -69,6 +69,7 @@ import {
   OnboardingHeading,
 } from "../onboarding/OnboardingPrimitives";
 import { stepMotion } from "../onboarding/onboarding-motion";
+import type { ModelConnectionMode } from "../onboarding/ModelSourceTiles";
 import { RuntimeTestCard, type TestState } from "../RuntimeTestCard";
 import { AgentBasicsDialog, AdapterMark } from "./AgentBasicsDialog";
 import {
@@ -190,6 +191,7 @@ function Setup({
       : undefined,
   );
   const [connection, setConnection] = useState<ProviderConnection | null>(null);
+  const [connectionMode, setConnectionMode] = useState<ModelConnectionMode | undefined>();
   const [choosingAdapter, setChoosingAdapter] = useState(false);
   const aiBinding = runtimeAiBinding ?? connection?.aiConnection;
   const connectionModels = useConnectionModels(companyId, aiBinding, brandType);
@@ -263,8 +265,8 @@ function Setup({
     setError(null);
   };
   const editConnection = () => {
+    setRuntimeAiBinding(current => current ?? connection?.aiConnection);
     setConnection(null);
-    setRuntimeAiBinding(undefined);
     resetTest();
     setScreen("connect");
   };
@@ -386,6 +388,12 @@ function Setup({
     caps.data?.sandboxProviders?.[sandboxProvider]?.supportsLoginPty === true;
   const envKey =
     isKimi ? "KIMI_API_KEY" : SETUP_CREDENTIAL_KEYS[adapterType] ?? providerKeys[provider] ?? "API_KEY";
+  const persistedCodexEnv = brandType === "codex_local" && created?.pauseReason === "setup"
+    ? created.adapterConfig.env as Record<string, unknown> | undefined : undefined;
+  const persistedCodexMode: ModelConnectionMode | undefined = persistedCodexEnv?.CODEX_HOME
+    ? "subscription"
+    : persistedCodexEnv?.OPENAI_API_KEY || (brandType === "codex_local" && created?.adapterConfig.apiKey)
+      ? "api" : undefined;
   const savedKey = userSecrets.data?.find(
     (entry) => entry.definition.key === envKey && entry.secret,
   );
@@ -652,7 +660,13 @@ function Setup({
     if (credential && typeof credential === "object" && "type" in credential
       && ["secret_ref", "user_secret_ref"].includes(String(credential.type))) setProviderBinding(credential as EnvBinding);
     const binding = agent.runtimeConfig.aiConnection as AiConnectionBinding | undefined;
-    if (binding && connectionAdapter) setConnection({ env: {}, aiConnection: binding });
+    if (binding && connectionAdapter) {
+      setConnection({ env: {}, aiConnection: binding });
+      setConnectionMode(current => current ?? (binding.method === "subscription" ? "subscription" : binding.mode === "responsible_user" ? "api" : "advanced"));
+    }
+    else if (!binding && brandType === "codex_local" && env.CODEX_HOME && typeof env.CODEX_HOME === "object") {
+      setConnection({ env: { CODEX_HOME: env.CODEX_HOME as EnvBinding } });
+    }
     else if (binding) setRuntimeAiBinding(binding);
     setScreen(binding || !connectionAdapter ? "runtime" : "connect");
   }, [savedAgent.data, companyId, connectionAdapter, brandType]);
@@ -1058,6 +1072,8 @@ function Setup({
                       environmentId={environmentId}
                       canLogin={canLogin}
                       localEnvironment={environment?.driver === "local"}
+                      initialMode={connectionMode ?? persistedCodexMode}
+                      onModeChange={setConnectionMode}
                       advancedConnection={{
                         value: aiBinding,
                         content: (
@@ -1069,6 +1085,7 @@ function Setup({
                             environmentId={environmentId ?? undefined}
                             value={aiBinding}
                             preferAdvanced
+                            defaultCustomGateway={brandType === "codex_local"}
                             onChange={binding => {
                               if (binding.mode === "router") return;
                               setConnection(null);
