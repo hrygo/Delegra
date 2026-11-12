@@ -610,13 +610,14 @@
       "status": "active",
       "commits": [
         "65994d93f8ff733b348475403dd27df6c926dae9",
-        "5dc586e76601c83e73e3e7f9dbc9488a0c90847b"
+        "5dc586e76601c83e73e3e7f9dbc9488a0c90847b",
+        "61baff98fff14c79eb5591a7b6cd0a3066681622"
       ],
       "owner": "hrygo",
       "reviewBy": "2026-12-12",
       "verifiedAt": "2026-11-12",
       "retireWhen": "An accepted upstream release offers an equivalent configurable catalog that preserves existing applications and connections, or Delegra no longer needs this catalog policy.",
-      "notes": "Curate the Browse catalog for intranet and personal workflows. Hide unreviewed entries by default while preserving native AI connection definitions, listed model providers, and all saved applications and connections. The policy does not change the server catalog, credentials, authorization, or agent runtimes."
+      "notes": "Curate the Browse catalog for intranet and personal workflows. Hide unreviewed entries by default and retain selected China-related services and other category choices while preserving saved applications and connections. The policy does not change the server catalog, credentials, authorization, or agent runtimes."
     }
   ]
 }
