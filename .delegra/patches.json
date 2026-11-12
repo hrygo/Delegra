@@ -580,13 +580,14 @@
       "kind": "fork-only",
       "status": "active",
       "commits": [
-        "830b983039baaa50e80488648d71dabc61af0385"
+        "830b983039baaa50e80488648d71dabc61af0385",
+        "2b4dc1954261288b064e76aa37d0abc9cebfad54"
       ],
       "owner": "hrygo",
       "reviewBy": "2026-12-11",
-      "verifiedAt": "2026-11-11",
+      "verifiedAt": "2026-11-12",
       "retireWhen": "An accepted upstream release can express the Delegra default without a fork-only change.",
-      "notes": "Delegra's operator preference is to start new agents with the Codex app-server through Paperclip Runner on supported targets. The picker keeps explicit choices and existing agents unchanged. This fork-specific product default is not imposed on upstream installations."
+      "notes": "Delegra's operator preference is to start new agents with the Codex app-server through Paperclip Runner on supported targets. The picker keeps explicit choices and existing agents unchanged. This fork-specific product default is not imposed on upstream installations. Fresh isolated test drives use the same Codex runner default with their existing API-key credential flow; explicitly selected harnesses and reused data remain unchanged."
     }
   ]
 }
