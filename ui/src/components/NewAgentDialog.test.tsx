@@ -98,6 +98,47 @@ async function name(value = "Ada & Co") {
   });
   await click("Choose adapter");
 }
+it("defaults a new agent to the supported Codex Paperclip Runner", async () => {
+  await act(async () => cache.setQueryData(queryKeys.adapters.availability("company-1", null), [
+    { type: "codex_local", loaded: true, supportedRunners: ["paperclip", "legacy"], defaultRunner: "paperclip" },
+    { type: "paperclip_runner", loaded: true, supportedRunners: ["paperclip"] },
+    { type: "claude_local", loaded: true, supportedRunners: ["paperclip", "legacy"] },
+  ]));
+  await name();
+  expect(document.querySelector<HTMLInputElement>('input[value="codex_local"]')?.checked).toBe(true);
+  await click("Configure agent");
+  expect(agents.update).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+    adapterType: "codex_local", runner: "paperclip", metadata: { setupAdapterPending: false },
+  }), "company-1");
+  const query = new URL(state.navigate.mock.calls[0][0], "http://local").searchParams;
+  expect(query.get("adapterType")).toBe("codex_local");
+  expect(query.get("runner")).toBe("paperclip");
+});
+it("does not preselect Codex when its Paperclip Runner is unavailable", async () => {
+  await act(async () => cache.setQueryData(queryKeys.adapters.availability("company-1", null), [
+    { type: "codex_local", loaded: true, supportedRunners: ["legacy"], defaultRunner: "legacy" },
+    { type: "paperclip_runner", loaded: true, supportedRunners: [] },
+    { type: "claude_local", loaded: true, supportedRunners: ["legacy"] },
+  ]));
+  await name();
+  expect(document.querySelector('input[name="new-agent-adapter"]:checked')).toBeNull();
+  await click("Configure agent");
+  expect(state.navigate).not.toHaveBeenCalled();
+});
+it("preserves an explicit alternative to the Codex default", async () => {
+  await act(async () => cache.setQueryData(queryKeys.adapters.availability("company-1", null), [
+    { type: "codex_local", loaded: true, supportedRunners: ["paperclip", "legacy"] },
+    { type: "paperclip_runner", loaded: true, supportedRunners: ["paperclip"] },
+    { type: "claude_local", loaded: true, supportedRunners: ["paperclip", "legacy"] },
+  ]));
+  await name();
+  await act(async () => document.querySelector<HTMLInputElement>('input[value="claude_local"]')!.click());
+  await click("Configure agent");
+  expect(agents.update).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+    adapterType: "claude_local", runner: "auto",
+  }), "company-1");
+  expect(new URL(state.navigate.mock.calls[0][0], "http://local").searchParams.get("adapterType")).toBe("claude_local");
+});
 it("requires a name and an enabled adapter before navigating", async () => {
   await click("Choose adapter");
   expect(document.body.textContent).toContain("Agent name");

@@ -907,7 +907,11 @@ async function executeProcess(input: {
     const child = spawn(input.command, input.args, {
       cwd: input.cwd,
       stdio: ["ignore", "pipe", "pipe"],
-      env: input.env ?? process.env,
+      // Workspace recovery and ref diagnostics classify Git's error text.
+      // Leave operator-provided shell commands in their original locale.
+      env: input.command === "git"
+        ? { ...(input.env ?? process.env), LC_ALL: "C", LANGUAGE: "C" }
+        : input.env ?? process.env,
     });
     const stdout = createProcessOutputCapture(input.maxStdoutBytes ?? DEFAULT_EXECUTE_PROCESS_OUTPUT_BYTES);
     const stderr = createProcessOutputCapture(input.maxStderrBytes ?? DEFAULT_EXECUTE_PROCESS_OUTPUT_BYTES);

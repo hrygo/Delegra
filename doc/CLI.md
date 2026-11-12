@@ -207,9 +207,11 @@ npx paperclipai test-drive \
   [--no-browser]
 ```
 
-Defaults are `Test Company`, a `CEO` agent with the `ceo` role, and the Claude
-harness. Without `--data-dir`, every invocation creates a unique OS temporary
-directory and prints its absolute path. The directory is retained after exit
+Defaults are `Test Company` and a `CEO` agent with the `ceo` role, using Codex
+through Paperclip Runner. A fresh default test drive requires `OPENAI_API_KEY`
+or another API key source specified below. Without `--data-dir`, every
+invocation creates a unique OS temporary directory and prints its absolute
+path. The directory is retained after exit
 for inspection. An explicit data directory is reused and is never reset. The
 reused directory must use Paperclip's embedded database; `DATABASE_URL`,
 `DATABASE_MIGRATION_URL`, and configs with `database.mode: postgres` are

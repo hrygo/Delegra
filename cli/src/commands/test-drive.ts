@@ -20,6 +20,7 @@ import { isLinkedGitWorktree } from "./git-workspace.js";
 
 export const TEST_DRIVE_HARNESSES = ["claude", "codex", "opencode"] as const;
 export type TestDriveHarness = (typeof TEST_DRIVE_HARNESSES)[number];
+const DEFAULT_TEST_DRIVE_HARNESS: TestDriveHarness = "codex";
 
 export interface TestDriveOptions {
   dataDir?: string;
@@ -239,7 +240,7 @@ export function resolveTestDriveBootstrap(
     throw new Error("--api-key and --api-key-env are mutually exclusive.");
   }
 
-  const harness = options.harness ?? "claude";
+  const harness = options.harness ?? DEFAULT_TEST_DRIVE_HARNESS;
   const definition = HARNESS_DEFINITIONS[harness];
   if (!definition) {
     throw new Error(`Unsupported test-drive harness: ${String(harness)}.`);
@@ -382,6 +383,7 @@ export async function bootstrapTestDrive(input: {
         name: resolved.agentName,
         role: "ceo",
         adapterType: resolved.adapterType,
+        ...(input.options.harness === undefined ? { runner: "paperclip" } : {}),
         adapterConfig,
       }),
       "creating the CEO agent",
@@ -432,7 +434,7 @@ export async function testDriveCommand(
   const possibleCredentials = [
     options.apiKey,
     options.apiKeyEnv ? bootstrapEnv[options.apiKeyEnv.trim()] : undefined,
-    bootstrapEnv[HARNESS_DEFINITIONS[options.harness ?? "claude"].credentialTarget],
+    bootstrapEnv[HARNESS_DEFINITIONS[options.harness ?? DEFAULT_TEST_DRIVE_HARNESS].credentialTarget],
   ];
 
   p.log.message(pc.dim(`Data directory: ${dataDir}`));
@@ -491,7 +493,7 @@ export async function testDriveCommand(
   }
 }
 
-export function registerTestDriveCommand(program: Command): void {
+export function registerTestDriveCommand(program: Command, dependencies?: TestDriveDependencies): void {
   program
     .command("test-drive")
     .description("Start an isolated, initialized Paperclip instance for manual testing")
@@ -499,9 +501,8 @@ export function registerTestDriveCommand(program: Command): void {
     .option("--company-name <name>", "Initial company name", "Test Company")
     .option("--agent-name <name>", "Initial CEO agent name", "CEO")
     .addOption(
-      new Option("--harness <harness>", "Initial agent harness")
-        .choices(TEST_DRIVE_HARNESSES)
-        .default("claude"),
+      new Option("--harness <harness>", `Initial agent harness (default: ${DEFAULT_TEST_DRIVE_HARNESS})`)
+        .choices(TEST_DRIVE_HARNESSES),
     )
     .option("--model <model-id>", "Initial agent model")
     .addOption(
@@ -514,6 +515,6 @@ export function registerTestDriveCommand(program: Command): void {
     )
     .option("--no-browser", "Do not open the initialized instance in a browser")
     .action(async (options: TestDriveOptions) => {
-      await testDriveCommand(options);
+      await testDriveCommand(options, dependencies);
     });
 }

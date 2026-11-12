@@ -156,23 +156,31 @@ describe("OnboardingWizard adapter selection", () => {
     vi.clearAllMocks();
   });
 
+  it("starts a fresh onboarding draft with Codex", async () => {
+    mockAdapterRegistry.list = [{ type: "claude_local" }, { type: "codex_local" }];
+    const { root } = await mount();
+    const saved = JSON.parse(window.localStorage.getItem(ONBOARDING_STORAGE_KEY) ?? "{}");
+    expect(saved.adapterType).toBe("codex_local");
+    await act(async () => root.unmount());
+  });
+
   it("snaps a disabled default adapterType to the first enabled adapter", async () => {
-    // A deployment whose adapter registry omits claude_local disables it, so
-    // the wizard's claude_local default must not survive as an invisible
+    // A deployment whose adapter registry disables codex_local must not keep
+    // the wizard's Codex default as an invisible
     // selection (the created agent could never acquire a lease).
     mockAdapterRegistry.list = [
       { type: "claude_local" },
       { type: "codex_local" },
       { type: "opencode_local" },
     ];
-    mockAdapterRegistry.disabled = new Set(["claude_local"]);
+    mockAdapterRegistry.disabled = new Set(["codex_local"]);
 
     const { root } = await mount();
 
     const saved = JSON.parse(
       window.localStorage.getItem(ONBOARDING_STORAGE_KEY) ?? "{}",
     );
-    expect(saved.adapterType).toBe("codex_local");
+    expect(saved.adapterType).toBe("claude_local");
 
     await act(async () => {
       root.unmount();

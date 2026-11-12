@@ -114,8 +114,12 @@ export function AgentBasicsDialog({
     ...(kimiAvailable ? [{ ...nativeRunner!, type: "kimi_runtime" }] : [])];
   const experimentalRunnerAvailable = experimental.data?.enableNativeRunner === true
     && adapters?.some(adapter => adapter.type === "paperclip_runner" && adapter.loaded && !adapter.disabled && adapter.supportedRunners?.length !== 0);
-  const validAdapter = choices.some((adapter) => adapter.type === adapterType)
-    || (experimentalRunnerAvailable && adapterType === "paperclip_runner" && (runnerProvider !== "antigravity" || antigravityQualified));
+  const defaultCodexAvailable = Boolean(nativeRunner) && choices.some(adapter =>
+    adapter.type === "codex_local" && adapter.supportedRunners?.includes("paperclip"));
+  const selectedAdapter = adapterType || (defaultCodexAvailable ? "codex_local" : "");
+  const usingDefaultCodex = !adapterType && selectedAdapter === "codex_local";
+  const validAdapter = choices.some((adapter) => adapter.type === selectedAdapter)
+    || (experimentalRunnerAvailable && selectedAdapter === "paperclip_runner" && (runnerProvider !== "antigravity" || antigravityQualified));
   async function submit() {
     if (busy.current || !name.trim() || (step === "adapter" && !validAdapter)) return;
     busy.current = true;
@@ -144,10 +148,10 @@ export function AgentBasicsDialog({
         if (active.current) setName(agent.name);
       }
       saved.current = agent;
-      const hostedCursor = cloud && adapterType === "cursor_cloud";
-      const nextAdapter = hostedCursor || ["openai_dot", "copilot_runtime", "antigravity_runtime", "kimi_runtime"].includes(adapterType) ? "paperclip_runner" : adapterType;
-      const nextProvider = hostedCursor ? "cursor_cloud" : adapterType === "kimi_runtime" ? "kimi" : adapterType === "antigravity_runtime" ? "antigravity" : adapterType === "copilot_runtime" ? "copilot" : adapterType === "openai_dot" ? "openai_dot" : adapterType === "paperclip_runner" ? runnerProvider : "codex";
-      const nextRunner = hostedCursor ? "paperclip" as const : "auto" as const;
+      const hostedCursor = cloud && selectedAdapter === "cursor_cloud";
+      const nextAdapter = hostedCursor || ["openai_dot", "copilot_runtime", "antigravity_runtime", "kimi_runtime"].includes(selectedAdapter) ? "paperclip_runner" : selectedAdapter;
+      const nextProvider = hostedCursor ? "cursor_cloud" : selectedAdapter === "kimi_runtime" ? "kimi" : selectedAdapter === "antigravity_runtime" ? "antigravity" : selectedAdapter === "copilot_runtime" ? "copilot" : selectedAdapter === "openai_dot" ? "openai_dot" : selectedAdapter === "paperclip_runner" ? runnerProvider : "codex";
+      const nextRunner = hostedCursor || usingDefaultCodex ? "paperclip" as const : "auto" as const;
       // Pending providers can show setup while the saved name-only draft stays held.
       const pendingAntigravity = nextProvider === "antigravity" && !antigravityQualified;
       if (step === "adapter" || (!creatingRecord && agent.name !== name.trim())) {
@@ -287,14 +291,14 @@ export function AgentBasicsDialog({
                           disabled={saving}
                           name="new-agent-adapter"
                           value={adapter.type}
-                          checked={adapterType === adapter.type}
+                          checked={selectedAdapter === adapter.type}
                           onChange={() => setAdapterType(adapter.type)}
                           className="peer sr-only"
                         />
                         <span
                           className={cn(
                             "flex h-full flex-col items-center gap-2 rounded-lg border px-3 py-4 text-center peer-focus-visible:ring-2 peer-focus-visible:ring-ring hover:bg-accent/40",
-                            adapterType === adapter.type
+                            selectedAdapter === adapter.type
                               ? "border-foreground/40 bg-accent"
                               : "border-border bg-card",
                           )}
@@ -306,7 +310,7 @@ export function AgentBasicsDialog({
                           {adapter.type === "antigravity_runtime" && !antigravityQualified && (
                             <span className="text-xs text-muted-foreground">{antigravityCandidate ? "Candidate" : "Not available yet"}</span>
                           )}
-                          {adapterType === adapter.type && (
+                          {selectedAdapter === adapter.type && (
                             <Check className="absolute right-2 top-2 size-3.5" />
                           )}
                         </span>

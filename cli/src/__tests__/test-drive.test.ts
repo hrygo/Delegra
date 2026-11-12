@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createServer } from "node:net";
+import { Command } from "commander";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Agent, Company, InstanceExperimentalSettings } from "@paperclipai/shared";
 import {
@@ -9,6 +10,7 @@ import {
   bootstrapTestDrive,
   prepareTestDriveEnvironment,
   reconcileTestDriveWorktreeExecution,
+  registerTestDriveCommand,
   redactTestDriveArgv,
   redactTestDriveText,
   resolveTestDriveBootstrap,
@@ -205,16 +207,20 @@ describe("test-drive data isolation", () => {
 });
 
 describe("test-drive bootstrap validation", () => {
-  it("uses Claude defaults and the canonical environment credential", () => {
-    const resolved = resolveTestDriveBootstrap({}, { ANTHROPIC_API_KEY: "anthropic-secret" });
+  it("uses Codex defaults and the canonical environment credential", () => {
+    const resolved = resolveTestDriveBootstrap({}, { OPENAI_API_KEY: "openai-secret" });
     expect(resolved).toMatchObject({
       companyName: "Test Company",
       agentName: "CEO",
-      adapterType: "claude_local",
-      credentialTarget: "ANTHROPIC_API_KEY",
-      credential: "anthropic-secret",
+      adapterType: "codex_local",
+      credentialTarget: "OPENAI_API_KEY",
+      credential: "openai-secret",
     });
     expect(resolved.model).toBeUndefined();
+  });
+
+  it("reports the required default credential when it is absent", () => {
+    expect(() => resolveTestDriveBootstrap({}, {})).toThrow(/No credential found. Set OPENAI_API_KEY/);
   });
 
   it("maps all harnesses and leaves Claude/Codex models optional", () => {
@@ -308,6 +314,23 @@ describe("test-drive bootstrap validation", () => {
 });
 
 describe("test-drive API bootstrap", () => {
+  it("creates a default Codex agent with Paperclip Runner", async () => {
+    const { api, calls } = freshBootstrapApi();
+    await bootstrapTestDrive({
+      api,
+      options: {},
+      linkedWorktree: false,
+      instanceId: "default",
+      env: { OPENAI_API_KEY: "secret" },
+    });
+
+    expect(calls.find((call) => call.path.endsWith("/agents"))?.body).toMatchObject({
+      adapterType: "codex_local",
+      runner: "paperclip",
+      adapterConfig: { env: { OPENAI_API_KEY: { type: "user_secret_ref", required: true } } },
+    });
+  });
+
   it.each([
     ["claude", "claude_local", "ANTHROPIC_API_KEY", undefined],
     ["codex", "codex_local", "OPENAI_API_KEY", undefined],
@@ -403,7 +426,7 @@ describe("test-drive API bootstrap", () => {
       options: {},
       linkedWorktree: false,
       instanceId: "default",
-      env: { ANTHROPIC_API_KEY: "secret" },
+      env: { OPENAI_API_KEY: "secret" },
     })).rejects.toThrow("agent setup failed");
     expect(calls.at(-1)).toEqual({ method: "DELETE", path: "/api/companies/company-1" });
   });
@@ -483,6 +506,29 @@ describe("test-drive foreground lifecycle", () => {
     host: "127.0.0.1",
     listenPort: 3100,
   };
+
+  it.each([
+    { args: [], adapterType: "codex_local", runner: "paperclip" },
+    { args: ["--harness", "claude"], adapterType: "claude_local", runner: undefined },
+  ])("uses the selected harness from the CLI: $adapterType", async ({ args, adapterType, runner }) => {
+    process.env.PAPERCLIP_HOME = "/tmp/test-drive-command-parse";
+    process.env.PAPERCLIP_INSTANCE_ID = "default";
+    process.env.PAPERCLIP_IN_WORKTREE = "false";
+    process.env.OPENAI_API_KEY = "openai-fixture";
+    process.env.ANTHROPIC_API_KEY = "anthropic-fixture";
+    const { api, calls } = freshBootstrapApi();
+    const program = new Command();
+    registerTestDriveCommand(program, {
+      run: async (options) => { await options.afterStart?.(server); },
+      createApi: () => api,
+      openBrowser: vi.fn(async () => true),
+    });
+
+    await program.parseAsync(["node", "paperclipai", "test-drive", "--no-browser", ...args]);
+    const body = calls.find((call) => call.path.endsWith("/agents"))?.body;
+    expect(body).toMatchObject({ adapterType });
+    expect((body as { runner?: string }).runner).toBe(runner);
+  });
 
   it.each([
     { host: "127.0.0.1", listenPort: 3107, origin: "http://127.0.0.1:3107" },
@@ -583,12 +629,12 @@ describe("test-drive foreground lifecycle", () => {
     process.env.PAPERCLIP_HOME = root;
     process.env.PAPERCLIP_INSTANCE_ID = "default";
     process.env.PAPERCLIP_IN_WORKTREE = "false";
-    process.env.ANTHROPIC_API_KEY = "upstream-secret";
+    process.env.OPENAI_API_KEY = "upstream-secret";
     const { api, calls } = freshBootstrapApi();
 
     await testDriveCommand({ browser: false }, {
       run: async (options) => {
-        delete process.env.ANTHROPIC_API_KEY;
+        delete process.env.OPENAI_API_KEY;
         await options.afterStart?.(server);
       },
       createApi: () => api,
@@ -597,7 +643,7 @@ describe("test-drive foreground lifecycle", () => {
 
     const secretValueCall = calls.find((call) => call.path.endsWith("/me/user-secrets"));
     expect(secretValueCall?.body).toEqual({
-      definitionKey: "ANTHROPIC_API_KEY",
+      definitionKey: "OPENAI_API_KEY",
       value: "upstream-secret",
     });
   });
@@ -614,6 +660,19 @@ describe("test-drive foreground lifecycle", () => {
       run: async () => {
         throw new Error("downstream rejected literal-secret");
       },
+      createApi: () => freshBootstrapApi().api,
+      openBrowser: vi.fn(async () => true),
+    })).rejects.toThrow("downstream rejected [REDACTED]");
+  });
+
+  it("redacts the default OpenAI environment key from downstream errors", async () => {
+    process.env.PAPERCLIP_HOME = "/tmp/test-drive-default-redaction";
+    process.env.PAPERCLIP_INSTANCE_ID = "default";
+    process.env.PAPERCLIP_IN_WORKTREE = "false";
+    process.env.OPENAI_API_KEY = "openai-secret";
+
+    await expect(testDriveCommand({ browser: false }, {
+      run: async () => { throw new Error("downstream rejected openai-secret"); },
       createApi: () => freshBootstrapApi().api,
       openBrowser: vi.fn(async () => true),
     })).rejects.toThrow("downstream rejected [REDACTED]");
