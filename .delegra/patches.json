@@ -589,6 +589,19 @@
       "verifiedAt": "2026-11-12",
       "retireWhen": "An accepted upstream release can express the Delegra default without a fork-only change.",
       "notes": "Delegra's operator preference is to start new agents with the Codex app-server through Paperclip Runner on supported targets. The picker keeps explicit choices and existing agents unchanged. This fork-specific product default is not imposed on upstream installations. Fresh isolated test drives use the same Codex runner default with their existing API-key credential flow; explicitly selected harnesses and reused data remain unchanged."
+    },
+    {
+      "id": "localized-git-workspace-recovery",
+      "kind": "fork-only",
+      "status": "active",
+      "commits": [
+        "bca404a66bc22e0400b02096ad952febc96aa0bd"
+      ],
+      "owner": "hrygo",
+      "reviewBy": "2026-12-11",
+      "verifiedAt": "2026-11-12",
+      "retireWhen": "An accepted upstream release handles Git workspace discovery and restore diagnostics independently of the host language.",
+      "notes": "Normalize Git diagnostics at workspace sync and hardened referenced-source scan boundaries so localized hosts correctly distinguish ordinary directories, recoverable bundle failures, and other errors."
     }
   ]
 }
