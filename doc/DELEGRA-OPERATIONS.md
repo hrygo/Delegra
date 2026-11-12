@@ -29,17 +29,21 @@ commands, branch protection, stable-upgrade process, and patch lifecycle.
 
 ## Connector catalog
 
-The Delegra Browse view omits the public marketing and commerce connectors
-listed in `ui/src/pages/apps/delegra-hidden-connectors.ts`. Model providers,
-custom connectors, and entries whose use is uncertain remain available. A
-saved application or connection stays visible even if its catalog slug is on
-the list. The list affects presentation only; it does not revoke access,
-disconnect accounts, or restrict direct API use. Update the list after review
-when the organization's requirements or upstream catalog change.
+The Delegra Browse view shows the entries curated in
+`ui/src/pages/apps/delegra-catalog-policy.ts`. Unreviewed entries are hidden
+by default. Native AI connection definitions and routers remain visible, as
+do saved applications and connections. This is a presentation preference; it
+does not revoke access, disconnect accounts, or restrict direct API use.
+
+When an upstream catalog changes, review the new entries and add relevant
+services to the list. The third-party index in this version does not describe
+which entries are model providers, so add every newly identified model provider
+to the list. Until reviewed, a new third-party provider without an existing
+connection is hidden.
 
 Keep Gitea, ClickHouse, Postgres, Tavily, Context7, and DeepSeek available in
-the catalog, along with model providers including GLM, Volcengine, Alibaba,
-MiniMax, and Kimi when their entries are present. OpenCode and Kimi Code remain
+the catalog, along with identified model providers including GLM, Volcengine,
+Alibaba, MiniMax, and Kimi when their entries are present. OpenCode and Kimi Code remain
 agent runtime choices. Catalog visibility does not add a provider or install a runtime.
 Gitea, Postgres, and DeepSeek use hosted aggregator routes in the current
 catalog; the native ClickHouse entry targets ClickHouse Cloud. For an intranet,

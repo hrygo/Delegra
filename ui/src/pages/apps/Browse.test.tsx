@@ -11,6 +11,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import type { AggregatorAppCatalogEntry } from "@paperclipai/shared/aggregator-app-catalog";
 
 const aggregatorCatalogMock = vi.hoisted(() => [] as AggregatorAppCatalogEntry[]);
+const enforceDelegraCatalogPolicy = vi.hoisted(() => ({ enabled: false }));
 const openNewIssueMock = vi.hoisted(() => vi.fn());
 const listAgentsMock = vi.hoisted(() => vi.fn());
 const setupComposioAppMock = vi.hoisted(() => vi.fn());
@@ -25,6 +26,15 @@ function genericResponse(value: { apps?: any[]; sync?: Record<string, unknown> }
       appName: snapshot.appName ?? snapshot.toolkit })) };
 }
 vi.mock("@/api/agents", () => ({ agentsApi: { list: (companyId: string) => listAgentsMock(companyId) } }));
+// Existing Browse scenarios use synthetic catalog entries. Exercise the real
+// Delegra policy in the focused cases below without coupling those scenarios
+// to the fork's curated slug list.
+vi.mock("./delegra-catalog-policy", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./delegra-catalog-policy")>();
+  return {
+    isDelegraCatalogVisible: (slug: string) => !enforceDelegraCatalogPolicy.enabled || actual.isDelegraCatalogVisible(slug),
+  };
+});
 vi.mock("@paperclipai/shared/aggregator-app-catalog", async (importOriginal) => ({
   ...await importOriginal<typeof import("@paperclipai/shared/aggregator-app-catalog")>(),
   AGGREGATOR_APP_CATALOG: aggregatorCatalogMock,
@@ -181,6 +191,7 @@ describe("Connectors landing page", () => {
   let root: ReturnType<typeof createRoot>;
 
   beforeEach(() => {
+    enforceDelegraCatalogPolicy.enabled = false;
     accountIdentity.userId = "board-user"; accountIdentity.settled = true;
     assistantConnectionsMock.mockReset().mockResolvedValue([]);
     syncComposioAppsMock.mockReset().mockImplementation((...args) => listComposioAppsMock(...args));
@@ -251,7 +262,17 @@ describe("Connectors landing page", () => {
     return client;
   }
 
-  it("hides unrelated sales and advertising connectors but keeps model and uncertain choices", async () => {
+  it("hides unreviewed connectors by default", async () => {
+    enforceDelegraCatalogPolicy.enabled = true;
+    listGalleryMock.mockResolvedValue({ apps: [getAppStoreDefinition("openai")] });
+    aggregatorCatalogMock.push(indexedApp("Unreviewed Service"));
+    await renderBrowse();
+    expect(container.querySelector('[data-app-slug="unreviewed-service"]')).toBeNull();
+    expect(container.querySelector('[data-app-slug="openai"]')).not.toBeNull();
+  });
+
+  it("hides unrelated sales and advertising connectors but keeps model and relevant choices", async () => {
+    enforceDelegraCatalogPolicy.enabled = true;
     listGalleryMock.mockResolvedValue({ apps: ["shopify", "stripe", "openai", "responses-api", "notion", "clickhouse", "tavily", "context7"].map(getAppStoreDefinition) });
     aggregatorCatalogMock.push(
       { ...indexedApp("Google Ads"), slug: "googleads" },
@@ -268,6 +289,7 @@ describe("Connectors landing page", () => {
   });
 
   it("keeps requested model providers visible if added to the catalog", async () => {
+    enforceDelegraCatalogPolicy.enabled = true;
     for (const name of ["GLM", "Volcengine", "Alibaba", "MiniMax", "Kimi"]) aggregatorCatalogMock.push(indexedApp(name));
     await renderBrowse();
     for (const slug of ["glm", "volcengine", "alibaba", "minimax", "kimi"]) {
@@ -275,7 +297,21 @@ describe("Connectors landing page", () => {
     }
   });
 
+  it("keeps an unlisted native AI provider visible", async () => {
+    enforceDelegraCatalogPolicy.enabled = true;
+    listGalleryMock.mockResolvedValue({
+      apps: [
+        { ...getAppStoreDefinition("openai"), slug: "new-native-ai-provider", name: "New native AI provider" },
+        { ...getAppStoreDefinition("openai"), slug: "new-tagged-model-provider", name: "New tagged model provider", methods: [], tags: ["model-provider"] },
+      ],
+    });
+    await renderBrowse();
+    expect(container.querySelector('[data-app-slug="new-native-ai-provider"]')).not.toBeNull();
+    expect(container.querySelector('[data-app-slug="new-tagged-model-provider"]')).not.toBeNull();
+  });
+
   it("keeps an existing connection visible even if its catalog entry is hidden", async () => {
+    enforceDelegraCatalogPolicy.enabled = true;
     listGalleryMock.mockResolvedValue({ apps: [getAppStoreDefinition("shopify")] });
     listApplicationsMock.mockResolvedValue({ applications: [application({ id: "app-shopify", name: "Shopify", applicationKey: "app-gallery:shopify:one", metadata: { sourceTemplateKey: "shopify" } })] });
     listConnectionsMock.mockResolvedValue({ connections: [connection({ id: "conn-shopify", applicationId: "app-shopify", name: "Existing shop", config: { sourceTemplateKey: "shopify" } })] });
@@ -285,10 +321,18 @@ describe("Connectors landing page", () => {
   });
 
   it("keeps an existing application visible while it has no connection", async () => {
+    enforceDelegraCatalogPolicy.enabled = true;
     listGalleryMock.mockResolvedValue({ apps: [getAppStoreDefinition("shopify")] });
     listApplicationsMock.mockResolvedValue({ applications: [application({ id: "app-shopify", name: "Shopify", applicationKey: "app-gallery:shopify:one", metadata: { sourceTemplateKey: "shopify" } })] });
     await renderBrowse();
     expect(container.querySelector('[data-app-slug="shopify"]')).not.toBeNull();
+  });
+
+  it("keeps an unreviewed aggregator app visible when it has an account", async () => {
+    enforceDelegraCatalogPolicy.enabled = true;
+    composioFixture();
+    await renderBrowse();
+    expect(container.querySelector('[data-app-slug="circleback"]')?.textContent).toContain("Meeting notes");
   });
 
   it("shows provider catalog rows and splits legacy gateway accounts by API format", async () => {
