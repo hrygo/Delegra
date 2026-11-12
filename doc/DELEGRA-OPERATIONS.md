@@ -29,6 +29,11 @@ commands, branch protection, stable-upgrade process, and patch lifecycle.
 
 ## Codex account and workspace configuration
 
+When Paperclip Runner and its Codex adapter are available, new agents and the
+initial company setup select Codex on Paperclip Runner by default. Operators can
+choose another available adapter. Existing agents retain their configuration.
+Connect an OpenAI account before starting an agent that uses its subscription.
+
 Use [AI Connections](connections/AI-CONNECTIONS.md) to select a personal or
 company-shared account. The selected connection owns provider routing. Keep
 gateway credentials in the existing encrypted secret store.
