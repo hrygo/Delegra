@@ -493,7 +493,7 @@ export async function testDriveCommand(
   }
 }
 
-export function registerTestDriveCommand(program: Command): void {
+export function registerTestDriveCommand(program: Command, dependencies?: TestDriveDependencies): void {
   program
     .command("test-drive")
     .description("Start an isolated, initialized Paperclip instance for manual testing")
@@ -501,9 +501,8 @@ export function registerTestDriveCommand(program: Command): void {
     .option("--company-name <name>", "Initial company name", "Test Company")
     .option("--agent-name <name>", "Initial CEO agent name", "CEO")
     .addOption(
-      new Option("--harness <harness>", "Initial agent harness")
-        .choices(TEST_DRIVE_HARNESSES)
-        .default("claude"),
+      new Option("--harness <harness>", `Initial agent harness (default: ${DEFAULT_TEST_DRIVE_HARNESS})`)
+        .choices(TEST_DRIVE_HARNESSES),
     )
     .option("--model <model-id>", "Initial agent model")
     .addOption(
@@ -516,6 +515,6 @@ export function registerTestDriveCommand(program: Command): void {
     )
     .option("--no-browser", "Do not open the initialized instance in a browser")
     .action(async (options: TestDriveOptions) => {
-      await testDriveCommand(options);
+      await testDriveCommand(options, dependencies);
     });
 }

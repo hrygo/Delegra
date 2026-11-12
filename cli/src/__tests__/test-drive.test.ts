@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createServer } from "node:net";
+import { Command } from "commander";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Agent, Company, InstanceExperimentalSettings } from "@paperclipai/shared";
 import {
@@ -9,6 +10,7 @@ import {
   bootstrapTestDrive,
   prepareTestDriveEnvironment,
   reconcileTestDriveWorktreeExecution,
+  registerTestDriveCommand,
   redactTestDriveArgv,
   redactTestDriveText,
   resolveTestDriveBootstrap,
@@ -504,6 +506,29 @@ describe("test-drive foreground lifecycle", () => {
     host: "127.0.0.1",
     listenPort: 3100,
   };
+
+  it.each([
+    { args: [], adapterType: "codex_local", runner: "paperclip" },
+    { args: ["--harness", "claude"], adapterType: "claude_local", runner: undefined },
+  ])("uses the selected harness from the CLI: $adapterType", async ({ args, adapterType, runner }) => {
+    process.env.PAPERCLIP_HOME = "/tmp/test-drive-command-parse";
+    process.env.PAPERCLIP_INSTANCE_ID = "default";
+    process.env.PAPERCLIP_IN_WORKTREE = "false";
+    process.env.OPENAI_API_KEY = "openai-fixture";
+    process.env.ANTHROPIC_API_KEY = "anthropic-fixture";
+    const { api, calls } = freshBootstrapApi();
+    const program = new Command();
+    registerTestDriveCommand(program, {
+      run: async (options) => { await options.afterStart?.(server); },
+      createApi: () => api,
+      openBrowser: vi.fn(async () => true),
+    });
+
+    await program.parseAsync(["node", "paperclipai", "test-drive", "--no-browser", ...args]);
+    const body = calls.find((call) => call.path.endsWith("/agents"))?.body;
+    expect(body).toMatchObject({ adapterType });
+    expect((body as { runner?: string }).runner).toBe(runner);
+  });
 
   it.each([
     { host: "127.0.0.1", listenPort: 3107, origin: "http://127.0.0.1:3107" },
