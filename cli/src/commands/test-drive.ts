@@ -20,6 +20,7 @@ import { isLinkedGitWorktree } from "./git-workspace.js";
 
 export const TEST_DRIVE_HARNESSES = ["claude", "codex", "opencode"] as const;
 export type TestDriveHarness = (typeof TEST_DRIVE_HARNESSES)[number];
+const DEFAULT_TEST_DRIVE_HARNESS: TestDriveHarness = "codex";
 
 export interface TestDriveOptions {
   dataDir?: string;
@@ -239,7 +240,7 @@ export function resolveTestDriveBootstrap(
     throw new Error("--api-key and --api-key-env are mutually exclusive.");
   }
 
-  const harness = options.harness ?? "claude";
+  const harness = options.harness ?? DEFAULT_TEST_DRIVE_HARNESS;
   const definition = HARNESS_DEFINITIONS[harness];
   if (!definition) {
     throw new Error(`Unsupported test-drive harness: ${String(harness)}.`);
@@ -382,6 +383,7 @@ export async function bootstrapTestDrive(input: {
         name: resolved.agentName,
         role: "ceo",
         adapterType: resolved.adapterType,
+        ...(input.options.harness === undefined ? { runner: "paperclip" } : {}),
         adapterConfig,
       }),
       "creating the CEO agent",
@@ -432,7 +434,7 @@ export async function testDriveCommand(
   const possibleCredentials = [
     options.apiKey,
     options.apiKeyEnv ? bootstrapEnv[options.apiKeyEnv.trim()] : undefined,
-    bootstrapEnv[HARNESS_DEFINITIONS[options.harness ?? "claude"].credentialTarget],
+    bootstrapEnv[HARNESS_DEFINITIONS[options.harness ?? DEFAULT_TEST_DRIVE_HARNESS].credentialTarget],
   ];
 
   p.log.message(pc.dim(`Data directory: ${dataDir}`));
