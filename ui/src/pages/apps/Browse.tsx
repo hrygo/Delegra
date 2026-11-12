@@ -1,6 +1,7 @@
 import { AGGREGATOR_NAMES, aggregatorManagementUrl, isAppAggregator, type AggregatorAppSnapshot, type AggregatorAppsResponse } from "@paperclipai/shared/aggregator-apps";
 import type { CatalogSource } from "./CatalogSourceFilters";
 import { ConnectorsToolbar } from "./ConnectorsToolbar";
+import { DELEGRA_HIDDEN_CONNECTOR_SLUGS } from "./delegra-hidden-connectors";
 import { ExecutorManagementSetup } from "./ExecutorManagementSetup";
 import { ArcadeDiscoverySetup } from "./ArcadeDiscoverySetup";
 import { AggregatorAppManager } from "./AggregatorAppManager";
@@ -803,6 +804,7 @@ export function Browse({ renderAccountDetails = (connection) => connection.conne
   const trimmed = query.trim().toLocaleLowerCase();
   const visibleRows = useMemo(() => {
     const scoped = rows.filter((row) => {
+      if (DELEGRA_HIDDEN_CONNECTOR_SLUGS.has(row.slug) && !isInstalled(row) && row.applications.length === 0) return false;
       if (source === "all") return true;
       if (source === "installed") return isInstalled(row);
       if (source === "paperclip") return !row.aggregatorApp || isInstalled(row);

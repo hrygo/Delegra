@@ -251,6 +251,46 @@ describe("Connectors landing page", () => {
     return client;
   }
 
+  it("hides unrelated sales and advertising connectors but keeps model and uncertain choices", async () => {
+    listGalleryMock.mockResolvedValue({ apps: ["shopify", "stripe", "openai", "responses-api", "notion", "clickhouse", "tavily", "context7"].map(getAppStoreDefinition) });
+    aggregatorCatalogMock.push(
+      { ...indexedApp("Google Ads"), slug: "googleads" },
+      indexedApp("Gitea"), indexedApp("Postgres", ["arcade"]), indexedApp("DeepSeek"), indexedApp("Dify"),
+      { ...indexedApp("BytePlus Ark"), slug: "byte-plus-ark" },
+    );
+    await renderBrowse();
+    for (const slug of ["shopify", "stripe", "googleads"]) {
+      expect(container.querySelector(`[data-app-slug="${slug}"]`)).toBeNull();
+    }
+    for (const slug of ["openai", "responses-api", "notion", "gitea", "clickhouse", "postgres", "tavily", "context7", "deepseek", "dify", "byte-plus-ark"]) {
+      expect(container.querySelector(`[data-app-slug="${slug}"]`)).not.toBeNull();
+    }
+  });
+
+  it("keeps requested model providers visible if added to the catalog", async () => {
+    for (const name of ["GLM", "Volcengine", "Alibaba", "MiniMax", "Kimi"]) aggregatorCatalogMock.push(indexedApp(name));
+    await renderBrowse();
+    for (const slug of ["glm", "volcengine", "alibaba", "minimax", "kimi"]) {
+      expect(container.querySelector(`[data-app-slug="${slug}"]`)).not.toBeNull();
+    }
+  });
+
+  it("keeps an existing connection visible even if its catalog entry is hidden", async () => {
+    listGalleryMock.mockResolvedValue({ apps: [getAppStoreDefinition("shopify")] });
+    listApplicationsMock.mockResolvedValue({ applications: [application({ id: "app-shopify", name: "Shopify", applicationKey: "app-gallery:shopify:one", metadata: { sourceTemplateKey: "shopify" } })] });
+    listConnectionsMock.mockResolvedValue({ connections: [connection({ id: "conn-shopify", applicationId: "app-shopify", name: "Existing shop", config: { sourceTemplateKey: "shopify" } })] });
+    await renderBrowse();
+    expect(container.querySelector('[data-app-slug="shopify"]')?.textContent).toContain("Existing shop");
+    expect(archiveConnectionMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps an existing application visible while it has no connection", async () => {
+    listGalleryMock.mockResolvedValue({ apps: [getAppStoreDefinition("shopify")] });
+    listApplicationsMock.mockResolvedValue({ applications: [application({ id: "app-shopify", name: "Shopify", applicationKey: "app-gallery:shopify:one", metadata: { sourceTemplateKey: "shopify" } })] });
+    await renderBrowse();
+    expect(container.querySelector('[data-app-slug="shopify"]')).not.toBeNull();
+  });
+
   it("shows provider catalog rows and splits legacy gateway accounts by API format", async () => {
     const slugs = ["notion", "openrouter", "bedrock", "google", "responses-api", "messages-api", "chat-completions-api", "local"];
     listGalleryMock.mockResolvedValue({ apps: slugs.map(slug => getAppStoreDefinition(slug)) });

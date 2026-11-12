@@ -27,6 +27,25 @@ upstream package names and data formats so upgrades remain reviewable.
 See [the branch and release workflow](DELEGRA-BRANCH-WORKFLOW.md) for the
 commands, branch protection, stable-upgrade process, and patch lifecycle.
 
+## Connector catalog
+
+The Delegra Browse view omits the public marketing and commerce connectors
+listed in `ui/src/pages/apps/delegra-hidden-connectors.ts`. Model providers,
+custom connectors, and entries whose use is uncertain remain available. A
+saved application or connection stays visible even if its catalog slug is on
+the list. The list affects presentation only; it does not revoke access,
+disconnect accounts, or restrict direct API use. Update the list after review
+when the organization's requirements or upstream catalog change.
+
+Keep Gitea, ClickHouse, Postgres, Tavily, Context7, and DeepSeek available in
+the catalog, along with model providers including GLM, Volcengine, Alibaba,
+MiniMax, and Kimi when their entries are present. OpenCode and Kimi Code remain
+agent runtime choices. Catalog visibility does not add a provider or install a runtime.
+Gitea, Postgres, and DeepSeek use hosted aggregator routes in the current
+catalog; the native ClickHouse entry targets ClickHouse Cloud. For an intranet,
+connect an appropriate self-hosted MCP server or compatible gateway instead
+where one is available and authorized.
+
 ## Codex account and workspace configuration
 
 When Paperclip Runner and its Codex adapter are available, new agents and the
