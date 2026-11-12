@@ -117,7 +117,9 @@ export async function runLocalGit(
       {
         timeout: options.timeout ?? 15_000,
         maxBuffer: options.maxBuffer ?? 1024 * 128,
-        env: options.env ?? process.env,
+        // Several recovery paths classify Git diagnostics. Keep those
+        // diagnostics stable even when the host language is not English.
+        env: { ...(options.env ?? process.env), LC_ALL: "C", LANGUAGE: "C" },
       },
       (error, stdout, stderr) => {
         if (error) {
@@ -333,6 +335,9 @@ function buildHardenedGitEnv(): NodeJS.ProcessEnv {
   }
   env.GIT_CONFIG_NOSYSTEM = "1";
   env.GIT_CONFIG_GLOBAL = "/dev/null";
+  // The non-repository diagnostic is parsed by isNotAGitRepositoryError.
+  env.LC_ALL = "C";
+  env.LANGUAGE = "C";
   return env;
 }
 

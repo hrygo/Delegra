@@ -5,7 +5,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { workspacePaths } from "./workspace-manifest.js";
 import { runWorkspaceGitProcess } from "./workspace-git-stream.js";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { getWorkspaceRestoreDiagnostic, withWorkspaceRestoreDiagnostics, withWorkspaceRestoreStep, withWorkspaceRestoreGitCommand } from "./workspace-restore-diagnostics.js";
 
 import {
@@ -57,6 +57,7 @@ describe("git workspace sync", () => {
 
   afterEach(async () => {
     setExpensiveWorkspaceGitExecutor(null);
+    vi.unstubAllEnvs();
     for (const snapshot of snapshots.splice(0)) await disposeGitWorkspaceSnapshot(snapshot);
     while (cleanupDirs.length > 0) {
       const dir = cleanupDirs.pop();
@@ -64,6 +65,48 @@ describe("git workspace sync", () => {
       await rm(dir, { recursive: true, force: true }).catch(() => undefined);
     }
   }, 30_000); // The output-limit fixture removes 40,000 files on teardown.
+
+  it.skipIf(process.platform === "win32").each(["workspace snapshot", "scheduled referenced-source scan"])(
+    "recognizes a non-Git directory with localized Git messages: %s", async (operation) => {
+      const rootDir = await mkdtemp(path.join(os.tmpdir(), "paperclip-git-locale-"));
+      cleanupDirs.push(rootDir);
+      const binDir = path.join(rootDir, "bin");
+      const plainDir = path.join(rootDir, "plain");
+      await mkdir(binDir);
+      await mkdir(plainDir);
+      // Model a Git installation with translated diagnostics, independent of
+      // which language packs happen to be installed on the test machine.
+      await writeFile(path.join(binDir, "git"), `#!/bin/sh
+if [ "$PAPERCLIP_TEST_CORRUPT_GIT" = 1 ]; then
+  echo 'fatal: bad object HEAD' >&2
+  exit 128
+fi
+if [ "$LC_ALL" = C ]; then
+  echo 'fatal: not a git repository (or any of the parent directories): .git' >&2
+else
+  echo '致命错误：不是 Git 仓库' >&2
+fi
+exit 128
+`, { mode: 0o755 });
+      vi.stubEnv("PATH", `${binDir}${path.delimiter}${process.env.PATH ?? ""}`);
+      vi.stubEnv("LC_ALL", "zh_CN.UTF-8");
+      vi.stubEnv("LANGUAGE", "zh_CN");
+
+      if (operation === "workspace snapshot") {
+        await expect(readRawSnapshot(plainDir)).resolves.toBeNull();
+        vi.stubEnv("PAPERCLIP_TEST_CORRUPT_GIT", "1");
+        await expect(readRawSnapshot(plainDir)).rejects.toThrow();
+      } else {
+        setExpensiveWorkspaceGitExecutor((input) => runWorkspaceGitProcess({
+          cwd: input.localDir, args: input.args, timeoutMs: input.timeout,
+          maxStdoutBytes: input.maxBuffer, maxStderrBytes: input.maxBuffer, env: input.env,
+        }));
+        await expect(readReferencedSourceGitIgnoredPaths(plainDir)).resolves.toBeNull();
+        vi.stubEnv("PAPERCLIP_TEST_CORRUPT_GIT", "1");
+        await expect(readReferencedSourceGitIgnoredPaths(plainDir)).rejects.toThrow();
+      }
+    },
+  );
 
   it("delegates every host-side full-tree enumeration to the registered scheduler", async () => {
     const rootDir = await mkdtemp(path.join(os.tmpdir(), "paperclip-git-scheduler-hook-"));
