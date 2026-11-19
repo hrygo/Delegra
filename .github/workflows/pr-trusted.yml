@@ -189,7 +189,7 @@ jobs:
               echo '::error title=Stable upgrade lockfile policy::The upgrade must merge v2026.1117.0 and keep its published lock content.'
               exit 1
             fi
-            echo 'writer=upstream-stable' >> "$GITHUB_OUTPUT"
+            printf 'writer=upstream-stable\nupstream_base=%s\ndeploy_base=%s\n' "$stable" "$trusted_base" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           policy="$RUNNER_TEMP/lockfile-trust.mjs"
@@ -230,10 +230,26 @@ jobs:
           run_install: false
 
       - name: Validate migration ordering against target branch
-        run: >-
-          node .github/scripts/check-pr-migration-order.mjs
-          "${{ github.event.pull_request.base.sha }}"
-          "${{ github.event.pull_request.head.sha }}"
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          STABLE_SHA: ${{ steps.lockfile_writer.outputs.upstream_base }}
+          DEPLOY_SHA: ${{ steps.lockfile_writer.outputs.deploy_base }}
+        run: |
+          if [ -n "$STABLE_SHA" ]; then
+            legacy='packages/db/src/migrations/0429_superb_paibok.sql'
+            moved='packages/db/src/migrations/0452_gigantic_owl.sql'
+            receipt="$(git rev-parse --verify "$DEPLOY_SHA:$legacy")"
+            for revision in "$HEAD_SHA" "$GITHUB_SHA"; do
+              if ! git diff --quiet "$STABLE_SHA" "$revision" -- ':(glob)packages/db/src/migrations/*.sql' ":(exclude)$moved" ||
+                 [ "$(git rev-parse --verify "$revision:$moved")" != "$receipt" ]; then
+                echo '::error title=Stable upgrade migration policy::Preserve upstream SQL and carry the original Delegra migration to 0452 byte for byte.'
+                exit 1
+              fi
+            done
+            BASE_SHA="$STABLE_SHA"
+          fi
+          node .github/scripts/check-pr-migration-order.mjs "$BASE_SHA" "$HEAD_SHA"
 
       - name: Validate Dockerfile deps stage
         run: |

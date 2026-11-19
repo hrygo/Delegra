@@ -26,6 +26,10 @@ The `upgrade/v2026.1117.0` pull request can carry lock content from the
 published `v2026.1117.0` source. The policy checks tag ancestry and requires
 identical lockfiles and reporting lock proof at both the PR head and tested
 merge. Once `deploy` contains the tag, its normal lockfile policy applies.
+For this adoption, migration ordering uses the verified stable source. The
+gate requires the upstream SQL stream and the published Delegra SQL at `0452`
+on both the PR head and tested merge. Lock content and migration changes
+trigger the fork policy and matrix even when no application code changes.
 
 The fork uses GitHub-hosted runners: the routing workflow selects the upstream
 AWS fleet only for `paperclipai/paperclip` and its repository ID. The upstream

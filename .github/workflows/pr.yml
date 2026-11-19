@@ -13,9 +13,8 @@ permissions:
 
 jobs:
   # The full matrix costs far more than the cheap checks below, so it runs only
-  # when a PR can actually break CI or when a maintainer asks for it: a change to
-  # the workflows, the composite actions, or the scripts they call, or the
-  # full-ci / profile-ci label. Everything else keeps the incremental
+  # for CI, migration, or protected lock content changes, or when a maintainer
+  # requests it with the full-ci or profile-ci label. Other changes keep the incremental
   # qualification workflows and the branch policy check.
   scope:
     name: PR scope
@@ -39,7 +38,11 @@ jobs:
           if [[ " $labels " == *" full-ci "* || " $labels " == *" profile-ci "* ]]; then
             echo "reason=label"
             echo "run_matrix=true" >> "$GITHUB_OUTPUT"
-          elif grep -Eq '^(\.github/(workflows|actions)/|scripts/)' <<<"$changed"; then
+          elif grep -Eq '^(\.github/(workflows|actions)/|scripts/|packages/db/src/migrations/)' <<<"$changed" ||
+               grep -Fqx -e 'pnpm-lock.yaml' \
+                 -e 'packages/plugins/sandbox-providers/daytona/pnpm-lock.yaml' \
+                 -e 'tests/runner-e2e/report-lock.json' \
+                 -e 'tests/runner-e2e/report-lock.patch' <<<"$changed"; then
             echo "reason=ci-paths"
             echo "run_matrix=true" >> "$GITHUB_OUTPUT"
           else
