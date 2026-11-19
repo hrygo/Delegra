@@ -1,27 +1,31 @@
 # Shared PR CI snapshot
 
-`pr-delegra-trusted.yml` is a snapshot of the deploy baseline's
-`pr-trusted.yml`. Its nested `ci-routing.yml` call is pinned to the matching
-upstream commit. `pr.yml` calls the snapshot by the fork commit that contains
-it. This prevents a moving upstream workflow from requiring scripts that do
-not exist in deploy. The consistency job checks both the snapshot against
-`pr-trusted.yml`, the caller SHA against the snapshot, and the pinned routing
-content against the candidate `ci-routing.yml` on every PR.
+`pr-delegra-trusted.yml` snapshots the candidate's `pr-trusted.yml` and calls
+the `ci-routing-delegra.yml` snapshot by its fork commit. `pr.yml` also pins
+its snapshot to a fork commit. The routing snapshot reads planner inputs from
+the accepted upstream source. A stable tag's upstream ancestor can supply
+those inputs when every planner input and the routing workflow match the tag.
+The consistency job checks the snapshots, their pins, and the candidate task
+matrix on each pull request.
 
 To update CI with a deploy upgrade or a deliberate workflow change:
 
 1. Review the new upstream workflow, routing workflow and every referenced
    script and command against the candidate deploy tree. Preserve all gates.
-2. Update `pr-trusted.yml` and the snapshot together; the only allowed
-   difference is the full SHA used by the snapshot's `ci-routing.yml` call.
-   The routing pin must identify a commit whose `ci-routing.yml` matches the
-   candidate baseline. Commit the snapshot before updating its caller SHA.
-3. Set the `pr.yml` snapshot reference to that commit, run
+2. Stage and commit the fork routing snapshot with its upstream planner pin.
+   Regenerate `pr-delegra-trusted.yml` from `pr-trusted.yml` using that fork
+   commit for its nested routing call, then commit the trusted snapshot.
+3. Set the `pr.yml` snapshot reference to the trusted snapshot's commit, run
    `node scripts/check-delegra-shared-ci.mjs`, validate both workflow files,
    and register fork-only code commits in `.delegra/patches.json`.
 4. Push the complete candidate branch and verify an actual PR run, including
    routing, policy, all applicable test and build gates, and consistency.
    A local snapshot commit cannot be resolved by GitHub before it is pushed.
+
+The `upgrade/v2026.1117.0` pull request can carry lock content from the
+published `v2026.1117.0` source. The policy checks tag ancestry and requires
+identical lockfiles and reporting lock proof at both the PR head and tested
+merge. Once `deploy` contains the tag, its normal lockfile policy applies.
 
 The fork uses GitHub-hosted runners: the routing workflow selects the upstream
 AWS fleet only for `paperclipai/paperclip` and its repository ID. The upstream

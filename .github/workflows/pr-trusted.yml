@@ -161,6 +161,7 @@ jobs:
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
           HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
           HEAD_REF: ${{ github.head_ref }}
+          BASE_REF: ${{ github.base_ref }}
         run: |
           # GitHub does not move pull_request.base.sha forward on every push, so
           # it can name an old base-branch commit. The checkout is GitHub's merge
@@ -169,6 +170,27 @@ jobs:
           trusted_base="$BASE_SHA"
           if [ "$(git rev-parse --verify --quiet "$GITHUB_SHA^2")" = "$HEAD_SHA" ]; then
             trusted_base="$(git rev-parse "$GITHUB_SHA^1")"
+          fi
+          # Accept the published lock content only during this stable adoption.
+          stable=c0f132898d2a2677312d8c72096187b27a3d9a38
+          if [ "$GITHUB_REPOSITORY" = 'hrygo/Delegra' ] && [ "$HEAD_REPO" = "$GITHUB_REPOSITORY" ] &&
+             [ "${BASE_REF:-}" = 'deploy' ] && [ "$HEAD_REF" = 'upgrade/v2026.1117.0' ] &&
+             ! git merge-base --is-ancestor "$stable" "$trusted_base"; then
+            lock_paths=(
+              pnpm-lock.yaml
+              scripts/typecheck-sandbox-providers/pnpm-lock.yaml
+              packages/plugins/sandbox-providers/daytona/pnpm-lock.yaml
+              tests/runner-e2e/report-lock.json
+              tests/runner-e2e/report-lock.patch
+            )
+            if ! git merge-base --is-ancestor "$stable" "$HEAD_SHA" ||
+               ! git diff --quiet "$stable" "$HEAD_SHA" -- "${lock_paths[@]}" ||
+               ! git diff --quiet "$stable" "$GITHUB_SHA" -- "${lock_paths[@]}"; then
+              echo '::error title=Stable upgrade lockfile policy::The upgrade must merge v2026.1117.0 and keep its published lock content.'
+              exit 1
+            fi
+            echo 'writer=upstream-stable' >> "$GITHUB_OUTPUT"
+            exit 0
           fi
           policy="$RUNNER_TEMP/lockfile-trust.mjs"
           if git show "$trusted_base:.github/scripts/lockfile-trust.mjs" > "$policy" 2>/dev/null; then

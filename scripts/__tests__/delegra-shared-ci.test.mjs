@@ -36,12 +36,14 @@ function check(dir) {
   });
 }
 
-test('the fork routing snapshot pins trusted planner inputs to the accepted overlay', () => {
+test('the fork routing snapshot pins trusted planner inputs to the accepted stable lineage', () => {
   const caller = readFileSync(join(root, '.github/workflows/pr-delegra-trusted.yml'), 'utf8');
   assert.match(caller, /hrygo\/Delegra\/\.github\/workflows\/ci-routing-delegra\.yml@[0-9a-f]{40}/);
   const routing = readFileSync(join(root, '.github/workflows/ci-routing-delegra.yml'), 'utf8');
   const config = JSON.parse(readFileSync(join(root, '.delegra/patches.json'), 'utf8'));
-  assert.match(routing, new RegExp(`trusted="${config.upstreamOverlays[0].commit}"`));
+  const pin = routing.match(/^\s*trusted="([0-9a-f]{40})"$/m)?.[1];
+  assert.ok(pin);
+  execFileSync('git', ['merge-base', '--is-ancestor', pin, config.base.commit], { cwd: root });
   assert.doesNotMatch(routing, /^\s*trusted="\$\(/m);
 });
 
@@ -100,6 +102,16 @@ test('rejects a planner pin outside the accepted upstream sources', (t) => {
   assert.match(result.stderr, /not an accepted upstream base or overlay/);
 });
 
+test('rejects a stable ancestor with a different planner input', (t) => {
+  const dir = fixture(t);
+  const file = join(dir, '.github/workflows/ci-routing-delegra.yml');
+  const canary = 'd7283e875772ca8c684dc86e471e6b48d543b7b1';
+  writeFileSync(file, readFileSync(file, 'utf8').replace(/trusted="[0-9a-f]{40}"/, `trusted="${canary}"`));
+  const result = check(dir);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /stable ancestor with identical planner inputs/);
+});
+
 test('rejects a planner pin that is not reachable from the master mirror', (t) => {
   const mirror = ['origin/master', 'master'].find((ref) => {
     try {
@@ -120,7 +132,7 @@ test('rejects a planner pin that is not reachable from the master mirror', (t) =
   writeFileSync(file, snapshot.replace(/trusted="[0-9a-f]{40}"/, `trusted="${forkCommit}"`));
   const registryPath = join(dir, '.delegra/patches.json');
   const registry = JSON.parse(readFileSync(registryPath, 'utf8'));
-  registry.upstreamOverlays[0].commit = forkCommit;
+  registry.base.commit = forkCommit;
   writeFileSync(registryPath, JSON.stringify(registry));
   const result = check(dir);
   assert.notEqual(result.status, 0);
