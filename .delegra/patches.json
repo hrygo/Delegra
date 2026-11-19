@@ -38,21 +38,9 @@
   },
   "base": {
     "kind": "stable",
-    "ref": "v2026.1106.0",
-    "commit": "d69631b01b9c658f80bf8bed389863dce82643e1"
+    "ref": "v2026.1117.0",
+    "commit": "c0f132898d2a2677312d8c72096187b27a3d9a38"
   },
-  "upstreamOverlays": [
-    {
-      "kind": "canary",
-      "ref": "canary/v2026.1104.0-canary.1",
-      "commit": "d7283e875772ca8c684dc86e471e6b48d543b7b1",
-      "transitionalWaiver": {
-        "reason": "The stable tag's source predates the accepted canary. Retain its managed Codex fixes, native recovery behavior, and database migration history until a suitable stable release contains them.",
-        "expiresOn": "2026-12-31",
-        "replaceWith": "A stable tag containing the accepted canary commit or an independently verified equivalent"
-      }
-    }
-  ],
   "internalPaths": [
     ".delegra/",
     "doc/DELEGRA-",
@@ -242,7 +230,7 @@
       "reviewBy": "2026-11-30",
       "verifiedAt": "2026-10-26",
       "retireWhen": "The accepted upstream stable base supplies an equivalent company-level reference-rate editor and a separate estimate report for gateway and subscription usage.",
-      "notes": "Withdrawn at the operator request on 2026-10-26. The second commit reverses the reference-rate API, shared estimator, Providers editor, and related feature documentation from PR #17. The executed SQL migration stays as inert compatibility history; during the canary v2026.1104.0-canary.1 merge it was renumbered 0378 -> 0429 with a rebuilt journal entry and snapshot because upstream allocated 0378."
+      "notes": "The reference-rate API, estimator, and editor are retired. Migration 0452_gigantic_owl preserves the published SQL byte for byte as compatibility history. The migration executor recognizes the same hash and legacy filename receipts."
     },
     {
       "id": "codex-structured-launch-policy",
@@ -311,8 +299,8 @@
       "owner": "hrygo",
       "reviewBy": "2026-11-30",
       "verifiedAt": "2026-10-27",
-      "retireWhen": "The accepted stable base applies an explicit allow-unpriced policy consistently to terminal pending usage, operator resume and final native dispatch recovery checks.",
-      "notes": "The local operator allows unavailable costs to be valued as zero for budget admission. Keep unknown and pending accounting evidence, actual charges, held reservations and manual pauses. Open native recovery still gates new work; final dispatch checks other recoveries in the same scope and UTC window. No receipt completion, hold release, schema change or default-policy change. Focused real PostgreSQL regressions and independent review cover admission, operator resume, final-dispatch interleaving and UTC month boundaries; full repository checks and live rollout are separate evidence."
+      "retireWhen": "The accepted stable base preserves Delegra's unpriced admission behavior and prioritizes the known budget limit when both conditions apply.",
+      "notes": "Explicit allow-unpriced policies admit accounting exposure while retaining usage evidence, held reservations, and enforcement of known hard limits and manual pauses. The known hard limit is reported first when unpriced usage is also present. Pending native recovery follows upstream's durable settlement and continuation contract."
     },
     {
       "id": "remote-anchor-workspace-error",
@@ -539,7 +527,7 @@
     {
       "id": "portable-runner-binary-fixtures",
       "kind": "fork-only",
-      "status": "active",
+      "status": "absorbed",
       "commits": [
         "079ef586db51e2f9c4e10d096b471b0f4247b4d8"
       ],
@@ -547,7 +535,7 @@
       "reviewBy": "2026-11-30",
       "verifiedAt": "2026-11-11",
       "retireWhen": "An accepted stable release supplies runner binary staging fixtures that work with multicall coreutils.",
-      "notes": "Exercises atomic replacement and rebuild with independently executable shell fixtures instead of assuming system coreutils retain their behavior after being renamed."
+      "notes": "Stable v2026.1117.0 covers atomic replacement and rebuild with a standalone sleep and shell fixture in 21eb47455e and 6b438365ea."
     },
     {
       "id": "portable-codex-policy-fixtures",
@@ -565,7 +553,7 @@
     {
       "id": "portable-sandbox-shell-status",
       "kind": "fork-only",
-      "status": "active",
+      "status": "absorbed",
       "commits": [
         "63b40d6d0496763cbfc0d3fca2ba932aacc062cd"
       ],
@@ -573,7 +561,7 @@
       "reviewBy": "2026-11-30",
       "verifiedAt": "2026-11-11",
       "retireWhen": "An accepted upstream release verifies sandbox write denial without assuming a shell-specific exit code.",
-      "notes": "Require a normal, unsuccessful shell exit and an unchanged protected file when a workspace command attempts an external write; shells may return different nonzero redirection statuses."
+      "notes": "Stable v2026.1117.0 accepts nonzero shell redirection exit statuses in e5b60e5115 and verifies the protected file remains unchanged."
     },
     {
       "id": "default-codex-app-server",

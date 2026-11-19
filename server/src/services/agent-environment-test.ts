@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { probePluginRunnerEnvironment } from "./native-runtime/plugin-runner-probe.js";
+import { pluginRunnerAiConnectionRequiredTestResult } from "./plugin-runner-ai-connection.js";
 import { registerPluginTaskCredentialHandoff } from "./plugin-task-credential-writeback.js";
 import { randomUUID } from "node:crypto";
 import { agents, companies, type Db } from "@paperclipai/db";
@@ -21,6 +22,7 @@ import { environmentService } from "./environments.js";
 import { environmentRuntimeService } from "./environment-runtime.js";
 import { resolveEnvironmentExecutionTarget } from "./environment-execution-target.js";
 import { prepareManagedAiRuntime, assertManagedAiProjectAuth, managedAiProjectAuthProvider } from "./ai-connection-runtime.js";
+import { isRunnerRevisionMismatch, runnerRevisionMismatchTestResult } from "./runner-revision-mismatch.js";
 import { aiConnectionService } from "./ai-connections.js";
 import { validateAiApiKey } from "./ai-api-key-test.js";
 import { probeCopilotExecutionTarget } from "./copilot-connection-probe.js";
@@ -60,7 +62,7 @@ export function agentEnvironmentTestService(db: Db, pluginWorkerManager?: Plugin
     if ((await instanceSettings.getExperimental()).enableManagedSandboxOnly === true) {
       const managed = await environmentsSvc.findManagedSandboxEnvironment(companyId);
       if (!managed) {
-        throw unprocessable("The managed sandbox is unavailable. Restore Paperclip Computer and retry.", {
+        throw unprocessable("The managed sandbox is unavailable. Restore Paperclip Sandbox and retry.", {
           code: "managed_sandbox_unavailable",
         });
       }
@@ -601,8 +603,19 @@ export function agentEnvironmentTestService(db: Db, pluginWorkerManager?: Plugin
         executionTarget: overrideAdapterExecutionTargetRemoteCwd(context.executionTarget, cwd),
       };
     }
-    await assertManagedAiProjectAuth(context.config, projectAuthProvider, context.executionTarget);
     const target = context.executionTarget;
+    // A preconfigured Runner home does not use the managed connection, so run admission refuses it.
+    if (adapterType === "paperclip_runner" && context.config.homeMode === "preconfigured"
+      && target?.kind === "remote" && target.transport === "sandbox" && target.runnerTask) {
+      return pluginRunnerAiConnectionRequiredTestResult(adapterType, true);
+    }
+    try { await assertManagedAiProjectAuth(context.config, projectAuthProvider, target); }
+    catch (error) {
+      if (isRunnerRevisionMismatch(error)) return runnerRevisionMismatchTestResult(adapterType);
+      if (error instanceof HttpError || target?.kind !== "remote" || target.transport !== "sandbox" || !target.runnerTask) throw error;
+      return { adapterType, status: "fail", testedAt: new Date().toISOString(), checks: [{ code: "runner_environment_unavailable", level: "error", retryable: true,
+        message: "The selected plugin environment could not describe its Runner. Check the environment's computer and plugin status, then retry." }] };
+    }
     const result = adapterType === "paperclip_runner" && target?.kind === "remote" && target.transport === "sandbox" && target.runnerTask
       ? await probePluginRunnerEnvironment(context, { identity: managed.identity, accountIdentity: managed.sessionIdentity,
           home: managed.home ? join(managed.home, "provider") : undefined })

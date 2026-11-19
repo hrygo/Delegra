@@ -78,20 +78,19 @@ tag is the reviewable unit that Delegra accepts. Do not use
 `canary/*`, `nightly/*`, `candidate/release-*`, or `upstream/master` as an
 upgrade base.
 
-The current integration retains a documented upstream canary overlay on the
-stable base because the stable tag's source predates the previously accepted
-canary and its database migrations. The overlay is not a pure stable release.
-Its ref, exact commit, and time-limited waiver are recorded separately in
-`.delegra/patches.json`. The branch policy verifies the overlay's tag and its
-ancestry in both `upstream/master` and `deploy`, and continues to require
-registration of fork commits. Replace the overlay when a suitable stable tag
-contains it or an independently verified equivalent.
+Delegra's integration base is `v2026.1117.0`. The stable tag includes the
+previously accepted `canary/v2026.1104.0-canary.1` commit. A transitional
+overlay requires a time-limited waiver in `.delegra/patches.json`. The branch
+policy verifies the overlay's tag and its ancestry in `upstream/master` and
+`deploy`, and requires registration of fork commits. Retire an overlay when
+the stable tag contains it or an independently verified equivalent.
 
 ### Trusted PR CI
 
 The fork calls immutable snapshots of the upstream PR workflow and its routing
 workflow. The routing snapshot loads planner inputs from an accepted upstream
-base or overlay commit, and the candidate task matrix must match that source.
+commit or a stable tag's upstream ancestor with identical planner inputs.
+The candidate task matrix must match the pinned source.
 The consistency check verifies both snapshot commits, the upstream ancestry
 and the permitted differences from the upstream workflows. Refresh the routing
 snapshot, its caller, and their pins together when accepting a new source.
@@ -394,19 +393,9 @@ gh api repos/hrygo/Delegra/rulesets
 - **Before company-wide rollout:** verify branch protection, CI availability,
   rollback, backup restore, and the acceptance journey on a staging instance.
 
-## 9. Current transition
+## 9. Integration base and deployment record
 
-The existing deployed commit `a4976cdd7` is based on
-`canary/v2026.1024.0-canary.7` and contains five upstream-facing commits plus
-the operational document. The latest stable tag, `v2026.1023.0`, predates the
-code path used by those commits; a direct port would be a rewrite rather than
-a backport.
-
-Therefore the initial `deploy` branch keeps this commit as a time-bounded
-transitional baseline. It must move to the first suitable stable tag before
-the waiver expires. The migration is complete when `.delegra/patches.json`
-declares `base.kind: "stable"` and the policy check passes without a warning.
-
-The legacy `fix/codex-managed-project-auth` branch was removed after the
-`deploy` migration. The deployed commit is preserved by the
-`deploy/v2026.1024.0-canary.7-r1` tag.
+The registry's `base` identifies the upstream source accepted by `deploy`.
+The `currentDeployment` record identifies the immutable tag last recorded in
+the branch. Use the running instance's `/api/health` response and release
+receipt to confirm its actual version.

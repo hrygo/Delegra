@@ -63,6 +63,7 @@ import { buildNativeExecutionInput } from "./native-execution-input.js";
 import {
   buildNativeExecutionWithCheckpoint,
   findNativeSessionResumeRun,
+  NATIVE_PROVIDER_SIDE_EFFECT_PENDING,
   NATIVE_PROVIDER_STATE_INCOMPATIBLE,
   NATIVE_TOOL_CONTRACT_FINGERPRINT,
   isUnusedLegacyNativeRetryReplacement,
@@ -277,6 +278,14 @@ describe("capability-gated connection tool refresh", () => {
     expect(result.normalizedSessionId).not.toBe(normalizedSessionId);
     expect(result.execution.task.prompt).toContain("complete handoff");
     expect(buildExecution).toHaveBeenLastCalledWith({ normalizedSessionId: result.normalizedSessionId, resumedSession: false });
+  });
+});
+
+describe("a source stopped with a pending side-effecting call", () => {
+  it("does not rebind the saved session that still refuses attachment", () => {
+    const current = execution(currentRunId);
+    const source = { ...previousRun(), errorCode: NATIVE_PROVIDER_SIDE_EFFECT_PENDING };
+    expect(rebindNativeSessionCheckpoint({ previousRun: source, currentExecution: current })).toBeNull();
   });
 });
 
@@ -2031,6 +2040,8 @@ describe("rebindNativeSessionCheckpoint", () => {
     const profile = prior.runnerProfileJson as Record<string, unknown>;
     const checkpoint = profile.sessionCheckpoint as Record<string, unknown>;
     checkpoint.governedWait = { sourceEvent: { runId: previousRunId, turnId: "old-turn" }, result: { reportedWorkDisposition: "yielded" } };
+    checkpoint.dispositionOnlyRecoveryConsumed = true;
+    checkpoint.dispositionOnlyRecoveryTurnId = "old-restart-continuation";
     const before = structuredClone(prior);
     const rebound = rebindNativeSessionCheckpoint({
       previousRun: prior,
@@ -2048,6 +2059,8 @@ describe("rebindNativeSessionCheckpoint", () => {
       activeTurnId: null,
       terminalTurns: [],
       pendingRuntimeRequests: [],
+      dispositionOnlyRecoveryConsumed: false,
+      dispositionOnlyRecoveryTurnId: null,
       providerRecoveryPolicy: "allow_replacement_after_resume_failure",
       identity: {
         runId: currentRunId,

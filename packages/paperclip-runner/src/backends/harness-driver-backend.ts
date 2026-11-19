@@ -4,6 +4,7 @@ import type {
   HarnessSessionRecoveryOptions,
   PersistedHarnessSession,
 } from "../contracts/harness-driver.js";
+import type { DurableRecoveryIdentity } from "../contracts/durable-recovery.js";
 import type {
   NativeSession,
   NativeSessionBackend,
@@ -480,9 +481,18 @@ class HarnessNativeSession implements NativeSession {
     };
   }
 
+  beginRunAttachment(input: { identity: OpenNativeSessionInput["identity"] }): boolean {
+    const currentIdentity = this.#input.identity;
+    if (this.#protocolIntegrityFailure !== null || this.#session.beginRunAttachment === undefined
+      || input.identity.sessionId !== currentIdentity.sessionId || input.identity.companyId !== currentIdentity.companyId
+      || input.identity.issueId !== currentIdentity.issueId || input.identity.agentId !== currentIdentity.agentId) return false;
+    return this.#session.beginRunAttachment({ runId: input.identity.runId });
+  }
+
   async attachRun(input: {
     identity: OpenNativeSessionInput["identity"];
     currentRunGrant?: NativeRunRuntimeGrant;
+    completionContract?: { revision: string; criterionIds: readonly string[] };
   }): Promise<void> {
     this.#assertProtocolIntegrity();
     const currentIdentity = this.#input.identity;
@@ -500,6 +510,7 @@ class HarnessNativeSession implements NativeSession {
     try {
       await this.#session.attachRun({ runId: input.identity.runId,
         ...(input.currentRunGrant ? { currentRunGrant: structuredClone(input.currentRunGrant) } : {}),
+        ...(input.completionContract ? { completionContract: structuredClone(input.completionContract) } : {}),
       });
       this.#assertProtocolIntegrity();
     } catch (error) {
@@ -509,6 +520,11 @@ class HarnessNativeSession implements NativeSession {
     this.#input = { ...this.#input, identity: structuredClone(input.identity) };
     this.#terminal = null;
     this.#explicitlyCancelled = false;
+  }
+
+  async release(): Promise<DurableRecoveryIdentity | false> {
+    this.#assertProtocolIntegrity();
+    return this.#session.release?.() ?? false;
   }
 
   async detachControllerForRestart(): Promise<void> {
