@@ -54,7 +54,7 @@ jobs:
     needs: scope
     if: needs.scope.outputs.run_matrix == 'true'
     # Review and update the snapshot and its routing pin together.
-    uses: hrygo/Delegra/.github/workflows/pr-delegra-trusted.yml@b6e0df9f338eab02fdf1cb8c11e7d6c42120a231
+    uses: hrygo/Delegra/.github/workflows/pr-delegra-trusted.yml@d264ecbfbe2a93200aa78d60fd7dd7d5f4467a46
 
   shared_ci_consistency:
     name: Shared CI snapshot consistency
