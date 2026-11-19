@@ -473,13 +473,16 @@
         "a93417b03ba5ac7ffcb8b3c32c86795070206d7f",
         "d4b315b8fe603604f9851b3ccb4dbf623cfa9271",
         "bd9c437aee017caf895e2fa7fcdde0e907800ea7",
-        "006f149d0296f6b85db19475b51a1490e0e1c6ef"
+        "006f149d0296f6b85db19475b51a1490e0e1c6ef",
+        "02ca99403b8f79720ccf9b23b1358abd3d1668e3",
+        "b6e0df9f338eab02fdf1cb8c11e7d6c42120a231",
+        "4615dcf89b9dbdf3757366f7e5c407c4c74c79bc"
       ],
       "owner": "hrygo",
       "reviewBy": "2026-11-30",
       "retireWhen": "An accepted stable base provides an immutable compatible shared CI workflow and routing contract without a fork snapshot.",
-      "notes": "Freeze the deploy-compatible PR workflow and its fork routing snapshot at immutable fork commits. The routing snapshot reads trusted planner inputs from the accepted upstream base or overlay, and the consistency check validates upstream provenance, both committed snapshots, and agreement with the candidate task matrix. The caller also accepts the full-ci label, and a scope job keeps the full matrix for changes to workflows, composite actions, or scripts, or for the full-ci and profile-ci labels.",
-      "verifiedAt": "2026-11-11"
+      "notes": "Pin the fork reusable workflows to immutable commits. Trusted planner inputs come from an accepted upstream commit or a stable mainline ancestor with identical inputs. The scope job runs the matrix for CI files or the full-ci and profile-ci labels. The v2026.1117.0 adoption verifies the published lockfiles and reporting proof before it permits a lock change.",
+      "verifiedAt": "2026-11-20"
     },
     {
       "id": "canary-merge-repair",
