@@ -52,7 +52,7 @@ node docker/expert-runtime/tests/expert-runtime-oci-size.mjs \
 | 在 Actions 手动选择分支 | 执行同一套只读验证。 |
 | 在 `hrygo/Delegra` 推送或手动选择专用标签 `expert-images-v1.2.3` | 检查标签指向 `origin/deploy` 历史中的提交，构建并发布 17 个镜像。同版任务串行。 |
 
-缓存按目标隔离，`deploy` 推送验证负责更新缓存。PR 与发布作业读取缓存，发布作业重新验证制品。专用标签独立于 Delegra 安装版 `deploy/*` 标签和通用 AMD64 镜像。 [ARM64 工作流](../../.github/workflows/delegra-expert-images.yml)
+每批读取场景自己的缓存和所链接的 `codex-min` 公共层缓存。`deploy` 推送验证由公共目标所在批次用 `mode=max` 写入公共缓存，保留 Runner 编译等中间层。各场景分别用 `mode=min` 写入结果层缓存。PR 与发布批次读取缓存，发布仍按摘要重新验证制品。专用标签独立于 Delegra 安装版 `deploy/*` 标签和通用 AMD64 镜像。 [ARM64 工作流](../../.github/workflows/delegra-expert-images.yml)
 
 发布以 `GITHUB_TOKEN` 写入 `ghcr.io/hrygo/delegra/<目标>`。工作流先按 OCI 摘要上传候选，核对 ARM64 manifest、SPDX SBOM 和 SLSA 来源证明，并拉回同一摘要运行冒烟。收到全部镜像回执后，生成并签署记录 Python、uv 版本和镜像摘要的 `expert-images-release.json`，再将每个已验证的索引加上 `v1.2.3` 这样的精确版本标签。已有标签指向相同摘要时复用，指向其他摘要时发布失败。GitHub Container Registry 首次创建的软件包默认为 private。 [GitHub 容器仓库](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry) · [Docker 摘要发布和标签复制](https://docs.docker.com/reference/cli/docker/buildx/imagetools/create/)
 
