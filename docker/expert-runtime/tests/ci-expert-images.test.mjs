@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 import {
   bakeOverrides, buildMatrix, collectRelease, promote, releaseVersion,
 } from '../ci.mjs';
@@ -29,6 +33,61 @@ test('only a dedicated stable tag in the canonical Delegra fork grants the relea
   assert.throws(() => releaseVersion({ ...tag, ref: 'refs/tags/expert-images-v01.2.3' }), /stable version/);
   assert.throws(() => releaseVersion({ ...tag, ref: 'refs/tags/expert-images-v1.2.3-rc.1' }), /stable version/);
   assert.throws(() => releaseVersion({ ...tag, ref: 'refs/tags/v1.2.3' }), /stable version/);
+});
+
+test('the planner skips CI-only diffs and verifies changes to image inputs', (t) => {
+  const cwd = mkdtempSync(join(tmpdir(), 'delegra-expert-plan-'));
+  t.after(() => rmSync(cwd, { recursive: true, force: true }));
+  const git = (...args) => execFileSync('git', [
+    '-c', 'user.name=Delegra CI', '-c', 'user.email=ci@example.test',
+    '-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=.git/hooks', ...args,
+  ], { cwd, encoding: 'utf8' }).trim();
+  git('init', '--quiet', '--initial-branch=deploy');
+  const commitFiles = (...paths) => {
+    for (const path of paths) {
+      const file = join(cwd, path);
+      mkdirSync(dirname(file), { recursive: true });
+      appendFileSync(file, 'fixture\n');
+    }
+    git('add', '--', ...paths);
+    git('commit', '--quiet', '-m', 'Change fixtures');
+    return git('rev-parse', 'HEAD');
+  };
+  const plan = (name, event = {}, ref = 'refs/heads/deploy') => {
+    const eventFile = join(cwd, 'event.json');
+    const outputFile = join(cwd, 'outputs');
+    writeFileSync(eventFile, JSON.stringify(event));
+    writeFileSync(outputFile, '');
+    execFileSync(process.execPath, [fileURLToPath(new URL('../ci.mjs', import.meta.url)), 'plan'], {
+      cwd,
+      env: {
+        ...process.env, GITHUB_EVENT_NAME: name, GITHUB_EVENT_PATH: eventFile,
+        GITHUB_OUTPUT: outputFile, GITHUB_REF: ref, GITHUB_REPOSITORY: repository,
+      },
+    });
+    return readFileSync(outputFile, 'utf8');
+  };
+  const pullRequest = (sha) => ({ pull_request: { base: { sha } } });
+  const base = commitFiles('docker/expert-runtime/Dockerfile');
+  const ciOnly = commitFiles(
+    '.nvmrc', '.github/workflows/delegra-expert-images.yml', 'docker/expert-runtime/ci.mjs',
+    'docker/expert-runtime/README.md', 'docker/expert-runtime/tests/fixtures/smoke.sh',
+  );
+  assert.match(plan('pull_request', pullRequest(base)), /^verify_images=false$/m);
+  assert.match(plan('push', { before: base }), /^verify_images=false$/m);
+  assert.match(plan('workflow_dispatch'), /^verify_images=true$/m);
+  assert.match(plan('push', { before: '0'.repeat(40) }), /^verify_images=true$/m);
+  assert.match(plan('push', { before: 'f'.repeat(40) }), /^verify_images=true$/m);
+
+  commitFiles('docker/expert-runtime/tooling/node/package-lock.json');
+  const head = commitFiles('docker/expert-runtime/tests/fixtures/smoke.sh');
+  assert.match(plan('push', { before: ciOnly }), /^verify_images=true$/m);
+  assert.match(plan('pull_request', pullRequest(ciOnly)), /^verify_images=true$/m);
+
+  git('update-ref', 'refs/remotes/origin/deploy', head);
+  const release = plan('push', { before: head }, 'refs/tags/expert-images-v1.2.3');
+  assert.match(release, /^version=v1\.2\.3$/m);
+  assert.match(release, /^verify_images=false$/m);
 });
 
 test('CI batches cover all release targets once and exclude comparisons at release', () => {
@@ -154,7 +213,9 @@ test('only the tag jobs can write packages and publication requires the entire c
   const candidates = workflow.slice(candidatesAt, publishAt);
   const publish = workflow.slice(publishAt);
   assert.doesNotMatch(workflow.slice(0, candidatesAt), /packages: write/);
+  assert.match(workflow.slice(0, verifyAt), /verify_images: \$\{\{ steps\.plan\.outputs\.verify_images \}\}/);
   assert.match(verify, /github\.ref_type != 'tag'/);
+  assert.match(verify, /needs\.plan\.outputs\.verify_images == 'true'/);
   for (const job of [candidates, publish]) {
     assert.match(job, /github\.ref_type == 'tag' && needs\.plan\.outputs\.version != ''/);
     assert.match(job, /packages: write/);
