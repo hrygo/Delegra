@@ -625,6 +625,19 @@
       "verifiedAt": "2026-11-12",
       "retireWhen": "An accepted upstream release handles Git workspace discovery and restore diagnostics independently of the host language.",
       "notes": "Normalize Git diagnostics at workspace sync, hardened referenced-source scan, and worktree management boundaries so localized hosts correctly distinguish ordinary directories, recoverable bundle failures, missing refs, and other errors. Operator shell commands retain their configured locale."
+    },
+    {
+      "id": "delegra-arm64-expert-images",
+      "kind": "fork-only",
+      "status": "active",
+      "commits": [
+        "62734bd2733cd03141d2f44d651c3e327e27e396"
+      ],
+      "owner": "hrygo",
+      "reviewBy": "2026-12-11",
+      "verifiedAt": "2026-11-20",
+      "retireWhen": "An accepted upstream release provides the required ARM64 expert images and an attested digest catalog.",
+      "notes": "Delegra owns the ARM64 expert image suite consumed by Heluo Forge. The suite has a dedicated version tag and GHCR namespace. The Docker build pins the Native Runner source revision."
     }
   ]
 }
