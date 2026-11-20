@@ -157,8 +157,11 @@ describe("AgentProviderConnection reuse", () => {
     });
     const modeLabels = () => Array.from(host.querySelectorAll('[role="radio"]')).map(button => button.textContent);
     expect(modeLabels()).toEqual(["OpenAISubscription", "OpenAIAPI key", "AdvancedCustom Gateway"]);
-    expect(host.querySelector('[aria-label="Saved subscription"]')).not.toBeNull();
-    expect(host.textContent).not.toContain("Advanced connection picker");
+    expect(host.querySelector('[role="radio"][aria-checked="true"]')?.textContent).toBe("AdvancedCustom Gateway");
+    expect(host.textContent).toContain("Advanced connection picker");
+    expect(host.querySelector('[aria-label="Saved subscription"]')).toBeNull();
+    expect(mocks.loginPanel).not.toHaveBeenCalled();
+    expect(mocks.auth).not.toHaveBeenCalled();
     expect(host.textContent).not.toContain("instead");
     click("OpenAIAPI key");
     expect(host.querySelector('[aria-label="Saved API key"]')).not.toBeNull();
@@ -174,6 +177,14 @@ describe("AgentProviderConnection reuse", () => {
     expect(useConnection.disabled).toBe(true);
     click("OpenAISubscription");
     expect(host.querySelector('[aria-label="Saved subscription"]')).not.toBeNull();
+    expect(host.textContent).not.toContain("Advanced connection picker");
+  });
+
+  it("keeps Claude's saved subscription as the default in new agent setup", async () => {
+    await mount("claude_local", true, true, false, false, false, undefined, false, "local_trusted", true, {
+      content: <div>Advanced connection picker</div>,
+    });
+    expect(host.querySelector('[role="radio"][aria-checked="true"]')?.textContent).toBe("ClaudeSubscription");
     expect(host.textContent).not.toContain("Advanced connection picker");
   });
 
@@ -213,6 +224,7 @@ describe("AgentProviderConnection reuse", () => {
     });
     click("Advanced");
     click("OpenAISubscription");
+    await vi.waitFor(() => expect(client.isFetching()).toBe(0));
     click("Use saved subscription");
     await vi.waitFor(() => expect(connected).toHaveBeenCalled());
     expect(connected.mock.calls[0][0]).toMatchObject({ env: { CODEX_HOME: { type: "secret_ref", secretId: "codex-home" } } });
