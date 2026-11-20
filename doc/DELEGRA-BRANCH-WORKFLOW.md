@@ -96,6 +96,11 @@ The consistency check verifies both snapshot commits, the upstream ancestry
 and the permitted differences from the upstream workflows. Refresh the routing
 snapshot, its caller, and their pins together when accepting a new source.
 
+The trusted PR review verifies root lockfile changes for same-repository
+`upgrade/<stable-tag>` PRs to `deploy`. The PR head must contain the commit of
+a published stable Paperclip release. Its root lockfile must match the blob
+at that release commit. Other lock content follows the standard review policy.
+
 ## 4. Normal workflows
 
 ### 4.1 Refresh the upstream mirror
