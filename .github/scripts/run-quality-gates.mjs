@@ -14,7 +14,7 @@ import { checkTemplate } from './check-pr-template.mjs';
 import { checkLinkedIssue } from './check-pr-linked-issue.mjs';
 import { checkDedupSearch } from './check-pr-dedup-search.mjs';
 import { checkTestCoverage } from './check-pr-test-coverage.mjs';
-import { checkLockfile } from './check-pr-lockfile.mjs';
+import { checkPullRequestLockfile } from './check-delegra-stable-lockfile.mjs';
 import { checkDependencies } from './check-pr-dependencies.mjs';
 import { checkReleaseBootstrap } from './check-pr-release-bootstrap.mjs';
 import { checkCoauthors, fetchAllPullRequestCommits } from './check-pr-coauthors.mjs';
@@ -130,7 +130,7 @@ async function main() {
       Promise.resolve(checkLinkedIssue(prBody, prTitle)),
       Promise.resolve(checkDedupSearch(prBody, prTitle)),
       Promise.resolve(checkTestCoverage(files, prTitle)),
-      Promise.resolve(checkLockfile(files, author, branch)),
+      checkPullRequestLockfile({ files, author, branch, pr, repository: GH_REPO, token: GH_TOKEN }),
       checkDependencies(files, GH_TOKEN, GH_REPO, prNumber, pr.base?.ref),
       checkReleaseBootstrap(files, GH_TOKEN, GH_REPO, prNumber, pr.base?.ref),
     ]);
