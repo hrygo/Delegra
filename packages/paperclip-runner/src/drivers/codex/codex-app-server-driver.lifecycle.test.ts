@@ -49,6 +49,7 @@ import {
   type PrpStructuredRunResult,
 } from "./codex-app-server-driver.test-support.js";
 import { HarnessDriverBackend } from "../../backends/harness-driver-backend.js";
+import type { NativeSessionRecoveryResult } from "../../contracts/native-session-backend.js";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -101,8 +102,12 @@ it.each(["default", "plan"] as const)("freezes direct %s process context and unw
     expect(nativeSnapshot.codexLaunchContext?.workingDirectory).toBe(WORKSPACE);
     expect(nativeSnapshot.providerRecoveryPolicy).toBe("same_session_only");
     await nativeSession.close({ reason: "backend checkpoint roundtrip" });
-    const nativeRecovered = await new HarnessDriverBackend(new CodexAppServerDriver(options)).recoverSession(nativeSnapshot, { signal: new AbortController().signal });
-    if (!nativeRecovered.recovered) throw new Error(nativeRecovered.reason);
+    const nativeRecovered: NativeSessionRecoveryResult = await new HarnessDriverBackend(
+      new CodexAppServerDriver(options),
+    ).recoverSession(nativeSnapshot, { signal: new AbortController().signal });
+    if (!nativeRecovered.recovered || !nativeRecovered.session) {
+      throw new Error(nativeRecovered.reason ?? "Native recovery did not return a session");
+    }
     expect((await nativeRecovered.session.snapshot()).codexLaunchContext).toEqual(nativeSnapshot.codexLaunchContext);
     expect((await nativeRecovered.session.snapshot()).sessionId).toBe(nativeSnapshot.sessionId);
     await nativeRecovered.session.close({ reason: "backend roundtrip verified" });
