@@ -17,34 +17,45 @@ const routingBaseline = readFileSync('.github/workflows/ci-routing.yml', 'utf8')
 const plannerLines = [...routingSnapshot.matchAll(/^          trusted="([0-9a-f]{40})"$/gm)];
 if (plannerLines.length !== 1) throw new Error('Trusted planner input must use one full commit SHA');
 const plannerPin = plannerLines[0][1];
+const matrixPath = '.github/ci-task-matrix.json';
+const plannerInputs = [
+  '.github/workflows/ci-routing.yml',
+  '.github/scripts/ci-plan.mjs',
+  '.github/scripts/ci-inputs.mjs',
+  '.github/scripts/ci-diff.mjs',
+  matrixPath,
+  'turbo.json',
+];
+function gitCheck(args) {
+  try {
+    execFileSync('git', args, { stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 const dynamicPlanner = '          trusted="$(gh api /repos/paperclipai/paperclip/git/ref/heads/master --jq .object.sha)" || fallback';
 if (routingSnapshot.replace(plannerLines[0][0], dynamicPlanner) !== routingBaseline) {
   throw new Error('Fork routing snapshot differs from ci-routing.yml beyond the planner pin');
 }
 const registry = JSON.parse(readFileSync('.delegra/patches.json', 'utf8'));
 const acceptedSources = [registry.base, ...(registry.upstreamOverlays ?? [])].map(entry => entry.commit);
-if (!acceptedSources.includes(plannerPin)) throw new Error('Planner pin is not an accepted upstream base or overlay');
+// Release notes and release-specific fixes can put a stable tag off master.
+// Its mainline ancestor may supply the identical trusted planner inputs.
+const sameStableInputs = registry.base.kind === 'stable'
+  && gitCheck(['merge-base', '--is-ancestor', plannerPin, registry.base.commit])
+  && gitCheck(['diff', '--quiet', plannerPin, registry.base.commit, '--', ...plannerInputs]);
+if (!acceptedSources.includes(plannerPin) && !sameStableInputs) {
+  throw new Error('Planner pin is not an accepted upstream base or overlay or a stable ancestor with identical planner inputs');
+}
 
 // The fork snapshot is resolved in hrygo/Delegra, while its planner inputs
 // are fetched only from an accepted commit in paperclipai/paperclip.
-const mirrorRefs = ['origin/master', 'master'].filter(ref => {
-  try {
-    execFileSync('git', ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`], { stdio: 'ignore' });
-    return true;
-  } catch {
-    return false;
-  }
-});
+const mirrorRefs = ['origin/master', 'master'].filter(ref => gitCheck(['rev-parse', '--verify', '--quiet', `${ref}^{commit}`]));
 if (mirrorRefs.length === 0) {
   console.warn('Skipping the routing provenance check: no master mirror ref is available');
-} else if (!mirrorRefs.some(ref => {
-  try {
-    execFileSync('git', ['merge-base', '--is-ancestor', plannerPin, ref], { stdio: 'ignore' });
-    return true;
-  } catch {
-    return false;
-  }
-})) {
+} else if (!mirrorRefs.some(ref => gitCheck(['merge-base', '--is-ancestor', plannerPin, ref]))) {
   throw new Error(`Planner pin ${plannerPin} is not an upstream commit: it is not an ancestor of the master mirror`);
 }
 const normalized = snapshot.replace(routing, 'paperclipai/paperclip/.github/workflows/ci-routing.yml@master');
@@ -61,7 +72,6 @@ const pinnedRouting = execFileSync('git', ['show', `${plannerPin}:.github/workfl
 if (routingBaseline !== pinnedRouting) {
   throw new Error('The pinned routing workflow differs from ci-routing.yml');
 }
-const matrixPath = '.github/ci-task-matrix.json';
 const pinnedMatrix = execFileSync('git', ['show', `${plannerPin}:${matrixPath}`], { encoding: 'utf8' });
 if (readFileSync(matrixPath, 'utf8') !== pinnedMatrix) {
   throw new Error('The trusted CI task matrix differs from the candidate matrix');

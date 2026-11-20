@@ -1,5 +1,24 @@
 # Runner E2E security for a public repository
 
+The explicit `onboarding-approval-history` suite uses only synthetic garden-club
+facts in an owned disposable onboarding company. The human selects drafting and
+clears publishing; the scenario forbids external publication. The hired writer
+must use the lead's existing provider/AI connection through normal hiring.
+Credentials remain in the existing encrypted fixture path. It makes no direct
+database writes and changes no shared company. Public first-task projection
+retains synthetic checkbox option IDs/labels, selected IDs, plan document/revision
+IDs, task/agent/run bindings, and the exact saved output revision's agent/run
+authorship so the approval history can be regraded. Provider
+session IDs, account configuration, raw traces, and full instructions retain
+their existing private-only treatment. Registration is separate from live proof.
+
+The deployment-targeted `saved-skill-use` journey creates one synthetic skill on
+the campaign-owned agent. Its random receipt reference and numeric inputs occur
+only in the saved skill source. Exact source, immutable version, ordinary assignment, native read
+events and run-authored document revisions remain in the private bundle. The
+existing public projection exports closed checks and the authenticated owned
+task screenshot. The journey changes no shared agent, instance flag or budget.
+
 Native `cursor-cloud` acceptance uses a separate callback-only loopback listener.
 Its external HTTPS tunnel must never target the local_trusted operator app.
 Credential-free ingress checks require `/` and `/api/health` to return 404 and
@@ -303,6 +322,61 @@ the target only inside the same repository, pins one SHA for the campaign, and
 checks it out only after authorization. Target-controlled code cannot replace
 the report sanitizer or the AWS history publisher. Fork refs and
 target-controlled workflow definitions do not enter this path.
+
+## Agent view of the eval harness
+
+The agent under test must not read the eval. A local cell runs the product from
+the checkout that also holds `tests/`, as the same OS user as the harness, so
+file modes cannot separate them. OpenCode's `external_directory` policy guards
+its own read and grep tools, but not arbitrary shell commands.
+
+`agent-filesystem-sandbox.ts` closes that gap for local native cells on Linux.
+The launcher selects the hidden paths: `tests/`, the checkout's Git store (which
+holds the committed scenarios and graders; for a linked worktree, its gitdir
+and the shared common directory), the trusted
+`.manual-private-trusted/` copy, the private evidence directory, `RUNNER_TEMP`,
+and the attempt root's `artifacts-private/`, `control/`,
+`selected-private-inputs/` and `playwright-transform-cache/` children.
+Playwright compiles the harness and graders (with source maps) into
+`PWTEST_CACHE_DIR`, which the launcher points at that hidden child. The
+launcher also removes Playwright's default cache in the shared temporary
+directory.
+
+Landlock hides a path by leaving its ancestors ungranted, and an ungranted
+directory accepts no new entries. Agents must keep creating files in `/tmp`, so
+a sandboxed attempt creates its root in `/var/tmp` instead of `/tmp`. The
+agent's workspace, home and Paperclip home stay readable inside that root. If
+harness material would stay under the shared temporary directory or contain the
+agent's state, the launcher fails the attempt in CI and warns elsewhere. The E2E server entry starts each `paperclip-runnerd` (through `spawn`,
+`spawnSync`, `execFile` or `execFileSync`, by absolute path or PATH; a shell
+launch is refused) through
+`agent-filesystem-sandbox.py`, which applies a Landlock domain and then execs
+runnerd with its original PID, argv, cwd and environment. Runnerd, the provider,
+its tools and every shell command inherit the domain. The domain also sets
+`no_new_privs`, so `sudo` cannot widen it. The product server itself stays
+unrestricted because it loads its E2E entry from the harness.
+
+Before the product starts an agent, a probe runs a sandboxed shell. The probe
+must be denied the harness, every hidden path and Playwright's default cache, and it must read the product
+package and write a temporary file. The server log records the probe result and
+each wrapped runnerd launch. In CI a missing or ineffective sandbox stops the
+attempt. Landlock does not hide that a path exists (`stat` still works); it
+denies reading and listing.
+
+Limits: Codex cells keep Codex's own bubblewrap sandbox, which cannot mount
+inside Landlock. Legacy adapters, installed-release launches and macOS run
+without this sandbox. A process that can reach the Docker daemon can still
+mount the checkout into a container, and `ps` shows the launcher's command
+line. Case fixtures that create their own private directories directly in the
+shared temporary directory stay readable. The boundary is filesystem only: the
+scenarios and graders are public on GitHub, and agents have network access for
+their model provider. Daytona cells run the agent in a remote sandbox that holds only the
+staged runnerd and provider pack, not the checkout.
+
+Fixture names that an agent can read (company, agent, environment, secret,
+connection and project) use a neutral word and a digest suffix. They do not
+contain case ids, suite names, "E2E" or "test". The digest is salted per
+process, so public catalog ids cannot be hashed back to a case.
 
 ## AWS OIDC and S3
 

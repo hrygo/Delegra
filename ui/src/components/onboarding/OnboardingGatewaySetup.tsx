@@ -10,6 +10,7 @@ export function OnboardingGatewaySetup({
   environmentId,
   adapterType,
   disabled,
+  className,
   onComplete,
   open: controlledOpen,
   onOpenChange,
@@ -19,6 +20,7 @@ export function OnboardingGatewaySetup({
   environmentId?: string;
   adapterType: "codex_local" | "claude_local";
   disabled?: boolean;
+  className?: string;
   onComplete: (binding: Exclude<AiConnectionBinding, { mode: "responsible_user" }>) => void;
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
@@ -27,7 +29,7 @@ export function OnboardingGatewaySetup({
   const open = controlledOpen ?? localOpen;
   const setOpen = onOpenChange ?? setLocalOpen;
   return <>
-    <Button type="button" variant="ghost" disabled={disabled} onClick={() => setOpen(true)}>
+    <Button type="button" variant="ghost" className={className} disabled={disabled} onClick={() => setOpen(true)}>
       Use a custom gateway
     </Button>
     <Dialog open={open} onOpenChange={setOpen}>
