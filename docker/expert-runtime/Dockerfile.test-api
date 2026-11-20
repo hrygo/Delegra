@@ -1,10 +1,13 @@
 # syntax=docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e
-FROM node_toolchain AS tools
-WORKDIR /out
-COPY tooling/test-api/package.json tooling/test-api/package-lock.json ./
-RUN --mount=type=cache,target=/root/.npm,sharing=locked \
-    npm ci --omit=dev --ignore-scripts --no-audit --no-fund
+FROM scratch AS hurl-package
+ARG HURL_DEB_URL
+ARG HURL_DEB_SHA256
+ADD --chmod=0644 --checksum=sha256:${HURL_DEB_SHA256} ${HURL_DEB_URL} /hurl.deb
 
 FROM expert_base
-COPY --from=tools /out/ /opt/expert-tools/test-api/
-ENV PATH="/opt/expert-tools/test-api/node_modules/.bin:${PATH}"
+USER 0
+RUN --mount=type=bind,from=hurl-package,source=/hurl.deb,target=/tmp/hurl.deb,ro \
+    apt-get -o Acquire::Retries=3 -o APT::Update::Error-Mode=any update \
+    && apt-get -o Acquire::Retries=3 install -y --no-install-recommends /tmp/hurl.deb \
+    && rm -rf /var/lib/apt/lists/*
+USER 1000:1000

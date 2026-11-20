@@ -4,6 +4,8 @@
 
 Runner 来源为 Delegra 标签 `deploy/v2026.1106.0-r2` 对应的固定提交。Bake 核对源码归档的 SHA-256，Rust 使用该提交的 `Cargo.lock` 构建。Java、uv 和 .NET 工具链使用 ARM64 镜像摘要，npm 工具使用各自的锁文件。Debian 包使用固定日期的快照和 Debian archive keyring 验签。首次取得 CA 证书时，APT 同样按签名索引和包哈希校验下载内容。 [Heluo Forge 运行时镜像设计](https://github.com/hrygo/heluo-forge/blob/main/docs/design/delegra-runtime-images.md)
 
+`codex-test-api` 安装固定 SHA-256 的 Hurl 8.1.0 ARM64 Debian 包。用 `hurl --test --report-junit report.xml suite.hurl` 跑 HTTP 回归。容器冒烟通过回环接口验证状态码、JSON 字段和 JUnit 报告。 [Hurl 测试说明](https://hurl.dev/docs/running-tests.html)
+
 ## 本机验证
 
 从仓库根目录在原生 ARM64 Docker 节点执行。默认组包含 17 个发布目标，`reference` 组包含公共及 Java 21 的 npm 与原生归档对照。标签中的 `arm64-local` 和 `arm64-native-local` 用于本地测试。

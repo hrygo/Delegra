@@ -49,11 +49,11 @@ case "$target" in
         test "$(dotnet sample/bin/Debug/net10.0/sample.dll)" = 42
         ;;
     codex-test-api)
-        test "$(newman --version)" = 6.2.3
-        node /fixtures/loopback.mjs newman run /fixtures/api.collection.json \
-            --env-var 'base={url}' --reporters cli,junit --reporter-junit-export junit.xml
-        grep -q 'response is successful' junit.xml
-        grep -q 'body reports failure' junit.xml
+        hurl --version | grep -F 'hurl 8.1.0'
+        node /fixtures/loopback.mjs hurl --test --report-junit junit.xml \
+            --variable 'base={url}' /fixtures/api.hurl
+        grep -q 'tests="1"' junit.xml
+        grep -q 'failures="0"' junit.xml
         ;;
     codex-test-web)
         test "$(playwright --version)" = 'Version 1.65.1'

@@ -130,9 +130,13 @@ target "codex-dotnet-10" {
 }
 
 target "codex-test-api" {
-  inherits   = ["_node-tools"]
+  inherits   = ["_scene"]
   dockerfile = "Dockerfile.test-api"
   tags       = ["${EXPERT_IMAGE_PREFIX}/codex-test-api:arm64-local"]
+  args = {
+    HURL_DEB_URL    = "https://github.com/Orange-OpenSource/hurl/releases/download/8.1.0/hurl_8.1.0_arm64.deb"
+    HURL_DEB_SHA256 = "74dce80fd6d9d6a8f70ec4af963c811184d35232798e1fe263897ecc4cf061dc"
+  }
 }
 
 target "codex-test-web" {
