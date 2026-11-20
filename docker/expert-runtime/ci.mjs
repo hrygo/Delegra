@@ -39,6 +39,24 @@ export function buildMatrix(publish) {
   return { include: Object.entries(configuration).map(([batch, targets]) => ({ batch, targets })) };
 }
 
+function shouldVerifyImages(eventName, event, commit) {
+  if (eventName === 'workflow_dispatch') return true;
+  const before = eventName === 'pull_request' ? event.pull_request?.base?.sha : event.before;
+  if (!/^[a-f0-9]{40}$/.test(before ?? '')) {
+    console.log('Image comparison base unavailable. Running ARM64 verification.');
+    return true;
+  }
+  const { status } = spawnSync('git', [
+    'diff', '--quiet', '--no-renames', before, commit, '--', 'docker/expert-runtime',
+    ':(exclude)docker/expert-runtime/README.md',
+    ':(exclude)docker/expert-runtime/ci.mjs',
+    ':(exclude)docker/expert-runtime/tests',
+  ], { stdio: 'ignore' });
+  if (status === 0) console.log('Image build inputs unchanged. Skipping ARM64 verification.');
+  if (status !== 0 && status !== 1) console.log('Image comparison unavailable. Running ARM64 verification.');
+  return status !== 0;
+}
+
 export function bakeOverrides(targets, { ghcr, source, commit, version, saveCache }) {
   const allowed = version ? scenes : [...scenes, ...comparisons];
   for (const target of targets) assert(allowed.includes(target), 'Invalid target ' + target);
@@ -183,6 +201,7 @@ function main() {
       if (version) run('git', ['merge-base', '--is-ancestor', commit, 'refs/remotes/origin/deploy']);
       output('commit', commit);
       output('version', version);
+      output('verify_images', !version && shouldVerifyImages(env.GITHUB_EVENT_NAME, event, commit));
       output('matrix', JSON.stringify(buildMatrix(Boolean(version))));
       break;
     }

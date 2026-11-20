@@ -48,9 +48,12 @@ node docker/expert-runtime/tests/expert-runtime-oci-size.mjs \
 
 | 触发 | 执行 |
 | --- | --- |
-| 面向 `deploy` 的 PR 或 `deploy` 推送，镜像配方、锁文件、冒烟夹具、工作流或 Node 版本有改动 | 在原生 ARM64 节点验证 17 个发布目标和 2 个对照目标。每批最多 3 个镜像，同时运行最多 3 批。旧验证任务随新提交取消。 |
-| 在 Actions 手动选择分支 | 执行同一套只读验证。 |
+| 面向 `deploy` 的 PR 或 `deploy` 推送，Dockerfile、Bake、构建上下文或目标清单有改动 | 通过规划校验后，在原生 ARM64 节点验证 17 个发布目标和 2 个对照目标。每批最多 3 个镜像，同时运行最多 3 批。旧验证任务随新提交取消。 |
+| 同类 PR 或推送仅涉及工作流、CI 的 Node 版本、`ci.mjs`、冒烟测试或夹具 | 仅在 x64 节点运行镜像规划和发布策略测试。 |
+| 在 Actions 手动选择分支 | 执行完整的只读构建和冒烟验证。 |
 | 在 `hrygo/Delegra` 推送或手动选择专用标签 `expert-images-v1.2.3` | 检查标签指向 `origin/deploy` 历史中的提交，构建并发布 17 个镜像。同版任务串行。 |
+
+PR 以其目标分支基线和检出的合并提交比较构建输入。`deploy` 推送比较推送前后的完整差异。无法比较时运行完整验证。仅修改本页会被工作流的路径过滤排除。
 
 每批读取场景自己的缓存和所链接的 `codex-min` 公共层缓存。`deploy` 推送验证由公共目标所在批次用 `mode=max` 写入公共缓存，保留 Runner 编译等中间层。各场景分别用 `mode=min` 写入结果层缓存。PR 与发布批次读取缓存，发布仍按摘要重新验证制品。专用标签独立于 Delegra 安装版 `deploy/*` 标签和通用 AMD64 镜像。 [ARM64 工作流](../../.github/workflows/delegra-expert-images.yml)
 
