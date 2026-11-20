@@ -157,6 +157,19 @@
       "notes": "Preserves Dependency Review, all quality gates, and the current permission set. Forks use the built-in workflow token; the upstream repository keeps its App token. Signed Actions comments are updated across retries."
     },
     {
+      "id": "stable-upgrade-lockfile-review",
+      "kind": "fork-only",
+      "status": "active",
+      "commits": [
+        "dab86644ca650f3d93da0439f7f8646b7f7ef709"
+      ],
+      "owner": "hrygo",
+      "reviewBy": "2026-12-20",
+      "verifiedAt": "2026-11-20",
+      "retireWhen": "The trusted PR review can use the stable upgrade lockfile policy directly.",
+      "notes": "The trusted base verifies the published upstream release, the stable commit ancestry in the PR head, and the exact root lockfile blob for same-repository stable upgrades to deploy."
+    },
+    {
       "id": "inbox-badge-resolved-failed-runs",
       "kind": "upstream-backport",
       "status": "absorbed",
