@@ -532,6 +532,19 @@
       "notes": "Restores the saved web-search disablement to default and recovered Codex launch arguments, updates the affected factory regression test to observe the current launch boundary, and supplies the fields required by the Rust task-memory fixture."
     },
     {
+      "id": "native-runner-release-fixture-prebuild",
+      "kind": "fork-only",
+      "status": "active",
+      "commits": [
+        "2e5c0b8ef0c192f1d075e34b96aed887407e2078"
+      ],
+      "owner": "hrygo",
+      "reviewBy": "2026-12-20",
+      "verifiedAt": "2026-11-20",
+      "retireWhen": "An accepted upstream release prepares locked Runner release fixtures before native integration tests start.",
+      "notes": "Builds the native Runner release daemon and fake Codex app-server before Vitest to keep a cold Cargo build and build-lock contention outside test hooks."
+    },
+    {
       "id": "portable-runner-binary-fixtures",
       "kind": "fork-only",
       "status": "absorbed",
