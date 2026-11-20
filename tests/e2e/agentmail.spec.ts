@@ -197,8 +197,7 @@ test("AgentMail setup and email work through the normal task conversation", asyn
       botExternalId: inbox.address,
     }),
   );
-  await page.goto(`/${company.issuePrefix}/apps`);
-  await page.getByRole("button", { name: /^(Connect|Add connection) AgentMail$/ }).click();
+  await page.goto(`/${company.issuePrefix}/apps/chat/connect?provider=agentmail&purpose=chat`);
   await expect(
     page.getByRole("heading", { name: "Give an agent an email address" }),
   ).toBeVisible();

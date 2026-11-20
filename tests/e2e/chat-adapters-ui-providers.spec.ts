@@ -481,7 +481,8 @@ test.describe.serial("native chat adapter UI", () => {
     await page.goto(`/${seed.prefix}/apps/chat/endpoint-github/settings`);
     await expect(page).toHaveURL(new RegExp(`/${seed.prefix}/apps$`));
     await expect.poll(() => mock.chatEndpointListReads).toBeGreaterThan(0);
-    await expect(page.getByRole("button", { name: "Connect AgentMail", exact: true })).toBeVisible();
+    await page.getByRole("searchbox", { name: "Search connectors" }).fill("AgentMail");
+    await expect(page.getByText("No connectors match “AgentMail”.", { exact: true })).toBeVisible();
     expect(mock.createdWithAgentId).toBeNull();
   });
 
@@ -518,7 +519,7 @@ test.describe.serial("native chat adapter UI", () => {
   }
 
   for (const provider of PROVIDERS) {
-    test(`${provider.name}: catalog, setup, and connection management tabs`, async ({
+    test(`${provider.name}: setup and connection management tabs`, async ({
       page,
     }, testInfo) => {
       const mock = await installChatControlPlaneMock(page, provider, seed, {
@@ -526,23 +527,20 @@ test.describe.serial("native chat adapter UI", () => {
         enableGitHubReviewBots: provider.provider === "github",
       });
 
-      await page.goto(`/${seed.prefix}/apps`);
-      await expect(
-        page.getByRole("heading", { name: "Connectors" }),
-      ).toBeVisible({ timeout: 30_000 });
-      let connector = await findConnectorBySearch(page, provider.name, provider.slug);
       if (provider.provider === "github") {
+        await page.goto(`/${seed.prefix}/apps`);
         const tools = await findConnectorBySearch(page, "GitHub", "github");
         await tools.getByRole("button", { name: "Add key GitHub", exact: true }).click();
         await page.getByRole("button", { name: "Change", exact: true }).click();
         await expect(page.getByRole("heading", { name: "Connect GitHub as" })).toBeVisible();
         await expect(page.getByRole("heading", { name: "Choose how to connect" })).toHaveCount(0);
-        await page.goto(`/${seed.prefix}/apps`);
-        connector = await findConnectorBySearch(page, provider.name, provider.slug);
       }
-      await connector
-        .getByRole("button", { name: `Connect ${provider.provider === "github" ? "GitHub Code Review Bot" : provider.name}` })
-        .click();
+
+      // These chat providers are absent from Delegra's default catalog.
+      const setupParams = new URLSearchParams({ provider: provider.provider });
+      if (provider.chatAndTool) setupParams.set("toolHref", `/apps/connect?source=${provider.slug}`);
+      else setupParams.set("purpose", "chat");
+      await page.goto(`/${seed.prefix}/apps/chat/connect?${setupParams}`);
 
       if (provider.chatAndTool) {
         await expect(
@@ -1016,8 +1014,7 @@ test.describe("iMessage Photon setup and management", () => {
   });
   test("connects Pro shared DMs without presenting a fake owned number or enabling groups", async ({page}) => {
     await installChatControlPlaneMock(page, photon, seed, { enableChatConnectors: true, photonShared: true });
-    await page.goto(`/${seed.prefix}/apps`);
-    await page.getByRole("button", {name:"Connect iMessage Photon",exact:true}).click();
+    await page.goto(`/${seed.prefix}/apps/chat/connect?provider=imessage-photon&purpose=chat`);
     await selectMaya(page);
     await page.getByLabel("Project ID").fill("project-e2e");
     await page.getByLabel("Project secret").fill("photon-test-secret");
@@ -1045,11 +1042,7 @@ test.describe("iMessage Photon setup and management", () => {
         (value) => localStorage.setItem("paperclip.theme", value),
         theme,
       );
-      await page.goto(`/${seed.prefix}/apps`);
-      const card = await findConnectorBySearch(page, "iMessage Photon", "imessage-photon");
-      await card
-        .getByRole("button", { name: "Connect iMessage Photon" })
-        .click();
+      await page.goto(`/${seed.prefix}/apps/chat/connect?provider=imessage-photon&purpose=chat`);
       await selectMaya(page);
       await expectSetupRail(page);
       await expect(

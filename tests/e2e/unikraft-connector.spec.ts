@@ -4,14 +4,7 @@ test("Unikraft uses the ordinary access and credential wizard", async ({ page, r
   const response = await request.post("/api/companies", { data: { name: `Unikraft setup ${Date.now()}` } });
   expect(response.ok()).toBe(true);
   const company = await response.json();
-  await page.goto(`/${company.issuePrefix}/apps`);
-  await expect(page.getByRole("heading", { name: "Connectors", exact: true })).toBeVisible();
-  await page.getByRole("searchbox", { name: "Search connectors" }).fill("Unikraft");
-  const card = page.getByRole("list", { name: "Connector list" }).getByRole("listitem").filter({ hasText: "Unikraft" });
-  await expect(card).toHaveCount(1);
-  // App marks are decorative (empty alt), so they have no accessible img role.
-  await expect(card.locator('img[src="/brands/apps/unikraft.svg"]')).toBeVisible();
-  await card.getByRole("button", { name: "Add key Unikraft", exact: true }).click();
+  await page.goto(`/${company.issuePrefix}/apps/connect?source=unikraft`);
   await expect(page.getByRole("heading", { name: "Connect Unikraft", exact: true })).toBeVisible();
   await expect(page.getByLabel("Your Unikraft key", { exact: true })).toBeVisible();
   await expect(page.getByLabel("Your Unikraft key", { exact: true })).toHaveAttribute("type", "password");
