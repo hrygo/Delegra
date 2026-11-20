@@ -3,8 +3,6 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 const repositoryRoot = path.resolve(import.meta.dirname, "../..");
-// PR #13470 uses the code-owner-reviewed default branch for this first-party workflow.
-const ordinaryPrTrustedWorkflowRevision = "master";
 const fullStackTestNeeds =
   /needs:\s*\[\s*authorize,\s*target_lock,\s*catalog,\s*daytona_image,\s*build_runner_artifacts,\s*build_remote_provider_pack,?\s*\]/u;
 const buildRunnerNeeds =
@@ -62,31 +60,27 @@ describe("public repository paid workflow security", () => {
 
   });
 
-  it("uses the reviewed master branch for the first-party trusted PR workflow", async () => {
+  it("pins the trusted PR workflow to a Delegra commit", async () => {
     const ordinaryPrWorkflow = await readFile(
       path.join(repositoryRoot, ".github/workflows/pr.yml"),
       "utf8",
     );
     const trustedWorkflowCalls = [
-      ...ordinaryPrWorkflow.matchAll(
-        /^\s+uses:\s+(paperclipai\/paperclip\/\.github\/workflows\/pr-trusted\.yml)@([^\s#]+)$/gmu,
-      ),
+      ...ordinaryPrWorkflow.matchAll(/^ {4}uses:[ \t]+([^@\s]+)@([^\s#]+)[ \t]*$/gmu),
     ];
 
     expect(trustedWorkflowCalls).toHaveLength(1);
     expect(trustedWorkflowCalls[0]?.[1]).toBe(
-      "paperclipai/paperclip/.github/workflows/pr-trusted.yml",
+      "hrygo/Delegra/.github/workflows/pr-delegra-trusted.yml",
     );
-    expect(trustedWorkflowCalls[0]?.[2]).toBe(
-      ordinaryPrTrustedWorkflowRevision,
-    );
+    expect(trustedWorkflowCalls[0]?.[2]).toMatch(/^[0-9a-f]{40}$/u);
   });
 
   // PR #18348 added the ninth pr-trusted bootstrap, in the Vitest selection job.
   // #19533 added the tenth (sandbox provider tests); the eleventh runs this suite.
   const trustedPnpmBootstraps = {
     "runner-full-stack-e2e.yml": 8,
-    "pr-trusted.yml": 11,
+    "pr-delegra-trusted.yml": 11,
   } as const;
 
   it("keeps pnpm bootstrap registry telemetry out of trusted workflow setup", async () => {
@@ -127,7 +121,7 @@ describe("public repository paid workflow security", () => {
         expectedCachedSetupNodeSteps: 3,
       },
       {
-        name: "pr-trusted.yml",
+        name: "pr-delegra-trusted.yml",
         // PR #13300 restores shared stores directly without setup-node cache writes.
         expectedCachedSetupNodeSteps: 0,
       },
