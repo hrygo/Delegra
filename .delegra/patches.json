@@ -617,11 +617,12 @@
       "kind": "fork-only",
       "status": "active",
       "commits": [
-        "fdcadc7e9af28ff7ca3b195a1b69b5986c47ed33"
+        "fdcadc7e9af28ff7ca3b195a1b69b5986c47ed33",
+        "219887c7a963a6eaffc59b3a2c1b74bfbd912ba0"
       ],
       "owner": "hrygo",
       "reviewBy": "2026-12-11",
-      "verifiedAt": "2026-11-12",
+      "verifiedAt": "2026-11-20",
       "retireWhen": "An accepted upstream release can express the Delegra new-Codex custom Responses connection default without a fork-only change.",
       "notes": "Delegra-specific preference for new Codex agents. Users supply the gateway URL and credentials. Existing agents and explicit connected choices remain unchanged. This preference is not imposed on upstream installations."
     },
