@@ -38,21 +38,9 @@
   },
   "base": {
     "kind": "stable",
-    "ref": "v2026.1106.0",
-    "commit": "d69631b01b9c658f80bf8bed389863dce82643e1"
+    "ref": "v2026.1117.0",
+    "commit": "c0f132898d2a2677312d8c72096187b27a3d9a38"
   },
-  "upstreamOverlays": [
-    {
-      "kind": "canary",
-      "ref": "canary/v2026.1104.0-canary.1",
-      "commit": "d7283e875772ca8c684dc86e471e6b48d543b7b1",
-      "transitionalWaiver": {
-        "reason": "The stable tag's source predates the accepted canary. Retain its managed Codex fixes, native recovery behavior, and database migration history until a suitable stable release contains them.",
-        "expiresOn": "2026-12-31",
-        "replaceWith": "A stable tag containing the accepted canary commit or an independently verified equivalent"
-      }
-    }
-  ],
   "internalPaths": [
     ".delegra/",
     "doc/DELEGRA-",
@@ -173,13 +161,14 @@
       "kind": "fork-only",
       "status": "active",
       "commits": [
-        "dab86644ca650f3d93da0439f7f8646b7f7ef709"
+        "dab86644ca650f3d93da0439f7f8646b7f7ef709",
+        "af6c40a606c43467e02d663c555b085b37126830"
       ],
       "owner": "hrygo",
       "reviewBy": "2026-12-20",
       "verifiedAt": "2026-11-20",
       "retireWhen": "The trusted PR review can use the stable upgrade lockfile policy directly.",
-      "notes": "The trusted base verifies the published upstream release, the stable commit ancestry in the PR head, and the exact root lockfile blob for same-repository stable upgrades to deploy."
+      "notes": "The trusted base verifies the published upstream release, stable commit ancestry in the PR head, and exact blobs for managed lockfiles and the reporting lock proof in same-repository stable upgrades to deploy."
     },
     {
       "id": "inbox-badge-resolved-failed-runs",
@@ -255,7 +244,7 @@
       "reviewBy": "2026-11-30",
       "verifiedAt": "2026-10-26",
       "retireWhen": "The accepted upstream stable base supplies an equivalent company-level reference-rate editor and a separate estimate report for gateway and subscription usage.",
-      "notes": "Withdrawn at the operator request on 2026-10-26. The second commit reverses the reference-rate API, shared estimator, Providers editor, and related feature documentation from PR #17. The executed SQL migration stays as inert compatibility history; during the canary v2026.1104.0-canary.1 merge it was renumbered 0378 -> 0429 with a rebuilt journal entry and snapshot because upstream allocated 0378."
+      "notes": "The reference-rate API, estimator, and editor are retired. Migration 0452_gigantic_owl preserves the published SQL byte for byte as compatibility history. The migration executor recognizes the same hash and legacy filename receipts."
     },
     {
       "id": "codex-structured-launch-policy",
@@ -264,7 +253,8 @@
       "commits": [
         "0e04c1379971773c4c4ce58db19fa1ca66d25119",
         "16da63dd36a3faeffb2541183a9f50a446a5533a",
-        "4c7148df2d04541a9027da0b9bed873a91da3aa9"
+        "4c7148df2d04541a9027da0b9bed873a91da3aa9",
+        "890a5e01301d5a9c7b86e76cf1377b21d9610185"
       ],
       "owner": "hrygo",
       "reviewBy": "2026-11-30",
@@ -324,8 +314,8 @@
       "owner": "hrygo",
       "reviewBy": "2026-11-30",
       "verifiedAt": "2026-10-27",
-      "retireWhen": "The accepted stable base applies an explicit allow-unpriced policy consistently to terminal pending usage, operator resume and final native dispatch recovery checks.",
-      "notes": "The local operator allows unavailable costs to be valued as zero for budget admission. Keep unknown and pending accounting evidence, actual charges, held reservations and manual pauses. Open native recovery still gates new work; final dispatch checks other recoveries in the same scope and UTC window. No receipt completion, hold release, schema change or default-policy change. Focused real PostgreSQL regressions and independent review cover admission, operator resume, final-dispatch interleaving and UTC month boundaries; full repository checks and live rollout are separate evidence."
+      "retireWhen": "The accepted stable base preserves Delegra's unpriced admission behavior and prioritizes the known budget limit when both conditions apply.",
+      "notes": "Explicit allow-unpriced policies admit accounting exposure while retaining usage evidence, held reservations, and enforcement of known hard limits and manual pauses. The known hard limit is reported first when unpriced usage is also present. Pending native recovery follows upstream's durable settlement and continuation contract."
     },
     {
       "id": "remote-anchor-workspace-error",
@@ -498,13 +488,19 @@
         "a93417b03ba5ac7ffcb8b3c32c86795070206d7f",
         "d4b315b8fe603604f9851b3ccb4dbf623cfa9271",
         "bd9c437aee017caf895e2fa7fcdde0e907800ea7",
-        "006f149d0296f6b85db19475b51a1490e0e1c6ef"
+        "006f149d0296f6b85db19475b51a1490e0e1c6ef",
+        "02ca99403b8f79720ccf9b23b1358abd3d1668e3",
+        "b6e0df9f338eab02fdf1cb8c11e7d6c42120a231",
+        "4615dcf89b9dbdf3757366f7e5c407c4c74c79bc",
+        "d264ecbfbe2a93200aa78d60fd7dd7d5f4467a46",
+        "55b686887a499e649ee3fe762f5f22404759a9c9",
+        "4bfc2d74c5d707d26518a208c106e142217428b2"
       ],
       "owner": "hrygo",
       "reviewBy": "2026-11-30",
       "retireWhen": "An accepted stable base provides an immutable compatible shared CI workflow and routing contract without a fork snapshot.",
-      "notes": "Freeze the deploy-compatible PR workflow and its fork routing snapshot at immutable fork commits. The routing snapshot reads trusted planner inputs from the accepted upstream base or overlay, and the consistency check validates upstream provenance, both committed snapshots, and agreement with the candidate task matrix. The caller also accepts the full-ci label, and a scope job keeps the full matrix for changes to workflows, composite actions, or scripts, or for the full-ci and profile-ci labels.",
-      "verifiedAt": "2026-11-11"
+      "notes": "Pin the fork reusable workflows to immutable commits. Trusted planner inputs come from an accepted upstream commit or a stable mainline ancestor with identical inputs. The scope job runs the matrix for CI, migration and protected lock paths or the full-ci and profile-ci labels. The v2026.1117.0 adoption verifies the published lock content and upstream migration SQL, then checks the byte-identical Delegra migration at 0452.",
+      "verifiedAt": "2026-11-20"
     },
     {
       "id": "canary-merge-repair",
@@ -550,9 +546,22 @@
       "notes": "Restores the saved web-search disablement to default and recovered Codex launch arguments, updates the affected factory regression test to observe the current launch boundary, and supplies the fields required by the Rust task-memory fixture."
     },
     {
-      "id": "portable-runner-binary-fixtures",
+      "id": "native-runner-release-fixture-prebuild",
       "kind": "fork-only",
       "status": "active",
+      "commits": [
+        "2e5c0b8ef0c192f1d075e34b96aed887407e2078"
+      ],
+      "owner": "hrygo",
+      "reviewBy": "2026-12-20",
+      "verifiedAt": "2026-11-20",
+      "retireWhen": "An accepted upstream release prepares locked Runner release fixtures before native integration tests start.",
+      "notes": "Builds the native Runner release daemon and fake Codex app-server before Vitest to keep a cold Cargo build and build-lock contention outside test hooks."
+    },
+    {
+      "id": "portable-runner-binary-fixtures",
+      "kind": "fork-only",
+      "status": "absorbed",
       "commits": [
         "079ef586db51e2f9c4e10d096b471b0f4247b4d8"
       ],
@@ -560,7 +569,7 @@
       "reviewBy": "2026-11-30",
       "verifiedAt": "2026-11-11",
       "retireWhen": "An accepted stable release supplies runner binary staging fixtures that work with multicall coreutils.",
-      "notes": "Exercises atomic replacement and rebuild with independently executable shell fixtures instead of assuming system coreutils retain their behavior after being renamed."
+      "notes": "Stable v2026.1117.0 covers atomic replacement and rebuild with a standalone sleep and shell fixture in 21eb47455e and 6b438365ea."
     },
     {
       "id": "portable-codex-policy-fixtures",
@@ -578,7 +587,7 @@
     {
       "id": "portable-sandbox-shell-status",
       "kind": "fork-only",
-      "status": "active",
+      "status": "absorbed",
       "commits": [
         "63b40d6d0496763cbfc0d3fca2ba932aacc062cd"
       ],
@@ -586,7 +595,7 @@
       "reviewBy": "2026-11-30",
       "verifiedAt": "2026-11-11",
       "retireWhen": "An accepted upstream release verifies sandbox write denial without assuming a shell-specific exit code.",
-      "notes": "Require a normal, unsuccessful shell exit and an unchanged protected file when a workspace command attempts an external write; shells may return different nonzero redirection statuses."
+      "notes": "Stable v2026.1117.0 accepts nonzero shell redirection exit statuses in e5b60e5115 and verifies the protected file remains unchanged."
     },
     {
       "id": "default-codex-app-server",

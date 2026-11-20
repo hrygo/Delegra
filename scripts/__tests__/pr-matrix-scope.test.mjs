@@ -81,6 +81,20 @@ test('runs the full matrix when the change touches a CI script', (t) => {
   assert.deepEqual(decision, { run: true, reason: 'ci-paths' });
 });
 
+for (const file of [
+  'pnpm-lock.yaml',
+  'scripts/typecheck-sandbox-providers/pnpm-lock.yaml',
+  'packages/plugins/sandbox-providers/daytona/pnpm-lock.yaml',
+  'tests/runner-e2e/report-lock.json',
+  'tests/runner-e2e/report-lock.patch',
+  'packages/db/src/migrations/0452_gigantic_owl.sql',
+]) {
+  test(`runs the full matrix for a change to ${file}`, (t) => {
+    const decision = decide(t, { labels: '', changed: [file] });
+    assert.deepEqual(decision, { run: true, reason: 'ci-paths' });
+  });
+}
+
 test('runs the full matrix when a maintainer adds the full-ci label', (t) => {
   const decision = decide(t, { labels: 'bug full-ci', changed: ['src/feature.ts'] });
   assert.deepEqual(decision, { run: true, reason: 'label' });

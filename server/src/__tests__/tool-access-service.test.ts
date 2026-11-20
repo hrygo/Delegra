@@ -68,6 +68,7 @@ import {
   GOOGLE_WORKSPACE_DEFAULT_SELECTION,
   getAvailableConnectionMethod,
   getConnectableAppDefinition,
+  createToolConnectionSchema,
   type CreateToolConnection,
   type GoogleWorkspaceConnectorProfileId,
 } from "@paperclipai/shared";
@@ -90,6 +91,7 @@ import { createOAuthClientRegistration } from "../services/tool-access/oauth/cli
 import { createPersonalConnectionIdentity } from "../services/tool-access/connections/personal-identity.js";
 import { createConnectionSetupPolicy } from "../services/tool-access/connections/setup-policy.js";
 import { toolAccessPolicyService } from "../services/tool-access-policy.js";
+import { connectionIntentService } from "../services/connection-intents.js";
 import { secretService } from "../services/secrets.js";
 import {
   canonicalToolArguments,
@@ -954,14 +956,14 @@ describeEmbeddedPostgres("tool access service", () => {
     if (externalDatabaseUrl) {
       await applyPendingMigrations(externalDatabaseUrl);
       db = createDb(externalDatabaseUrl, { maxConnections: 4 });
-      await instanceSettingsService(db).updateExperimental({ enableMemoryConnectors: true });
+      await instanceSettingsService(db).updateExperimental({ enableMemoryConnectors: true, enableGoogleWorkspaceConnector: true });
       return;
     }
     tempDb = await startEmbeddedPostgresTestDatabase(
       "paperclip-tool-access-service-",
     );
     db = createDb(tempDb.connectionString, { maxConnections: 4 });
-    await instanceSettingsService(db).updateExperimental({ enableMemoryConnectors: true });
+    await instanceSettingsService(db).updateExperimental({ enableMemoryConnectors: true, enableGoogleWorkspaceConnector: true });
   }, 20_000);
 
   afterEach(async () => {
@@ -2154,6 +2156,15 @@ describeEmbeddedPostgres("tool access service", () => {
       let replacementFinished: Promise<unknown> | undefined;
       try {
         await waitForFirstReplacementLock(cleanupPid);
+        releaseFirstReplacement();
+        await firstReplacement;
+        await membershipIsLocked;
+
+        // Start the empty replacement only once cleanup owns the membership
+        // row. Had it queued behind the first replacement too, both waiters
+        // would wake on that commit and race for the row; a replacement that
+        // wins it legitimately widens before cleanup, which made the
+        // fail-closed outcome below depend on scheduling.
         let replacementSettled = false;
         const replacement = replacementService
           .replaceConnectionGrantMembers(connection.id, grant.id, [])
@@ -2165,12 +2176,10 @@ describeEmbeddedPostgres("tool access service", () => {
             replacementSettled = true;
           });
         replacementFinished = replacement;
-        await waitForFirstReplacementLock(replacementPid);
-        expect(replacementSettled).toBe(false);
-
-        releaseFirstReplacement();
-        await firstReplacement;
-        await membershipIsLocked;
+        await vi.waitFor(async () => {
+          const [waiting] = await db.execute<{ blockers: number[] }>(sql`select pg_blocking_pids(${replacementPid}) as blockers`);
+          expect(waiting!.blockers).toContain(cleanupPid);
+        }, { timeout: 5000 });
         expect(replacementSettled).toBe(false);
         releaseCleanup();
         await cleanup;
@@ -3353,6 +3362,42 @@ describeEmbeddedPostgres("tool access service", () => {
       .where(eq(toolConnections.companyId, company.id))).toEqual([]);
     expect(await db.select().from(companySecrets)
       .where(eq(companySecrets.companyId, company.id))).toEqual([]);
+  });
+
+  it.each([
+    { name: "channel purpose", input: { connectionPurpose: "channel" as const, transport: "local_stdio" as const } },
+    { name: "chat transport", input: { transport: "chat_sdk" as const } },
+    { name: "voice transport", input: { transport: "voice" as const } },
+  ])("rejects a $name before it writes any row", async ({ input }) => {
+    const company = await createCompany(db);
+    const service = createTestToolAccessService(db);
+
+    await expect(service.createConnection(company.id, connectionInput({
+      name: "Not a tool",
+      config: { templateId: "paperclip.echo-calculator-time" },
+      ...input,
+    }))).rejects.toMatchObject({ status: 422 });
+
+    expect(await db.select().from(toolConnections)
+      .where(eq(toolConnections.companyId, company.id))).toEqual([]);
+    expect(await db.select().from(toolApplications)
+      .where(eq(toolApplications.companyId, company.id))).toEqual([]);
+  });
+
+  it("stores config as transportConfig when the request leaves transportConfig out", async () => {
+    const company = await createCompany(db);
+    const service = createTestToolAccessService(db);
+    const body = createToolConnectionSchema.parse({
+      name: "Local echo config only",
+      transport: "local_stdio",
+      config: { templateId: "paperclip.echo-calculator-time" },
+    });
+
+    const connection = await service.createConnection(company.id, body);
+
+    const [stored] = await db.select().from(toolConnections).where(eq(toolConnections.id, connection.id));
+    expect(stored?.config).toMatchObject({ templateId: "paperclip.echo-calculator-time" });
+    expect(stored?.transportConfig).toEqual(stored?.config);
   });
 
   it("registers an approved local stdio template and exposes its runtime slot", async () => {
@@ -9795,6 +9840,7 @@ describeEmbeddedPostgres("tool access service", () => {
       const revived = await service.connectGalleryApp(
         company.id,
         {
+          reconnectConnectionId: first.connectionId,
           galleryKey: "google-drive",
           connectionMethodKey: "paperclip-write",
           grantKind: "user",
@@ -10812,8 +10858,8 @@ describeEmbeddedPostgres("tool access service", () => {
     ).toBe(versionCountBeforeAccessRevocation);
   });
 
-  it.each(["page", "task"] as const)(
-    "activates and discovers actions for a fresh personal OAuth callback from %s without widening task access",
+  it.each(["page", "task", "task-all-agents"] as const)(
+    "activates personal OAuth from %s with the selected audience only after finalization",
     async (host) => {
       vi.stubEnv("PAPERCLIP_TOOL_OAUTH_SLACK_CLIENT_ID", "slack-client-id");
       vi.stubEnv(
@@ -10827,7 +10873,7 @@ describeEmbeddedPostgres("tool access service", () => {
       const otherAgent = await createAgent(db, company.id);
       const { issue, run } = await createIssueAndRun(db, company.id, agent.id);
       const interaction =
-        host === "task"
+        host !== "page"
           ? (
               await db
                 .insert(issueThreadInteractions)
@@ -10964,12 +11010,12 @@ describeEmbeddedPostgres("tool access service", () => {
         });
       for (const entry of [searchMessagesEntry, sendMessageEntry]) {
         await expect(decide(entry)).resolves.toMatchObject(
-          host === "task"
+          host !== "page"
             ? { decision: "deny" }
             : { decision: "allow", reasonCode: "allow_profile" },
         );
       }
-      if (host === "task") {
+      if (host !== "page") {
         await expect(
           db
             .select()
@@ -11007,14 +11053,26 @@ describeEmbeddedPostgres("tool access service", () => {
         personalGrant.credentialSecretRefs.map((ref) => ref.configPath).sort(),
       ).toEqual(["oauth.access_token", "oauth.refresh_token"]);
 
-      const finished = await service.finalizeOAuthAccess(
+      if (host === "task-all-agents") {
+        const intents = connectionIntentService(db);
+        await intents.updatePhase(interaction!.id, "authorizing", userId, {
+          setupAccess: { connectionId: connected.connectionId, access: "all_agents" },
+          canManageOrganizationGrant: true,
+        });
+        await expect(intents.complete(interaction!.id, connected.connectionId, userId, { canManageOrganizationGrant: true, oauthCompletion: true }))
+          .resolves.toMatchObject({ status: "accepted" });
+      }
+      const finished = host === "task-all-agents" ? {
+        profileEntries: await db.select().from(toolProfileEntries).where(eq(toolProfileEntries.profileId, callbackProfile!.id)),
+        profileBindings: await db.select().from(toolProfileBindings).where(eq(toolProfileBindings.profileId, callbackProfile!.id)),
+      } : await service.finalizeOAuthAccess(
         company.id,
         connected.connectionId,
         {
           grantKind: "user",
         },
         { actorType: "user", actorId: userId },
-        host === "task" ? agent.id : undefined,
+        host !== "page" ? agent.id : undefined,
       );
       expect(finished.profileEntries).toHaveLength(2);
       expect(finished.profileBindings).toEqual([
@@ -11035,6 +11093,11 @@ describeEmbeddedPostgres("tool access service", () => {
             ),
           ),
       ).resolves.toHaveLength(host === "task" ? 0 : 1);
+      if (host === "task-all-agents") {
+        await expect(decide(searchMessagesEntry, otherAgent.id)).resolves.toMatchObject({ decision: "allow" });
+        expect((await service.getEffectiveToolAssignmentsForAgent(company.id, otherAgent.id)).installedConnections)
+          .toEqual(expect.arrayContaining([expect.objectContaining({ id: connected.connectionId })]));
+      }
       if (host === "task") {
         await expect(decide(searchMessagesEntry)).resolves.toMatchObject({
           decision: "allow",
@@ -11130,7 +11193,7 @@ describeEmbeddedPostgres("tool access service", () => {
         {
           redirectUri: "https://paperclip.example/api/tools/oauth/callback",
           actor: { actorType: "user", actorId: userId },
-          interactionId: interaction?.id,
+          interactionId: host === "task-all-agents" ? undefined : interaction?.id,
         },
       );
       await expect(
@@ -15997,7 +16060,7 @@ describeEmbeddedPostgres("tool access service", () => {
     ).rejects.toMatchObject({ status: 404 });
   });
 
-  it("reuses a removed gallery app while applying the omitted organization identity default", async () => {
+  it("creates a separate gallery app for the omitted organization default after personal removal", async () => {
     const company = await createCompany(db);
     const service = createTestToolAccessService(db);
     const actor = { actorType: "user" as const, actorId: "local-board" };
@@ -16022,8 +16085,10 @@ describeEmbeddedPostgres("tool access service", () => {
       actor,
     );
 
-    expect(second.application.id).toBe(first.application.id);
-    expect(second.connectionId).toBe(first.connectionId);
+    expect(second.application.id).not.toBe(first.application.id);
+    expect(second.connectionId).not.toBe(first.connectionId);
+    await expect(service.getConnection(first.connectionId, company.id))
+      .resolves.toMatchObject({ status: "archived", credentialPolicy: "per_user" });
     expect(second.application.status).toBe("draft");
     expect(second.connection.status).toBe("draft");
     expect(second.connection.credentialPolicy).toBe("shared");
@@ -16038,8 +16103,8 @@ describeEmbeddedPostgres("tool access service", () => {
         isDefault: true,
       }),
     ]);
-    await expect(db.select().from(toolApplications)).resolves.toHaveLength(1);
-    await expect(db.select().from(toolConnections)).resolves.toHaveLength(1);
+    await expect(db.select().from(toolApplications)).resolves.toHaveLength(2);
+    await expect(db.select().from(toolConnections)).resolves.toHaveLength(2);
   });
 
   it("restores grants and credential policy when an identity-changing revival fails", async () => {
@@ -18413,6 +18478,119 @@ describeEmbeddedPostgres("tool access service", () => {
       expect(secret.latestVersion).toBe(2);
     });
   }, 15000);
+
+  it.each(["local-board", "another-user", "current-user"])(
+    "creates an independent fresh GitHub identity after archiving a personal connection owned by %s",
+    async (ownerUserId) => {
+      const company = await createCompany(db);
+      const service = createTestToolAccessService(db);
+      const currentUserId = "current-user";
+      await grantBoardUser(db, company.id, currentUserId, [], "member");
+      mockToolsList([readTool("get_me", "Read current user")]);
+      await withGalleryServerUrl("github", PUBLIC_MCP_FIXTURE_URL, async () => {
+        const first = await service.connectGalleryApp(company.id, {
+          galleryKey: "github",
+          connectionMethodKey: "mcp-key",
+          name: "GitHub",
+          grantKind: "user",
+          credentialValues: { "credentials.authorization": "archived-fixture-key" },
+        }, { actorType: "user", actorId: ownerUserId });
+        // Model a legacy archived row that still has personal credential refs.
+        // Fresh setup must leave even this retained material untouched.
+        await db.update(toolConnections).set({ status: "archived", enabled: false })
+          .where(eq(toolConnections.id, first.connectionId));
+        await db.update(toolApplications).set({ status: "archived", archivedAt: new Date() })
+          .where(eq(toolApplications.id, first.application.id));
+        await db.insert(activityLog).values({
+          companyId: company.id, actorType: "user", actorId: ownerUserId,
+          action: "tool_connection.archived", entityType: "tool_connection",
+          entityId: first.connectionId,
+        });
+        const retained = async () => ({
+          applications: await db.select().from(toolApplications)
+            .where(eq(toolApplications.id, first.application.id)),
+          connections: await db.select().from(toolConnections)
+            .where(eq(toolConnections.id, first.connectionId)),
+          grants: await db.select().from(connectionGrants)
+            .where(eq(connectionGrants.connectionId, first.connectionId)),
+          secrets: await db.select().from(companySecrets),
+          versions: await db.select().from(companySecretVersions),
+          activity: await db.select().from(activityLog)
+            .where(eq(activityLog.entityId, first.connectionId)),
+        });
+        const before = await retained();
+        const app = createRouteApp(db,
+          boardSessionActor(company.id, "member", currentUserId),
+          undefined, { deploymentMode: "authenticated" });
+        const freshInput = {
+          galleryKey: "github",
+          connectionMethodKey: "mcp-key",
+          name: "GitHub",
+          grantKind: "user",
+          credentialValues: { "credentials.authorization": "fresh-fixture-key" },
+        };
+
+        if (ownerUserId !== currentUserId) {
+          for (const target of [
+            { reconnectConnectionId: first.connectionId },
+            { applicationId: first.application.id },
+          ]) {
+            await request(app)
+              .post(`/api/companies/${company.id}/tools/apps/connect`)
+              .send({ ...freshInput, ...target }).expect(403);
+            await expect(service.connectGalleryApp(company.id, {
+              ...freshInput, grantKind: "user", ...target,
+            }, { actorType: "user", actorId: currentUserId, actorSource: "session" }))
+              .rejects.toMatchObject({
+                status: 403,
+                message: "Only the existing personal identity can reconnect this connection",
+              });
+          }
+          expect(await retained()).toEqual(before);
+        }
+
+        // An omitted key must not borrow the archived personal credential.
+        await request(app)
+          .post(`/api/companies/${company.id}/tools/apps/connect`)
+          .send({ ...freshInput, credentialValues: {} }).expect(400);
+        expect(await retained()).toEqual(before);
+
+        const fresh = await request(app)
+          .post(`/api/companies/${company.id}/tools/apps/connect`)
+          .send(freshInput).expect(201);
+        expect(fresh.body.connectionId).not.toBe(first.connectionId);
+        expect(fresh.body.application.id).not.toBe(first.application.id);
+        expect(fresh.body.application.name).toBe("GitHub (2)");
+        expect(fresh.body.connection).toMatchObject({
+          credentialPolicy: "per_user", credentialSecretRefs: [],
+        });
+        const after = await retained();
+        expect(after.applications).toEqual(before.applications);
+        expect(after.connections).toEqual(before.connections);
+        expect(after.grants).toEqual(before.grants);
+        expect(after.activity).toEqual(before.activity);
+        for (const secret of before.secrets) expect(after.secrets).toContainEqual(secret);
+        for (const version of before.versions) expect(after.versions).toContainEqual(version);
+        const freshGrants = await db.select().from(connectionGrants)
+          .where(eq(connectionGrants.connectionId, fresh.body.connectionId));
+        expect(freshGrants).toEqual([expect.objectContaining({
+          kind: "user", subjectUserId: currentUserId, status: "active",
+        })]);
+        const oldSecretIds = before.grants.flatMap((grant) =>
+          grant.credentialSecretRefs.map((ref) => ref.secretId));
+        expect(freshGrants[0]!.credentialSecretRefs).toHaveLength(1);
+        expect(oldSecretIds).toHaveLength(1);
+        const freshSecretId = freshGrants[0]!.credentialSecretRefs[0]!.secretId;
+        expect(oldSecretIds).not.toContain(freshSecretId);
+        expect(after.secrets.find((secret) => secret.id === freshSecretId))
+          .toMatchObject({ scope: "user", ownerUserId: currentUserId });
+        await expect(db.select().from(activityLog)
+          .where(and(eq(activityLog.entityId, fresh.body.connectionId),
+            eq(activityLog.action, "tool_app.connected"))))
+          .resolves.toEqual([expect.objectContaining({ actorId: currentUserId })]);
+      }, "mcp-key");
+    },
+  );
 
   it("reconnects a personal key on the existing user grant without creating an organization credential", async () => {
     const company = await createCompany(db);

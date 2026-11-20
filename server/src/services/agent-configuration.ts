@@ -1,3 +1,4 @@
+import { notifyMuseContactVerification } from "../modules/external-agents/index.js";
 import { assertEphemeralAgentInstructions } from "./agent-instructions.js";
 import { notifyStrandedAgentStatus } from "./live-run-recovery-notifications.js";
 import { notifyDeferredExecutionEligibility } from "./deferred-execution-notifications.js";
@@ -12,8 +13,8 @@ import { normalizeAgentUrlKey } from "@paperclipai/shared";
 import { normalizePaperclipRunnerAdapterConfig } from "@paperclipai/adapter-utils/server-utils";
 import { conflict, notFound, unprocessable } from "../errors.js";
 import { agentRecordQueries, type UpdateAgentOptions, type AgentConfigurationPatch, type AgentConfigurationRecord, isPlainRecord, buildConfigSnapshot,
-  hasConfigPatchFields, changedPendingApprovalConfigFields, diffConfigSnapshot } from "../lib/agent-records.js";
-import { normalizeAgentPermissions } from "../lib/agent-permissions.js";
+  hasConfigPatchFields, changedPendingApprovalConfigFields, diffConfigSnapshot, jsonEqual } from "../lib/agent-records.js";
+import { CEO_HIRING_DENIAL_KEY, ceoHiringDenial, normalizeAgentPermissions } from "../lib/agent-permissions.js";
 import type { ActivityPublication } from "../types/activity-publication.js";
 import { secretService, assertClaudeOAuthBindingInvariant } from "./secrets.js";
 import { agentCredentialService } from "./agent-credentials.js";
@@ -65,7 +66,15 @@ export async function prepareAgentConfiguration(db: Db, existing: AgentConfigura
   }
   const normalizedPatch = { ...data } as AgentConfigurationPatch;
   if (data.permissions !== undefined) {
-    normalizedPatch.permissions = normalizeAgentPermissions(data.permissions);
+    // Only the permissions control records a CEO hiring restriction. Keep an
+    // existing one unless this write turns hiring on, and never take one from input.
+    const incoming = data.permissions && typeof data.permissions === "object" && !Array.isArray(data.permissions)
+      ? Object.fromEntries(Object.entries(data.permissions).filter(([key]) => key !== CEO_HIRING_DENIAL_KEY)) : data.permissions;
+    const denial = ceoHiringDenial(existing.permissions);
+    normalizedPatch.permissions = normalizeAgentPermissions(
+      denial && (incoming as Record<string, unknown> | null)?.canCreateAgents !== true
+        ? { ...(incoming as Record<string, unknown>), [CEO_HIRING_DENIAL_KEY]: denial } : incoming,
+    );
   }
   if (
     Object.prototype.hasOwnProperty.call(normalizedPatch, "adapterConfig") &&
@@ -89,6 +98,9 @@ export async function prepareAgentConfiguration(db: Db, existing: AgentConfigura
       existing.adapterConfig,
     );
   }
+  if(normalizedPatch.adapterType!==undefined&&normalizedPatch.adapterType!==existing.adapterType
+    ||normalizedPatch.adapterConfig!==undefined&&!jsonEqual(normalizedPatch.adapterConfig,existing.adapterConfig))
+    await notifyMuseContactVerification(db,{companyId:existing.companyId,agentId:existing.id});
   await notifyStrandedAgentStatus(db, { companyId: existing.companyId, agentId: existing.id });
   await notifyRunDispatch(db, { companyId: existing.companyId });
   await notifyDeferredExecutionEligibility(db, { companyId: existing.companyId });
