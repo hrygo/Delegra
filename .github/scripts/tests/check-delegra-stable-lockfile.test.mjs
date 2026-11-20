@@ -87,6 +87,24 @@ test('rejects a changed file listing that disagrees with the pinned head', async
   assert.equal((await checkPullRequestLockfile(input)).passed, false);
 });
 
+test('verifies provider locks and the reporting lock proof against the same release', async () => {
+  const { input, responses } = fixture();
+  const paths = [
+    'packages/plugins/sandbox-providers/daytona/pnpm-lock.yaml',
+    'tests/runner-e2e/report-lock.json',
+    'tests/runner-e2e/report-lock.patch',
+  ];
+  for (const path of paths) {
+    input.files.push({ filename: path, status: 'modified', sha: blob });
+    responses.set(`${upstream}/contents/${path}?ref=${stable}`, { type: 'file', sha: blob });
+    responses.set(`${fork}/contents/${path}?ref=${head}`, { type: 'file', sha: blob });
+  }
+  assert.deepEqual(await checkPullRequestLockfile(input), { passed: true, failures: [] });
+
+  responses.set(`${fork}/contents/${paths[2]}?ref=${head}`, { type: 'file', sha: 'd'.repeat(40) });
+  assert.equal((await checkPullRequestLockfile(input)).passed, false);
+});
+
 test('keeps the refresh bot allowance without looking up a release', async () => {
   const { input, requests } = fixture();
   input.author = 'github-actions[bot]';
