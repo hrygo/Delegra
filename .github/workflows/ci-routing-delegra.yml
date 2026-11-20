@@ -385,7 +385,7 @@ jobs:
           fallback() { echo 'plan=' >> "$GITHUB_OUTPUT"; exit 0; }
           [[ "$FULL_CI" == 'true' ]] || fallback
           [[ "$EVENT_HEAD_SHA" =~ ^[0-9a-f]{40}$ && "$EVENT_MERGE_SHA" =~ ^[0-9a-f]{40}$ ]] || fallback
-          trusted="d7283e875772ca8c684dc86e471e6b48d543b7b1"
+          trusted="09e24dd12c36251dd12af2d73dbc715ce990f922"
           [[ "$trusted" =~ ^[0-9a-f]{40}$ ]] || fallback
           directory="$(mktemp -d)"
           trap 'rm -rf "$directory"' EXIT

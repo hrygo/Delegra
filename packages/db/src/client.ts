@@ -260,6 +260,22 @@ export function postgresJsOptions(options: DatabaseClientOptions): Record<string
 // work needs for progress writes. Keep connection configuration private to the
 // originating Db lifetime; callers receive neither URLs nor credentials.
 const dedicatedDbFactories = new WeakMap<object, () => Db>();
+const ownedDatabaseListenerFactories = new WeakMap<object, () => Db>();
+
+export interface OwnedDatabaseListener {
+  listen: Db["$client"]["listen"];
+  close(): Promise<void>;
+}
+
+export function createOwnedDatabaseListener(db: Db): OwnedDatabaseListener {
+  const factory = ownedDatabaseListenerFactories.get(db);
+  if (!factory) throw new Error("owned_listener_requires_create_db");
+  const owned = factory();
+  return {
+    listen: owned.$client.listen.bind(owned.$client),
+    close: () => owned.$client.end({ timeout: 1 }),
+  };
+}
 
 export async function withDedicatedDbConnection<T>(db: Db, action: (dedicated: Db) => Promise<T>): Promise<T> {
   const factory = dedicatedDbFactories.get(db);
@@ -361,6 +377,9 @@ function createDbClient(url: string, resolved: DatabaseClientOptions, owner?: ob
   dedicatedDbFactories.set(db, () => createDbClient(url, {
     ...resolved, maxConnections: 1, applicationName: "paperclip-workspace-finalization-lock",
   }, db));
+  ownedDatabaseListenerFactories.set(db, () => createDbClient(url, {
+    ...resolved, maxConnections: 1,
+  }, db));
   livenessDbFactories.set(db, () => createDbClient(url, {
     ...resolved, maxConnections: LIVENESS_POOL_MAX_CONNECTIONS, applicationName: "paperclip-controller-lease",
   }, db));
@@ -449,6 +468,13 @@ async function orderMigrationsByJournal(migrationFiles: string[]): Promise<strin
 
 type SqlExecutor = Pick<ReturnType<typeof postgres>, "unsafe">;
 
+// Delegra's reference-rates SQL kept the same hash through both renumberings.
+// Older name-based journals retain the filename they recorded at installation.
+const RENAMED_MIGRATION_FILES = new Map([
+  ["0378_superb_paibok.sql", "0452_gigantic_owl.sql"],
+  ["0429_superb_paibok.sql", "0452_gigantic_owl.sql"],
+]);
+
 async function runInTransaction(sql: SqlExecutor, action: () => Promise<void>): Promise<void> {
   await sql.unsafe("BEGIN");
   try {
@@ -509,7 +535,13 @@ async function migrationHistoryEntryExists(
 ): Promise<boolean> {
   const predicates: string[] = [];
   if (columnNames.has("hash")) predicates.push(`hash = ${quoteLiteral(hash)}`);
-  if (columnNames.has("name")) predicates.push(`name = ${quoteLiteral(migrationFile)}`);
+  if (columnNames.has("name")) {
+    const names = [migrationFile];
+    for (const [legacyName, canonicalName] of RENAMED_MIGRATION_FILES) {
+      if (canonicalName === migrationFile) names.push(legacyName);
+    }
+    predicates.push(`name IN (${names.map(quoteLiteral).join(", ")})`);
+  }
   if (predicates.length === 0) return false;
 
   const rows = await sql.unsafe<{ one: number }[]>(
@@ -591,6 +623,11 @@ const MIGRATIONS_WITH_TOP_LEVEL_STATEMENTS = new Set([
   "0413_tired_kronos.sql",
   "0414_closed_edwin_jarvis.sql",
   "0419_slippery_impossible_man.sql",
+  "0432_strong_mole_man.sql",
+  "0435_premium_puff_adder.sql",
+  "0436_legal_reavers.sql",
+  "0447_legacy_controller_process.sql",
+  "0450_petite_frightful_four.sql",
 
 
   "0384_funny_adam_warlock.sql",
@@ -977,7 +1014,7 @@ async function loadAppliedMigrations(
 
   if (columnNames.has("name")) {
     const rows = await sql.unsafe<{ name: string }[]>(`SELECT name FROM ${qualifiedTable} ORDER BY id`);
-    return rows.map((row) => row.name).filter((name): name is string => Boolean(name));
+    return rows.map((row) => RENAMED_MIGRATION_FILES.get(row.name) ?? row.name).filter((name): name is string => Boolean(name));
   }
 
   if (columnNames.has("hash")) {

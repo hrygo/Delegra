@@ -3,6 +3,7 @@ import { isAbsolute } from "node:path";
 import type { CodexFilesystemEntry, CodexLaunchPolicy, FrozenCodexLaunchContext } from "../../contracts/codex-launch-policy.js";
 export type { CodexLaunchPolicy, FrozenCodexLaunchContext } from "../../contracts/codex-launch-policy.js";
 
+export const CODEX_UPDATE_PLAN_TOOL_CONFIG = "tools.update_plan.enabled=true";
 export const CODEX_POLICY_DRIVER = "codex_app_server_launch_policy_v1";
 export const CODEX_LOOKUP_PREFIX = "paperclip-codex-launch-v1:";
 const MAX_POLICY_BYTES = 256 * 1024;
@@ -93,7 +94,7 @@ export function codexLaunchPermission(policy: CodexLaunchPolicy, mode: "default"
   return mode === "plan" ? profiles.plan : policy.externallySandboxed ? profiles.external : profiles.default;
 }
 export function codexLaunchPolicyArgs(policy: CodexLaunchPolicy, disableWebSearch = false): string[] {
-  return ["--disable", "image_generation", ...(policy.externallySandboxed ? ["--dangerously-bypass-approvals-and-sandbox"] : []),
+  return ["-c", CODEX_UPDATE_PLAN_TOOL_CONFIG, ...(policy.externallySandboxed ? ["--dangerously-bypass-approvals-and-sandbox"] : []),
     ...(disableWebSearch ? ["-c", 'web_search="disabled"'] : []), "app-server"];
 }
 export function codexLaunchPolicyConfig(policy: CodexLaunchPolicy): Record<string, unknown> {

@@ -4,7 +4,7 @@ import { resolve, isAbsolute, join, dirname, delimiter, relative, sep } from "no
 import { closeSync, constants, existsSync, fstatSync, openSync, realpathSync, readFileSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
 import { QUALIFIED_ACPX_PROFILES } from "../acpx/qualified-profiles.js";
-import { codexLaunchPolicyArgs, normalizeCodexLaunchPolicy } from "./codex-launch-policy.js";
+import { CODEX_UPDATE_PLAN_TOOL_CONFIG, codexLaunchPolicyArgs, normalizeCodexLaunchPolicy } from "./codex-launch-policy.js";
 import type { CodexFilesystemEntry, CodexLaunchPolicy } from "../../contracts/codex-launch-policy.js";
 
 import {
@@ -192,7 +192,10 @@ const SKILLLESS_BASE_CONFIG = {
   "features.plugins": false,
   "features.multi_agent": false,
   "features.memories": false,
-  "features.image_generation": false,
+  // Image generation stays on: Codex's built-in tool runs in the trusted
+  // app-server with the agent's existing provider auth. Disabling it makes the
+  // agent fall back to an OPENAI_API_KEY script the sandboxed shell cannot see,
+  // so it asks the user for a second key (N-12).
 } as const;
 
 export function codexCommandEnvironment(
@@ -250,6 +253,8 @@ function tomlString(value: string): string {
   return JSON.stringify(value);
 }
 
+export { CODEX_UPDATE_PLAN_TOOL_CONFIG } from "./codex-launch-policy.js";
+
 function createCodexSecurityConfiguration(
   source: NodeJS.ProcessEnv | undefined = undefined,
   readOnlyRoots: string[] = [],
@@ -288,6 +293,16 @@ function createCodexSecurityConfiguration(
         .map((value) => resolve(value)),
     ),
   ];
+  // Codex saves built-in image results under CODEX_HOME/generated_images and
+  // tells the agent to copy them into the workspace. Expose only that folder.
+  // A preconfigured HOME is already granted, so add the rule only when the
+  // Codex home sits outside it (never narrow an existing HOME write grant).
+  const generatedImagesRoot = typeof source.CODEX_HOME === "string" && source.CODEX_HOME.trim()
+    ? join(resolve(source.CODEX_HOME), "generated_images") : undefined;
+  const preconfiguredHome = usesPreconfiguredHome(source) && source.HOME ? resolve(source.HOME) : undefined;
+  const generatedImageRoots = generatedImagesRoot
+    && !(preconfiguredHome && codexPathInside(preconfiguredHome, generatedImagesRoot))
+    ? [generatedImagesRoot] : [];
   const filesystemRules = [
     `":root"="none"`,
     `":minimal"="read"`,
@@ -296,6 +311,7 @@ function createCodexSecurityConfiguration(
     ...protectedPaths.map((path) => `${tomlString(resolve(path))}="none"`),
     ...(usesPreconfiguredHome(source) && source.HOME ? [`${tomlString(source.HOME)}="write"`] : []),
     ...readOnlyRoots.map((path) => `${tomlString(resolve(path))}="read"`),
+    ...generatedImageRoots.map((path) => `${tomlString(path)}="read"`),
     ...gitRoots.read.map((path) => `${tomlString(path)}="read"`),
     ...gitRoots.write.map((path) => `${tomlString(path)}="write"`),
     ...(instructionWorkingCopyRoot ? [`${tomlString(resolve(instructionWorkingCopyRoot))}="write"`] : []),
@@ -311,6 +327,7 @@ function createCodexSecurityConfiguration(
     ...protectedPaths.map((path) => `${tomlString(resolve(path))}="none"`),
     ...(usesPreconfiguredHome(source) && source.HOME ? [`${tomlString(source.HOME)}="read"`] : []),
     ...readOnlyRoots.map((path) => `${tomlString(resolve(path))}="read"`),
+    ...generatedImageRoots.map((path) => `${tomlString(path)}="read"`),
     ...[...gitRoots.read, ...gitRoots.write].map((path) => `${tomlString(path)}="read"`),
     ...(instructionWorkingCopyRoot ? [`${tomlString(resolve(instructionWorkingCopyRoot))}="read"`] : []),
     ...(source.PAPERCLIP_GITHUB_BROKER_TOKEN && source.GH_CONFIG_DIR
@@ -354,8 +371,10 @@ function createCodexSecurityConfiguration(
     ...(commandEnv.length > 0
       ? ["-c", `shell_environment_policy.set={${commandEnv}}`]
       : []),
-    "--disable",
-    "image_generation",
+    // Codex ships its update_plan checklist tool disabled. Paperclip renders it
+    // as the turn plan (`turn/plan/updated` -> `plan.updated`).
+    "-c",
+    CODEX_UPDATE_PLAN_TOOL_CONFIG,
     ...(externalRunnerSandbox
       ? ["--dangerously-bypass-approvals-and-sandbox"]
       : []),
@@ -367,7 +386,7 @@ function createCodexSecurityConfiguration(
     { path: ":tmpdir", access: "none" },
     ...[...deniedHostRoots, ...protectedPaths.map(path => resolve(path))].map(path => ({ path, access: "none" as const })),
     ...(usesPreconfiguredHome(source) && source.HOME ? [{ path: source.HOME, access: planning ? "read" as const : "write" as const }] : []),
-    ...[...readOnlyRoots.map(path => resolve(path)), ...gitRoots.read].map(path => ({ path, access: "read" as const })),
+    ...[...readOnlyRoots.map(path => resolve(path)), ...generatedImageRoots, ...gitRoots.read].map(path => ({ path, access: "read" as const })),
     ...gitRoots.write.map(path => ({ path, access: planning ? "read" as const : "write" as const })),
     ...(instructionWorkingCopyRoot ? [{ path: resolve(instructionWorkingCopyRoot), access: planning ? "read" as const : "write" as const }] : []),
     ...(source.PAPERCLIP_GITHUB_BROKER_TOKEN && source.GH_CONFIG_DIR ? [{ path: resolve(source.GH_CONFIG_DIR), access: "write" as const }] : []),

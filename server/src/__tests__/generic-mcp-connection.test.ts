@@ -1053,6 +1053,106 @@ describeEmbeddedPostgres("generic remote MCP connections", () => {
     expect(JSON.stringify(response.body)).not.toContain("PAPERCLIP_PUBLIC_URL");
   });
 
+  it("keeps an action the connection left off from agents that hold only the default unscoped tools:use grant", async () => {
+    installMcpOAuthFixture({ auth: "header", requiredHeader: { name: "Authorization", value: "Bearer fixture-key-123" }, tools: [
+      { name: "list_insights", description: "List insights", annotations: { readOnlyHint: true, destructiveHint: false } },
+      { name: "create_insight", description: "Create an insight", annotations: { readOnlyHint: false, destructiveHint: true } },
+    ] });
+    const company = await createCompany(db);
+    const service = toolAccessService(db);
+    const actor = { actorType: "user" as const, actorId: "board-user", userId: "board-user" } as never;
+    const connected = await service.connectGalleryApp(company.id, { link: MCP_URL, name: "Fixture bearer", authMode: "bearer",
+      credentialValues: { "credentials.authorization": "fixture-key-123" }, grantKind: "organization" } as never, actor);
+    const readOnly = connected.actions.readOnly.map((row: { catalogEntryId: string }) => row.catalogEntryId);
+    const [agent] = await db.insert(agents).values({ companyId: company.id, name: "Morgan", role: "engineer", status: "active", adapterType: "process", adapterConfig: {}, runtimeConfig: {} }).returning();
+    await service.finishGalleryAppConnection(company.id, connected.connectionId, { enabledCatalogEntryIds: readOnly, askFirstCatalogEntryIds: [], access: { agentIds: [] } }, actor);
+    await service.putConnectionInstalls(connected.connectionId, { installs: [{ targetType: "agent", targetId: agent!.id }] }, actor);
+    // Every new standard agent receives this unscoped grant.
+    await db.insert(principalPermissionGrants).values({ companyId: company.id, principalType: "agent", principalId: agent!.id, permissionKey: "tools:use", scope: null });
+    const gateway = createToolGatewayService(db, { toolActionSigningSecret: "fixture-secret" });
+    const summary = async () => (await gateway.summarizeConnectionAccessForAgent({ companyId: company.id, connectionId: connected.connectionId, agentId: agent!.id }))
+      .tools.map(tool => [tool.toolName, tool.decision]).sort();
+    expect(await summary()).toEqual([["create_insight", "off"], ["list_insights", "allowed"]]);
+    // A grant scoped to the action is an explicit choice and still applies.
+    await db.update(principalPermissionGrants).set({ scope: { allow: ["tool:create_insight"] } })
+      .where(and(eq(principalPermissionGrants.principalId, agent!.id), eq(principalPermissionGrants.permissionKey, "tools:use")));
+    expect(await summary()).toEqual([["create_insight", "allowed"], ["list_insights", "allowed"]]);
+  });
+
+  async function setUpGovernedTwoActionConnection(options: { enabled: "read" | "none"; access?: "all_agents" }) {
+    installMcpOAuthFixture({ auth: "header", requiredHeader: { name: "Authorization", value: "Bearer fixture-key-123" }, tools: [
+      { name: "list_insights", description: "List insights", annotations: { readOnlyHint: true, destructiveHint: false } },
+      { name: "create_insight", description: "Create an insight", annotations: { readOnlyHint: false, destructiveHint: true } },
+    ] });
+    const company = await createCompany(db);
+    const service = toolAccessService(db);
+    const actor = { actorType: "user" as const, actorId: "board-user", userId: "board-user" } as never;
+    const connected = await service.connectGalleryApp(company.id, { link: MCP_URL, name: "Fixture bearer", authMode: "bearer",
+      credentialValues: { "credentials.authorization": "fixture-key-123" }, grantKind: "organization" } as never, actor);
+    const readOnly = connected.actions.readOnly.map((row: { catalogEntryId: string }) => row.catalogEntryId);
+    const [agent] = await db.insert(agents).values({ companyId: company.id, name: "Morgan", role: "engineer", status: "active", adapterType: "process", adapterConfig: {}, runtimeConfig: {} }).returning();
+    await service.finishGalleryAppConnection(company.id, connected.connectionId, {
+      enabledCatalogEntryIds: options.enabled === "read" ? readOnly : [], askFirstCatalogEntryIds: [],
+      access: options.access ?? { agentIds: [] },
+    }, actor);
+    if (!options.access) await service.putConnectionInstalls(connected.connectionId, { installs: [{ targetType: "agent", targetId: agent!.id }] }, actor);
+    // Every new standard agent receives this unscoped grant.
+    await db.insert(principalPermissionGrants).values({ companyId: company.id, principalType: "agent", principalId: agent!.id, permissionKey: "tools:use", scope: null });
+    const gateway = createToolGatewayService(db, { toolActionSigningSecret: "fixture-secret" });
+    const summary = async (agentId = agent!.id) => (await gateway.summarizeConnectionAccessForAgent({ companyId: company.id, connectionId: connected.connectionId, agentId }))
+      .tools.map(tool => [tool.toolName, tool.decision]).sort();
+    const setGrantScope = (scope: Record<string, unknown> | null) => db.update(principalPermissionGrants).set({ scope })
+      .where(and(eq(principalPermissionGrants.principalId, agent!.id), eq(principalPermissionGrants.permissionKey, "tools:use")));
+    const [connection] = await db.select().from(toolConnections).where(eq(toolConnections.id, connected.connectionId));
+    return { company, agent: agent!, connection: connection!, summary, setGrantScope };
+  }
+
+  it("keeps every action off when the connection turns all of them off, even for the default unscoped tools:use grant", async () => {
+    const { connection, summary, setGrantScope } = await setUpGovernedTwoActionConnection({ enabled: "none" });
+    expect(await summary()).toEqual([["create_insight", "off"], ["list_insights", "off"]]);
+    // A grant that only narrows when it applies (agent, project) still covers every tool, so it is not a choice about this connection.
+    await setGrantScope({ actorType: "agent" });
+    expect(await summary()).toEqual([["create_insight", "off"], ["list_insights", "off"]]);
+    // Grants that name the connection or the application are explicit choices and still apply.
+    await setGrantScope({ connectionId: connection.id });
+    expect(await summary()).toEqual([["create_insight", "allowed"], ["list_insights", "allowed"]]);
+    await setGrantScope({ allow: [`application:${connection.applicationId}`] });
+    expect(await summary()).toEqual([["create_insight", "allowed"], ["list_insights", "allowed"]]);
+  });
+
+  it("keeps the unscoped tools:use grant for agents the connection's profile does not cover", async () => {
+    const { company, summary } = await setUpGovernedTwoActionConnection({ enabled: "read" });
+    const [other] = await db.insert(agents).values({ companyId: company.id, name: "Riley", role: "engineer", status: "active", adapterType: "process", adapterConfig: {}, runtimeConfig: {} }).returning();
+    await db.insert(principalPermissionGrants).values({ companyId: company.id, principalType: "agent", principalId: other!.id, permissionKey: "tools:use", scope: null });
+    expect(await summary(other!.id)).toEqual([["create_insight", "allowed"], ["list_insights", "allowed"]]);
+  });
+
+  it("does not let the unscoped tools:use grant override a profile entry that excludes the application", async () => {
+    const { company, summary } = await setUpGovernedTwoActionConnection({ enabled: "read" });
+    const [other] = await db.insert(agents).values({ companyId: company.id, name: "Riley", role: "engineer", status: "active", adapterType: "process", adapterConfig: {}, runtimeConfig: {} }).returning();
+    await db.insert(principalPermissionGrants).values({ companyId: company.id, principalType: "agent", principalId: other!.id, permissionKey: "tools:use", scope: null });
+    const [connection] = await db.select().from(toolConnections).where(eq(toolConnections.companyId, company.id));
+    const [profile] = await db.insert(toolProfiles).values({ companyId: company.id, profileKey: `no-insights-${randomUUID()}`, name: "No insights", defaultAction: "allow" }).returning();
+    // An application selector carries no connection id.
+    await db.insert(toolProfileEntries).values({ companyId: company.id, profileId: profile!.id, selectorType: "application", effect: "exclude", applicationId: connection!.applicationId });
+    await db.insert(toolProfileBindings).values({ companyId: company.id, profileId: profile!.id, targetType: "agent", targetId: other!.id });
+    expect(await summary(other!.id)).toEqual([["create_insight", "off"], ["list_insights", "off"]]);
+  });
+
+  it("applies the connection profile on the direct policy check and keeps a board user's unscoped grant", async () => {
+    const { company, agent, connection, summary } = await setUpGovernedTwoActionConnection({ enabled: "read", access: "all_agents" });
+    expect(await summary()).toEqual([["create_insight", "off"], ["list_insights", "allowed"]]);
+    const [create] = await db.select().from(toolCatalogEntries).where(and(eq(toolCatalogEntries.connectionId, connection.id), eq(toolCatalogEntries.toolName, "create_insight")));
+    const request = { connectionId: connection.id, catalogEntryId: create!.id, toolName: create!.toolName, arguments: {} };
+    const policy = toolAccessPolicyService(db);
+    const agentDecision = await policy.decide({ companyId: company.id, actor: { actorType: "agent", actorId: agent.id, agentId: agent.id }, request });
+    expect([agentDecision.decision, agentDecision.reasonCode]).toEqual(["deny", "deny_default"]);
+    // The connection's profile is bound to the company, which also matches board users; their operator grant still applies.
+    await db.insert(principalPermissionGrants).values({ companyId: company.id, principalType: "user", principalId: "board-user", permissionKey: "tools:use", scope: null });
+    const userDecision = await policy.decide({ companyId: company.id, actor: { actorType: "user", actorId: "board-user" }, request });
+    expect([userDecision.decision, userDecision.reasonCode]).toEqual(["allow", "allow_explicit_grant"]);
+  });
+
   it("stores a bearer key as a secret and never reads it back", async () => {
     installMcpOAuthFixture({
       auth: "header",
@@ -1445,7 +1545,7 @@ describeEmbeddedPostgres("generic remote MCP connections", () => {
     ]);
   });
 
-  it("does not let another user take over an archived personal URL connection", async () => {
+  it("creates a separate fresh personal URL connection and keeps explicit reconnect owner-bound", async () => {
     const fixture = installMcpOAuthFixture({ auth: "oauth" });
     const company = await createCompany(db);
     const service = toolAccessService(db);
@@ -1456,18 +1556,36 @@ describeEmbeddedPostgres("generic remote MCP connections", () => {
     await db.insert(companyMemberships).values({
       companyId: company.id, principalType: "user", principalId: "other-user", status: "active", membershipRole: "admin",
     });
+    const archivedConnection = await db.select().from(toolConnections).where(eq(toolConnections.id, first.connectionId));
+    const archivedApplication = await db.select().from(toolApplications).where(eq(toolApplications.id, first.application.id));
     fixture.fetchMock.mockClear();
 
-    await expect(service.connectGalleryApp(company.id, input, {
-      actorType: "user", actorId: "other-user",
-    })).rejects.toMatchObject({ status: 403, message: "Only the existing personal identity can reconnect this connection" });
+    for (const target of [{ reconnectConnectionId: first.connectionId }, { applicationId: first.application.id }]) {
+      await expect(service.connectGalleryApp(company.id, { ...input, ...target }, {
+        actorType: "user", actorId: "other-user",
+      })).rejects.toMatchObject({ status: 403, message: "Only the existing personal identity can reconnect this connection" });
+    }
 
     expect(fixture.fetchMock).not.toHaveBeenCalled();
+    const fresh = await service.connectGalleryApp(company.id, input, { actorType: "user", actorId: "other-user" });
+    expect(fresh.connectionId).not.toBe(first.connectionId);
+    expect(fresh.application.id).not.toBe(first.application.id);
+    expect(fresh.auth).toMatchObject({ kind: "oauth" });
+    await expect(service.getConnection(fresh.connectionId)).resolves.toMatchObject({
+      createdByUserId: "other-user", credentialPolicy: "per_user", credentialSecretRefs: [],
+    });
+    await expect(db.select().from(toolConnections).where(eq(toolConnections.id, first.connectionId)))
+      .resolves.toEqual(archivedConnection);
+    await expect(db.select().from(toolApplications).where(eq(toolApplications.id, first.application.id)))
+      .resolves.toEqual(archivedApplication);
+    // OAuth grants are created only after authorization; discovery is not a grant.
     await expect(db.select().from(connectionGrants)).resolves.toHaveLength(0);
     await expect(service.getConnection(first.connectionId)).resolves.toMatchObject({
       status: "archived", createdByUserId: "board-user",
     });
-    const resumed = await service.connectGalleryApp(company.id, input, { actorType: "user", actorId: "board-user" });
+    const resumed = await service.connectGalleryApp(company.id, {
+      ...input, reconnectConnectionId: first.connectionId,
+    }, { actorType: "user", actorId: "board-user" });
     expect(resumed.connectionId).toBe(first.connectionId);
     expect(resumed.auth).toMatchObject({ kind: "oauth" });
   });
@@ -1544,7 +1662,7 @@ describeEmbeddedPostgres("generic remote MCP connections", () => {
       return jsonResponse({ jsonrpc: "2.0", id: "paperclip-catalog-refresh", result: { tools: FIXTURE_TOOLS } });
     });
     const failure = service.connectGalleryApp(company.id, {
-      link: MCP_URL, name: "Personal retry rollback", grantKind: "user",
+      link: MCP_URL, name: "Personal retry rollback", grantKind: "user", reconnectConnectionId: first.connectionId,
     }, actor).then(() => null, (error: unknown) => error);
     await Promise.race([catalogPending, failure.then((error) => { throw error ?? new Error("Retry finished before the catalog probe"); })]);
     try {
@@ -1587,7 +1705,9 @@ describeEmbeddedPostgres("generic remote MCP connections", () => {
       FOR EACH ROW EXECUTE FUNCTION test_personal_profile_failure()
     `);
     try {
-      await expect(service.connectGalleryApp(company.id, input, actor)).rejects.toThrow();
+      await expect(service.connectGalleryApp(company.id, {
+        ...input, reconnectConnectionId: first.connectionId,
+      }, actor)).rejects.toThrow();
       await expect(db.select().from(toolCatalogEntries).where(eq(toolCatalogEntries.connectionId, first.connectionId)))
         .resolves.toEqual(catalogBefore);
       await expect(db.select().from(toolProfiles).where(eq(toolProfiles.companyId, company.id))).resolves.toHaveLength(0);

@@ -110,11 +110,10 @@ it.each([
     const restarted = await pluginBackend(root, join(root, "unused"), "runner_prepared_launch");
     const recovered = await restarted.backend.recoverSession!(snapshot, { signal: new AbortController().signal });
     if (!recovered.recovered) throw new Error(recovered.reason);
-    expect(recovered).toMatchObject({ recovered: true });
-    expect((await recovered.session.snapshot()).workingDirectory).toBe(cwd);
+    expect((await recovered.session!.snapshot()).workingDirectory).toBe(cwd);
     // Recovery reuses the saved preparation instead of resolving a new directory.
     expect(restarted.prepareLaunch.mock.calls[0]![1]).toMatchObject({ configurationId: "plugin-run" });
-    await recovered.session.close({ reason: "test complete" });
+    await recovered.session!.close({ reason: "test complete" });
 
     const moved = await pluginBackend(root, join(root, "unused"), "runner_prepared_launch");
     await expect(moved.backend.recoverSession!({ ...snapshot, workingDirectory: join(root, "elsewhere") },
@@ -196,7 +195,9 @@ it("accepts a real warm attach receipt for the shared Unicode entry-array policy
     const cold = await pluginBackend(root, root, "runner_prepared_launch", policyForRun, undefined, "unicode-warm-run", stored.identity);
     phase = "first cold";
     const recovered = await cold.backend.recoverSession!(after, { signal: new AbortController().signal });
-    if (!recovered.recovered) throw new Error(recovered.reason);
+    if (!recovered.recovered || !recovered.session) {
+      throw new Error(recovered.reason ?? "Native recovery did not return a session");
+    }
     expect(recovered).toMatchObject({ recovered: true });
     expect((await recovered.session.snapshot()).providerIdentity).toEqual(after.providerIdentity);
     phase = "changed warm";
@@ -209,7 +210,9 @@ it("accepts a real warm attach receipt for the shared Unicode entry-array policy
     const finalOwner = await pluginBackend(root, root, "runner_prepared_launch", policyForRun, undefined, "changed-policy-run", finalState.identity);
     phase = "changed cold";
     const finalRecovery = await finalOwner.backend.recoverSession!(changed, { signal: new AbortController().signal });
-    if (!finalRecovery.recovered) throw new Error(finalRecovery.reason);
+    if (!finalRecovery.recovered || !finalRecovery.session) {
+      throw new Error(finalRecovery.reason ?? "Native recovery did not return a session");
+    }
     expect((await finalRecovery.session.snapshot()).providerIdentity).toEqual(changed.providerIdentity);
     await finalRecovery.session.close({ reason: "Changed policy cold recovery verified" });
   } catch (error) { throw new Error(`${phase}: ${String(error)}`); } finally { await rm(root, { recursive: true, force: true }); }
