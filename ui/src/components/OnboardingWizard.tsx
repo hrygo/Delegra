@@ -1402,7 +1402,7 @@ function OnboardingWizardInner({
         !setupPrepared || !loginEnvironmentSettingsReady || savedKeys.loading ||
         (resolvedLoginEnvironment?.driver === "sandbox" && !loginCapabilitiesFetched) ||
         (canShowAdapterLogin && (!activeLoginSessionQuery.isFetched || activeLoginSessionQuery.isFetching))) return;
-    if (canShowAdapterLogin && activeLoginSessionQuery.isError) return;
+    if (canShowAdapterLogin && activeLoginSessionQuery.isLoadingError) return;
     if (activeLoginSessionQuery.data) {
       setCredentialMode("subscription");
       setGatewayDefaultPending(false);
@@ -1412,7 +1412,7 @@ function OnboardingWizardInner({
       setGatewayOpen(true);
     }
   }, [gatewayDefaultPending, adapterType, sourceSelected, setupPrepared, savedKeys.loading,
-    activeLoginSessionQuery.isFetching, activeLoginSessionQuery.isFetched, activeLoginSessionQuery.isError,
+    activeLoginSessionQuery.isFetching, activeLoginSessionQuery.isFetched, activeLoginSessionQuery.isLoadingError,
     activeLoginSessionQuery.data, createdCompanyId, loginEnvironmentSettingsReady,
     resolvedLoginEnvironment?.driver, loginCapabilitiesFetched, canShowAdapterLogin]);
 
@@ -3271,7 +3271,7 @@ function OnboardingWizardInner({
                           onChange={setModel} open={modelOpen} onOpenChange={setModelOpen}
                           allowDefault={false} required groupByProvider={false}
                           creatable={connectionModels.models.length === 0} presentation="native" />}
-                        {pendingCodexGateway && canShowAdapterLogin && activeLoginSessionQuery.isError && <>
+                        {pendingCodexGateway && canShowAdapterLogin && activeLoginSessionQuery.isLoadingError && <>
                           <p role="alert" className="text-sm text-destructive">Could not check for an existing Codex sign-in. Retry or open the custom gateway manually.</p>
                           <Button type="button" variant="outline" onClick={() => { void activeLoginSessionQuery.refetch(); }}>Retry sign-in check</Button>
                         </>}

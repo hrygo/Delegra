@@ -2299,6 +2299,28 @@ describe("OnboardingWizard restore-gate (stale localStorage across accounts)", (
       }
     });
 
+    it("resumes a cached Codex login when its refresh fails", async () => {
+      mockAgentsApi.getAdapterAuthSignal.mockResolvedValue({ status: "unknown" });
+      mockAgentsApi.getActiveAdapterAuthLoginSession.mockRejectedValue(new Error("lookup failed"));
+      const handles = await openStep4({ adapterType: "codex_local", credentialModeChoice: null, gatewayDefaultPending: true });
+      const key = queryKeys.agents.activeLoginSession("company-new", "codex_local");
+      try {
+        await act(async () => {
+          handles.queryClient.setQueryData(key, { sessionId: "codex-session-1", status: "pending" });
+          await handles.queryClient.invalidateQueries({ queryKey: key });
+        });
+        await pickSource(/Custom Gateway/);
+        await vi.waitFor(() => {
+          expect(handles.queryClient.getQueryState(key)?.status).toBe("error");
+          expect(JSON.parse(window.localStorage.getItem(ONBOARDING_STORAGE_KEY)!).credentialModeChoice).toBe("subscription");
+        });
+        expect(document.body.textContent).not.toContain("Retry sign-in check");
+        expect(document.querySelector('input[aria-label="Provider URL"]')).toBeNull();
+      } finally {
+        await act(async () => handles.root.unmount());
+      }
+    });
+
     it.each((["success", "failed probe", "failed save"] as const).flatMap(outcome => [false, true].map(native => ({ outcome, native }))))("saves the API connection after returning from a completed subscription setup: $outcome, native $native", async ({ outcome, native }) => {
       managedApi.list.mockResolvedValue({ currentUserId: "user-1", connections: [{
         id: "subscription-account", grantId: "subscription-grant", companyId: "company-new",
