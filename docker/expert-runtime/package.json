@@ -4,5 +4,8 @@
   "private": true,
   "dependencies": {
     "@openai/codex": "0.160.0"
+  },
+  "engines": {
+    "node": ">=24.11.0"
   }
 }
