@@ -7,9 +7,10 @@ import { fileURLToPath } from 'node:url';
 
 const capabilities = JSON.parse(readFileSync(new URL('./capabilities.json', import.meta.url)));
 const scenes = Object.keys(capabilities.scenes);
+const baseTarget = 'codex-min';
 const comparisons = ['codex-min-native', 'codex-java-21-native'];
 const batches = {
-  reference: ['codex-min', 'codex-java-21'],
+  reference: [baseTarget, 'codex-java-21'],
   'java-legacy': ['codex-java-8', 'codex-java-11'],
   'java-current': ['codex-java-17', 'codex-java-25'],
   development: ['codex-node', 'codex-go'],
@@ -41,11 +42,15 @@ export function buildMatrix(publish) {
 export function bakeOverrides(targets, { ghcr, source, commit, version, saveCache }) {
   const allowed = version ? scenes : [...scenes, ...comparisons];
   for (const target of targets) assert(allowed.includes(target), 'Invalid target ' + target);
-  return targets.flatMap((target) => {
+  const cacheTargets = new Set(targets);
+  if (targets.some((target) => scenes.includes(target))) cacheTargets.add(baseTarget);
+  const cacheImports = Array.from(cacheTargets, (target) => target + '.cache-from=type=gha,scope=expert-' + target);
+  const outputSettings = targets.flatMap((target) => {
     const cache = 'type=gha,scope=expert-' + target;
-    const settings = [target + '.cache-from=' + cache];
+    const settings = [];
     if (saveCache && !version) {
-      settings.push(target + '.cache-to=' + cache + ',mode=min,ignore-error=true');
+      const mode = target === baseTarget ? 'max' : 'min';
+      settings.push(target + '.cache-to=' + cache + ',mode=' + mode + ',ignore-error=true');
     }
     if (version) {
       settings.push(
@@ -58,6 +63,7 @@ export function bakeOverrides(targets, { ghcr, source, commit, version, saveCach
     }
     return settings;
   });
+  return [...cacheImports, ...outputSettings];
 }
 
 export function collectRelease(receipts, { version, commit, ghcr }) {

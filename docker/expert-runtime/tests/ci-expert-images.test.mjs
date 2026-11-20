@@ -42,14 +42,15 @@ test('CI batches cover all release targets once and exclude comparisons at relea
   assert(buildMatrix(false).include.every(({ targets }) => targets.length <= 3));
 });
 
-test('read-only builds use per-target caches and release candidates have no tag', () => {
+test('deploy saves intermediate layers for the shared base and release candidates have no tag', () => {
   const targets = ['codex-min', 'codex-java-21'];
   const verify = bakeOverrides(targets, { saveCache: true });
   assert(!verify.some((argument) => /\.output=|\.tags=|push=true/.test(argument)));
   for (const target of targets) {
     assert(verify.includes(target + '.cache-from=type=gha,scope=expert-' + target));
-    assert(verify.includes(target + '.cache-to=type=gha,scope=expert-' + target + ',mode=min,ignore-error=true'));
   }
+  assert(verify.includes('codex-min.cache-to=type=gha,scope=expert-codex-min,mode=max,ignore-error=true'));
+  assert(verify.includes('codex-java-21.cache-to=type=gha,scope=expert-codex-java-21,mode=min,ignore-error=true'));
   const source = 'https://github.com/hrygo/Delegra';
   const candidate = bakeOverrides(targets, { ghcr, source, commit, version });
   assert(!candidate.some((argument) => argument.includes('.cache-to=')));
@@ -60,6 +61,15 @@ test('read-only builds use per-target caches and release candidates have no tag'
   }
   assert.throws(() => bakeOverrides(['codex-min-native'], { ghcr, source, commit, version }), /Invalid target/);
   assert.throws(() => bakeOverrides(['codex-python'], { ghcr, source, commit, version }), /Invalid target codex-python/);
+});
+
+test('scene batches read the linked base cache and leave it to the base batch to export it', () => {
+  const targets = ['codex-test-api', 'codex-test-load'];
+  const settings = bakeOverrides(targets, { saveCache: true });
+  assert(settings.includes('codex-min.cache-from=type=gha,scope=expert-codex-min'));
+  assert(!settings.some((argument) => argument.startsWith('codex-min.cache-to=')));
+  assert(settings.includes('codex-test-api.cache-from=type=gha,scope=expert-codex-test-api'));
+  assert(settings.includes('codex-test-api.cache-to=type=gha,scope=expert-codex-test-api,mode=min,ignore-error=true'));
 });
 
 const release = { version, commit, ghcr };
