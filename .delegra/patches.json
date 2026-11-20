@@ -161,13 +161,14 @@
       "kind": "fork-only",
       "status": "active",
       "commits": [
-        "dab86644ca650f3d93da0439f7f8646b7f7ef709"
+        "dab86644ca650f3d93da0439f7f8646b7f7ef709",
+        "af6c40a606c43467e02d663c555b085b37126830"
       ],
       "owner": "hrygo",
       "reviewBy": "2026-12-20",
       "verifiedAt": "2026-11-20",
       "retireWhen": "The trusted PR review can use the stable upgrade lockfile policy directly.",
-      "notes": "The trusted base verifies the published upstream release, the stable commit ancestry in the PR head, and the exact root lockfile blob for same-repository stable upgrades to deploy."
+      "notes": "The trusted base verifies the published upstream release, stable commit ancestry in the PR head, and exact blobs for managed lockfiles and the reporting lock proof in same-repository stable upgrades to deploy."
     },
     {
       "id": "inbox-badge-resolved-failed-runs",
