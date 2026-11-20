@@ -642,6 +642,27 @@
       "notes": "Delegra owns the ARM64 expert image suite consumed by Heluo Forge. The suite has a dedicated version tag and GHCR namespace. The Docker build pins the Native Runner source revision."
     },
     {
+      "id": "company-export-preview-recovery",
+      "kind": "upstream-pr",
+      "status": "active",
+      "upstreamPr": "paperclipai/paperclip#22374",
+      "upstreamBase": "c41145e72a38d664650eb73174e5eccb514f2550",
+      "upstreamHead": "c8b68c87f38f2c10fb5cc31d01e22dbb588d085c",
+      "upstreamCommits": [
+        "1514fc150ce276e299153a258578ea7267660747",
+        "c8b68c87f38f2c10fb5cc31d01e22dbb588d085c"
+      ],
+      "commits": [
+        "0854313d38818c796cd08faa0f5c11c27d71d5d6",
+        "c308de219268d3dfc370537c66155dbaf4c535fa"
+      ],
+      "owner": "hrygo",
+      "reviewBy": "2026-12-20",
+      "verifiedAt": "2026-11-20",
+      "retireWhen": "An accepted upstream stable tag includes paperclipai/paperclip#22374 or an equivalent fix.",
+      "notes": "The company export page lets the operator clear Skills and load a new preview when a project-restricted skill blocks the initial request. The export service continues to enforce project access."
+    },
+    {
       "id": "enterprise-intranet-connector-catalog",
       "kind": "fork-only",
       "status": "active",
