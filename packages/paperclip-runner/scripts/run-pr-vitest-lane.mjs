@@ -1,7 +1,7 @@
 // PR Runner Vitest lanes. `--package-lane=K/N` runs the Kth of N
 // duration-balanced partitions of the package inventory, and `--native-server`
 // runs the native server integration group. Every lane prepares debug
-// fixtures; only the native group also needs release units (see the matrix).
+// fixtures. The native group also prepares release fixtures before Vitest.
 //
 // The --shard commands stay compatible with master-pinned workflows: under
 // the PR workflow with two shards, the first runs every package test and the
@@ -95,11 +95,20 @@ const plannedCommands = [
     ? [{ command: "pnpm", args: ["exec", "vitest", "run", ...packageArgs], cwd: packageRoot }]
     : []),
   ...(runNativeRunnerGroup
-    ? [{
-        command: "pnpm",
-        args: ["test:run:general", "--", "--group", "general-server-native-runner"],
-        cwd: workspaceRoot,
-      }]
+    ? [
+        // Avoid charging a cold release build and Cargo's build lock to parallel test hooks.
+        {
+          command: "cargo",
+          args: ["build", "--release", "--manifest-path", "runner/Cargo.toml", "--locked",
+            "-p", "paperclip-runner-core", "--bin", "paperclip-runnerd", "--bin", "fake-codex-app-server"],
+          cwd: packageRoot,
+        },
+        {
+          command: "pnpm",
+          args: ["test:run:general", "--", "--group", "general-server-native-runner"],
+          cwd: workspaceRoot,
+        },
+      ]
     : []),
 ];
 
