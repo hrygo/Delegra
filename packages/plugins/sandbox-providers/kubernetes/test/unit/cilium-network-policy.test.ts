@@ -62,6 +62,22 @@ describe("buildCiliumNetworkPolicyManifest", () => {
     expect(cidrRule?.toCIDRSet?.[0]?.cidr).toBe("10.0.0.0/8");
   });
 
+  it("adds a cluster-level gateway proxy egress rule when gatewayProxy is configured", () => {
+    const cnp = buildCiliumNetworkPolicyManifest({
+      ...baseInput,
+      gatewayProxy: { namespace: "paperclip" },
+    });
+    const proxyRule = cnp.spec.egress.find((e) =>
+      e.toEndpoints?.some(
+        (ep) =>
+          ep.matchLabels.app === "delegra-gateway-proxy" &&
+          ep.matchLabels["k8s:io.kubernetes.pod.namespace"] === "paperclip",
+      ),
+    );
+    expect(proxyRule).toBeDefined();
+    expect(proxyRule?.toPorts?.[0]?.ports?.[0]?.port).toBe("8443");
+  });
+
   it("targets only the granted run when building a scoped policy", () => {
     const cnp = buildCiliumNetworkPolicyManifest({
       ...baseInput,

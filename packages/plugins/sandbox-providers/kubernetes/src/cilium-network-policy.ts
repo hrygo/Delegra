@@ -1,8 +1,15 @@
+export interface CiliumGatewayProxyTarget {
+  namespace: string;
+  appLabel?: string;
+  port?: number;
+}
+
 export interface BuildCiliumNetworkPolicyInput {
   namespace: string;
   paperclipServerNamespace: string;
   egressAllowFqdns: string[];
   egressAllowCidrs: string[];
+  gatewayProxy?: CiliumGatewayProxyTarget;
   name?: string;
   endpointSelector?: Record<string, string>;
   includeBaseRules?: boolean;
@@ -49,6 +56,20 @@ export function buildCiliumNetworkPolicyManifest(input: BuildCiliumNetworkPolicy
     ],
     toPorts: [{ ports: [{ port: "3100", protocol: "TCP" }] }],
   });
+
+  if (input.includeBaseRules !== false && input.gatewayProxy) {
+    egress.push({
+      toEndpoints: [
+        {
+          matchLabels: {
+            "k8s:io.kubernetes.pod.namespace": input.gatewayProxy.namespace,
+            app: input.gatewayProxy.appLabel ?? "delegra-gateway-proxy",
+          },
+        },
+      ],
+      toPorts: [{ ports: [{ port: String(input.gatewayProxy.port ?? 8443), protocol: "TCP" }] }],
+    });
+  }
 
   if (input.egressAllowCidrs.length > 0) {
     egress.push({
