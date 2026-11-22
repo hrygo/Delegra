@@ -106,12 +106,16 @@ if (!args.has("--skip-mirror-check")) {
     warnings.push("No upstream/master or origin/master ref is available; mirror identity was not checked.");
   } else if (!localMirror) {
     warnings.push(`Neither local nor origin ${mirrorBranch} is available; mirror identity was not checked.`);
-  } else if (localMirror !== upstreamMirror) {
-    errors.push(
-      `${mirrorBranch} must exactly match upstream/master: local ${short(localMirror)}, upstream ${short(upstreamMirror)}.`,
+  } else if (localMirror === upstreamMirror) {
+    console.log(`mirror: ${mirrorBranch} == upstream/master (${short(localMirror)})`);
+  } else if (isAncestor(localMirror, upstreamMirror)) {
+    warnings.push(
+      `${mirrorBranch} (${short(localMirror)}) lags behind upstream/master (${short(upstreamMirror)}) with no diverged commits.`,
     );
   } else {
-    console.log(`mirror: ${mirrorBranch} == upstream/master (${short(localMirror)})`);
+    errors.push(
+      `${mirrorBranch} has diverged from upstream/master: local ${short(localMirror)}, upstream ${short(upstreamMirror)}.`,
+    );
   }
 }
 
