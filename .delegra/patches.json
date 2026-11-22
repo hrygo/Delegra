@@ -749,7 +749,7 @@
       "reviewBy": "2026-12-23",
       "verifiedAt": "2026-11-23",
       "retireWhen": "An accepted upstream release provides per-request zero-trust gateway authorization, session token issuance/revocation, and internal proxy reconcile routes.",
-      "notes": "Part of hrygo/Delegra#73 (PR-1/2). Adds control-plane per-request expert gateway authorization service (expert-gateway-authorization.ts) with hashed one-time session tokens, all 5 denial error codes (RUN_GENERATION_STALE, TASK_CANCELLED, USER_AUTH_REVOKED, MODEL_NOT_ALLOWED, BUDGET_EXHAUSTED), immediate run/user revocation event publishing, active lease reconciliation snapshots, and internal Express routes (/internal/runner/v1/gateway-authorize and /internal/runner/v1/gateway-reconcile)."
+      "notes": "Part of hrygo/Delegra#73 (PR-1/2). Adds control-plane per-request expert gateway authorization service (expert-gateway-authorization.ts) with hashed one-time session tokens, all 5 denial error codes (RUN_GENERATION_STALE, TASK_CANCELLED, USER_AUTH_REVOKED, MODEL_NOT_ALLOWED, BUDGET_EXHAUSTED), immediate run/user revocation event publishing, active lease reconciliation snapshots, and internal Express routes (/internal/runner/v1/gateway-authorize and /internal/runner/v1/gateway-reconcile). Data-plane cluster proxy and app.ts mounting follow in PR-5."
     }
   ]
 }
