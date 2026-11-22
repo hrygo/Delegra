@@ -85,9 +85,9 @@
       "status": "active",
       "upstreamPr": "paperclipai/paperclip#17459",
       "upstreamBase": "410e5c6eedba98588a87e4104153898fb0437532",
-      "upstreamHead": "a2da41c76bbb0096baba3f6affe9b88d7257489e",
+      "upstreamHead": "a2da61c76bbb0096baba3f6affe9b88d7257489e",
       "upstreamCommits": [
-        "a2da41c76bbb0096baba3f6affe9b88d7257489e"
+        "a2da61c76bbb0096baba3f6affe9b88d7257489e"
       ],
       "commits": [
         "9ac8aa552f50f27cbc6091bd5a8e310cba4ac0ee"
@@ -695,6 +695,19 @@
       "verifiedAt": "2026-11-20",
       "retireWhen": "An accepted upstream release offers an equivalent configurable catalog that preserves existing applications and connections, or Delegra no longer needs this catalog policy.",
       "notes": "Curate the Browse catalog for intranet and personal workflows. Show explicitly selected entries across sources, hide other unreviewed entries before pagination, and preserve saved applications and connections. The policy does not change the server catalog, credentials, authorization, or agent runtimes."
+    },
+    {
+      "id": "delegra-k8s-digest-profile-sizing",
+      "kind": "fork-only",
+      "status": "active",
+      "commits": [
+        "f359a6774a037726ad5c09174e93dc276b40b24d"
+      ],
+      "owner": "hrygo",
+      "reviewBy": "2026-12-22",
+      "verifiedAt": "2026-11-22",
+      "retireWhen": "An accepted upstream release includes immutable digest validation, host:port registry rewrite fixes, and configurable Sandbox CR sizing and profile options.",
+      "notes": "Part of hrygo/Delegra#72 (PR-1/2). Adds immutable @sha256 digest parsing and validation, fixes host:port and digest handling in rewriteRegistry, adds 5 expert resource profiles mapping the 17 ARM64 images, and adds optional Sandbox CR apiVersion, nodeSelector, priorityClassName, volume size limits, and /dev/shm memory volume support. Upstream contribution for the generic image-allowlist fix: https://github.com/paperclipai/paperclip/pull/22550."
     }
   ]
 }
