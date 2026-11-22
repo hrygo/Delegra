@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { adapterRegistrySchema } from "./adapter-registry.js";
 import { KNOWN_ADAPTER_TYPES } from "./adapter-defaults.js";
+import type { ExpertResourceProfileName } from "./sandbox-cr-builder.js";
 
 const cidrRegex = /^(\d{1,3}\.){3}\d{1,3}\/\d{1,2}$/;
 
@@ -15,6 +16,7 @@ export const kubernetesProviderConfigSchema = z
     imageRegistry: z.string().url().optional(),
     imageAllowList: z.array(z.string()).default([]),
     imagePullSecrets: z.array(z.string()).default([]),
+    requireImmutableDigest: z.boolean().default(false),
 
     egressAllowFqdns: z.array(z.string()).default([]),
     egressAllowCidrs: z.array(z.string().regex(cidrRegex, "Invalid CIDR")).default([]),
@@ -27,7 +29,12 @@ export const kubernetesProviderConfigSchema = z
       })
       .optional(),
 
+    nodeArch: z.enum(["arm64", "amd64", "any"]).default("any"),
+    priorityClassName: z.string().min(1).optional(),
     runtimeClassName: z.string().optional(),
+    sandboxApiVersion: z
+      .enum(["agents.x-k8s.io/v1alpha1", "agents.x-k8s.io/v1beta1"])
+      .default("agents.x-k8s.io/v1alpha1"),
     serviceAccountAnnotations: z.record(z.string(), z.string()).default({}),
 
     jobTtlSecondsAfterFinished: z.number().int().nonnegative().default(900),
@@ -57,9 +64,10 @@ export const kubernetesProviderConfigSchema = z
      * The sandbox backend to use.
      *
      * - `"sandbox-cr"` (default, alpha) — uses the kubernetes-sigs/agent-sandbox
-     *   Sandbox CRD (agents.x-k8s.io/v1alpha1). Creates a long-lived pod that
-     *   paperclip-server can exec into for multi-command adapter-install workflows.
-     *   Requires the agent-sandbox controller to be installed in the cluster.
+     *   Sandbox CRD (agents.x-k8s.io/v1alpha1 or v1beta1). Creates a long-lived
+     *   pod that paperclip-server can exec into for multi-command adapter-install
+     *   workflows. Requires the agent-sandbox controller to be installed in the
+     *   cluster.
      *
      * - `"job"` — uses batch/v1 Job (stable fallback). One-shot entrypoint; does
      *   NOT support multi-command exec. Use this for clusters without agent-sandbox
@@ -81,6 +89,18 @@ export function parseKubernetesProviderConfig(input: unknown): KubernetesProvide
   return kubernetesProviderConfigSchema.parse(input);
 }
 
+export type DigestVerificationStatus =
+  | "exact_index_match"
+  | "exact_platform_match"
+  | "cri_config_id_only"
+  | "mismatch";
+
+export interface KubernetesRuntimeEvidence {
+  nodeName: string | null;
+  containerImageId: string | null;
+  digestVerification: DigestVerificationStatus | null;
+}
+
 export interface KubernetesLeaseMetadata {
   namespace: string;
   /** Name of the workload resource (Job name for job backend, Sandbox CR name for sandbox-cr backend). */
@@ -95,6 +115,13 @@ export interface KubernetesLeaseMetadata {
     allowFqdns: string[];
     allowCidrs: string[];
   };
+  resolvedImage?: string;
+  resolvedImageDigest?: string | null;
+  expectedPlatformDigest?: string | null;
+  resourceProfile?: ExpertResourceProfileName;
+  nodeArch?: "arm64" | "amd64" | "any";
+  priorityClassName?: string | null;
+  runtimeEvidence?: KubernetesRuntimeEvidence;
   /**
    * True when this lease's backend has NO data channel for the native file-sync
    * transport. Native sync streams over a pod exec, which only the `sandbox-cr`

@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { buildSandboxCrManifest as buildRawSandboxCrManifest, type BuildSandboxCrManifestInput } from "../../src/sandbox-cr-builder.js";
+import {
+  buildSandboxCrManifest as buildRawSandboxCrManifest,
+  inferResourceProfileFromImage,
+  resolvePodSizing,
+  type BuildSandboxCrManifestInput,
+} from "../../src/sandbox-cr-builder.js";
 import type { SandboxCrManifestView } from "./manifest-views.js";
 
 const buildSandboxCrManifest = (input: BuildSandboxCrManifestInput) =>
@@ -25,6 +30,14 @@ describe("buildSandboxCrManifest", () => {
     const cr = buildSandboxCrManifest(baseInput);
     expect(cr.apiVersion).toBe("agents.x-k8s.io/v1alpha1");
     expect(cr.kind).toBe("Sandbox");
+  });
+
+  it("supports overriding apiVersion to v1beta1", () => {
+    const cr = buildSandboxCrManifest({
+      ...baseInput,
+      apiVersion: "agents.x-k8s.io/v1beta1",
+    });
+    expect(cr.apiVersion).toBe("agents.x-k8s.io/v1beta1");
   });
 
   it("sets metadata name and namespace correctly", () => {
@@ -94,6 +107,41 @@ describe("buildSandboxCrManifest", () => {
     ).toBe(true);
   });
 
+  it("injects nodeSelector, priorityClassName, volume size overrides, and /dev/shm memory volume when set", () => {
+    const cr = buildSandboxCrManifest({
+      ...baseInput,
+      nodeSelector: { "kubernetes.io/arch": "arm64" },
+      priorityClassName: "paperclip-expert-interactive",
+      workspaceSizeLimit: "16Gi",
+      tmpSizeLimit: "4Gi",
+      shmSizeLimit: "1Gi",
+    });
+    expect(cr.spec.podTemplate.spec.nodeSelector).toEqual({
+      "kubernetes.io/arch": "arm64",
+    });
+    expect(cr.spec.podTemplate.spec.priorityClassName).toBe(
+      "paperclip-expert-interactive",
+    );
+    const mounts = cr.spec.podTemplate.spec.containers[0].volumeMounts;
+    expect(mounts.some((m) => m.mountPath === "/dev/shm")).toBe(true);
+    const volumes = cr.spec.podTemplate.spec.volumes;
+    expect(volumes.find((v) => v.name === "workspace")?.emptyDir?.sizeLimit).toBe("16Gi");
+    expect(volumes.find((v) => v.name === "tmp")?.emptyDir?.sizeLimit).toBe("4Gi");
+    expect(volumes.find((v) => v.name === "dshm")?.emptyDir).toEqual({
+      medium: "Memory",
+      sizeLimit: "1Gi",
+    });
+  });
+
+  it("omits nodeSelector, priorityClassName, and /dev/shm when not set", () => {
+    const cr = buildSandboxCrManifest(baseInput);
+    expect(cr.spec.podTemplate.spec.nodeSelector).toBeUndefined();
+    expect(cr.spec.podTemplate.spec.priorityClassName).toBeUndefined();
+    expect(
+      cr.spec.podTemplate.spec.containers[0].volumeMounts.some((m) => m.mountPath === "/dev/shm"),
+    ).toBe(false);
+  });
+
   it("envFrom references the per-run secret", () => {
     const cr = buildSandboxCrManifest(baseInput);
     const envFrom = cr.spec.podTemplate.spec.containers[0].envFrom;
@@ -137,5 +185,50 @@ describe("buildSandboxCrManifest", () => {
   it("does not set imagePullSecrets when not provided", () => {
     const cr = buildSandboxCrManifest(baseInput);
     expect(cr.spec.podTemplate.spec.imagePullSecrets).toBeUndefined();
+  });
+});
+
+describe("inferResourceProfileFromImage & resolvePodSizing", () => {
+  const digest = `sha256:${"c".repeat(64)}`;
+
+  it("maps all 17 ARM64 expert runtime images accurately", () => {
+    const cases: Array<[string, string]> = [
+      ["codex-min", "light"],
+      ["codex-ops-diag", "light"],
+      ["codex-ops-k8s", "light"],
+      ["codex-ops-iac", "light"],
+      ["codex-sql", "light"],
+      ["codex-test-api", "light"],
+      ["codex-java-8", "build"],
+      ["codex-java-11", "build"],
+      ["codex-java-17", "build"],
+      ["codex-java-21", "build"],
+      ["codex-java-25", "build"],
+      ["codex-node", "build"],
+      ["codex-go", "build"],
+      ["codex-dotnet-10", "build"],
+      ["codex-test-web", "browser"],
+      ["codex-office-zh", "office"],
+      ["codex-test-load", "load"],
+    ];
+    for (const [name, expected] of cases) {
+      expect(inferResourceProfileFromImage(`ghcr.io/hrygo/delegra/${name}@${digest}`)).toBe(expected);
+    }
+  });
+
+  it("resolves browser, build, and explicit profile overrides accurately", () => {
+    const browser = resolvePodSizing(null, `ghcr.io/hrygo/delegra/codex-test-web@${digest}`);
+    expect(browser.profile).toBe("browser");
+    expect(browser.shmSizeLimit).toBe("1Gi");
+    expect(browser.limits).toEqual({ cpu: "4", memory: "8Gi" });
+
+    const build = resolvePodSizing(undefined, `ghcr.io/hrygo/delegra/codex-java-21@${digest}`);
+    expect(build.profile).toBe("build");
+    expect(build.workspaceSizeLimit).toBe("16Gi");
+    expect(build.shmSizeLimit).toBeUndefined();
+
+    const explicit = resolvePodSizing("office", `ghcr.io/hrygo/delegra/codex-min@${digest}`);
+    expect(explicit.profile).toBe("office");
+    expect(explicit.tmpSizeLimit).toBe("4Gi");
   });
 });
