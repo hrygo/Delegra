@@ -25,9 +25,13 @@ import {
 } from "./types.js";
 import { createKubeConfig, makeKubeClients } from "./kube-client.js";
 import { getAdapterDefaults, buildAdapterEnv, resolveRunAdapterType } from "./adapter-defaults.js";
-import { resolveImage } from "./image-allowlist.js";
+import { parseDigestImageRef, resolveImageDetailed } from "./image-allowlist.js";
 import { buildJobManifest } from "./pod-spec-builder.js";
-import { buildSandboxCrManifest } from "./sandbox-cr-builder.js";
+import {
+  buildSandboxCrManifest,
+  resolvePodSizing,
+  type ExpertResourceProfileName,
+} from "./sandbox-cr-builder.js";
 import { ensureTenant } from "./tenant-orchestrator.js";
 import { createPerRunSecret } from "./secret-manager.js";
 import { FastUploadInterceptor } from "./upload-interceptor.js";
@@ -48,8 +52,10 @@ import {
 import {
   deriveCompanySlug,
   deriveNamespaceName,
+  extractRuntimeEvidence,
   newRunUlidDns,
   paperclipLabels,
+  stripRegistryScheme,
 } from "./utils.js";
 
 // The namespace paperclip-server itself runs in. Used when building
@@ -235,6 +241,11 @@ const plugin = definePlugin({
         );
       }
     }
+    if (cfg.requireImmutableDigest && !parseDigestImageRef(adapterDefaults.runtimeImage)) {
+      warnings.push(
+        `requireImmutableDigest=true is enabled, but the default runtime image for adapter "${cfg.adapterType}" (${adapterDefaults.runtimeImage}) does not pin an @sha256 digest. Ensure per-run imageOverride or adapter registry entries pin immutable @sha256 digests.`,
+      );
+    }
     return { ok: true, normalizedConfig: cfg as Record<string, unknown>, warnings: warnings.length > 0 ? warnings : undefined };
   },
 
@@ -290,12 +301,12 @@ const plugin = definePlugin({
   },
 
   async onEnvironmentAcquireLease(
-    // `adapterType` is an optional per-run hint the server may pass once the
-    // SDK lease params grow that field (companion server-integration PR). The
-    // plugin works without it: absent means "use the environment's configured
-    // default adapter", so it stays compatible with the current SDK.
     params: PluginEnvironmentAcquireLeaseParams & {
       adapterType?: string;
+      imageOverride?: string | null;
+      platformDigest?: string | null;
+      resourceProfile?: ExpertResourceProfileName | null;
+      priorityClassName?: string | null;
       executionWorkspaceSettings?: Record<string, unknown> | null;
     },
   ): Promise<PluginEnvironmentLease> {
@@ -350,47 +361,76 @@ const plugin = definePlugin({
     const jobName = `pc-${newRunUlidDns()}`;
     const secretName = `${jobName}-env`;
 
-    // TODO: use params.runId as stand-in for agentId in labels; future
-    // versions will have a dedicated agentId on AcquireLeaseParams.
+    const resolvedImage = resolveImageDetailed(
+      {
+        imageOverride: params.imageOverride ?? null,
+        platformDigest: params.platformDigest ?? null,
+      },
+      adapterDefaults,
+      {
+        imageAllowList: config.imageAllowList,
+        imageRegistry: stripRegistryScheme(config.imageRegistry),
+        requireDigest: config.requireImmutableDigest,
+      },
+    );
+    const sizing = resolvePodSizing(params.resourceProfile, resolvedImage.image);
+    const useProfileSizing = Boolean(
+      params.resourceProfile || params.imageOverride || !config.defaultResources,
+    );
+    const effectiveResources = useProfileSizing
+      ? {
+          requests: { ...sizing.requests, ...config.defaultResources?.requests },
+          limits: { ...sizing.limits, ...config.defaultResources?.limits },
+        }
+      : config.defaultResources ?? {};
+    const nodeSelector =
+      config.nodeArch !== "any"
+        ? { "kubernetes.io/arch": config.nodeArch }
+        : undefined;
+    const priorityClassName = params.priorityClassName ?? config.priorityClassName;
+
     const labels = paperclipLabels({
       runId: params.runId,
-      agentId: params.runId,
+      agentId: params.agentId ?? params.runId,
       companyId: params.companyId,
       adapterType: effectiveAdapterType,
+      resourceProfile: sizing.profile,
+      nodeArch: config.nodeArch,
     });
-
-    const image = resolveImage(
-      { imageOverride: null },
-      adapterDefaults,
-      { imageAllowList: config.imageAllowList, imageRegistry: config.imageRegistry },
-    );
 
     // Pick the orchestrator and build the appropriate manifest based on backend.
     const isSandboxCrBackend = config.backend === "sandbox-cr";
     const orchestrator = isSandboxCrBackend ? sandboxCrOrchestrator : jobOrchestrator;
+    const ownerApiVersion = isSandboxCrBackend ? config.sandboxApiVersion : "batch/v1";
 
     const manifest = isSandboxCrBackend
       ? buildSandboxCrManifest({
+          apiVersion: config.sandboxApiVersion,
           namespace,
           sandboxName: jobName,
           adapterType: effectiveAdapterType,
-          image,
+          image: resolvedImage.image,
           envSecretName: secretName,
           serviceAccountName: TENANT_SERVICE_ACCOUNT,
           labels,
-          resources: config.defaultResources ?? {},
+          resources: effectiveResources,
           runtimeClassName: config.runtimeClassName,
           imagePullSecrets: config.imagePullSecrets,
+          nodeSelector,
+          priorityClassName,
+          workspaceSizeLimit: useProfileSizing ? sizing.workspaceSizeLimit : undefined,
+          tmpSizeLimit: useProfileSizing ? sizing.tmpSizeLimit : undefined,
+          shmSizeLimit: useProfileSizing ? sizing.shmSizeLimit : undefined,
         })
       : buildJobManifest({
           namespace,
           jobName,
           adapterType: effectiveAdapterType,
-          image,
+          image: resolvedImage.image,
           envSecretName: secretName,
           serviceAccountName: TENANT_SERVICE_ACCOUNT,
           labels,
-          resources: config.defaultResources ?? {},
+          resources: effectiveResources,
           runtimeClassName: config.runtimeClassName,
           activeDeadlineSec: config.podActivityDeadlineSec,
           ttlSecondsAfterFinished: config.jobTtlSecondsAfterFinished,
@@ -407,7 +447,7 @@ const plugin = definePlugin({
         runId: params.runId,
         workloadName: jobName,
         ownerReference: {
-          apiVersion: isSandboxCrBackend ? "agents.x-k8s.io/v1alpha1" : "batch/v1",
+          apiVersion: ownerApiVersion,
           kind: isSandboxCrBackend ? "Sandbox" : "Job",
           name: jobName,
           uid: ownerUid,
@@ -438,7 +478,7 @@ const plugin = definePlugin({
       secretName,
       runId: params.runId,
       ownerKind: isSandboxCrBackend ? "Sandbox" : "Job",
-      ownerApiVersion: isSandboxCrBackend ? "agents.x-k8s.io/v1alpha1" : "batch/v1",
+      ownerApiVersion,
       ownerName: jobName,
       ownerUid,
       bootstrapToken,
@@ -446,6 +486,22 @@ const plugin = definePlugin({
     });
 
     const podName = await orchestrator.findPod(clients, namespace, jobName);
+    let podSnapshot: Record<string, unknown> | null = null;
+    if (podName && typeof clients.core?.readNamespacedPod === "function") {
+      try {
+        podSnapshot = (await clients.core.readNamespacedPod({
+          namespace,
+          name: podName,
+        })) as Record<string, unknown>;
+      } catch {
+        // Pod may still be initializing; runtime evidence remains null-filled.
+      }
+    }
+    const runtimeEvidence = extractRuntimeEvidence(
+      podSnapshot,
+      resolvedImage.digest,
+      resolvedImage.expectedPlatformDigest,
+    );
 
     const leaseMetadata: KubernetesLeaseMetadata = {
       namespace,
@@ -456,6 +512,13 @@ const plugin = definePlugin({
       backend: config.backend,
       scopedNetworkPolicyName,
       scopedNetworkEgress,
+      resolvedImage: resolvedImage.image,
+      resolvedImageDigest: resolvedImage.digest,
+      expectedPlatformDigest: resolvedImage.expectedPlatformDigest,
+      resourceProfile: sizing.profile,
+      nodeArch: config.nodeArch,
+      priorityClassName: priorityClassName ?? null,
+      runtimeEvidence,
       // Native file sync streams over a pod exec; only the sandbox-cr backend
       // exposes one. Flag the job backend so the server keeps the base64 fallback
       // rather than routing its sync to a hook that would reject immediately.

@@ -1,0 +1,94 @@
+# ARM64 image prepuller DaemonSet for high-frequency expert agent runtimes.
+# Replace `@sha256:...` placeholders with attested digests from the active release catalog.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: paperclip-arm64-image-prepuller
+  namespace: paperclip
+  labels:
+    app.kubernetes.io/name: paperclip-arm64-image-prepuller
+    app.kubernetes.io/part-of: paperclip-sandbox-kubernetes
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: paperclip-arm64-image-prepuller
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: paperclip-arm64-image-prepuller
+    spec:
+      nodeSelector:
+        kubernetes.io/arch: arm64
+      priorityClassName: paperclip-expert-batch
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        - name: prepull-codex-min
+          image: ghcr.io/hrygo/delegra/codex-min:latest
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/true"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 50m
+              memory: 64Mi
+        - name: prepull-codex-node
+          image: ghcr.io/hrygo/delegra/codex-node:latest
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/true"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 50m
+              memory: 64Mi
+        - name: prepull-codex-java-21
+          image: ghcr.io/hrygo/delegra/codex-java-21:latest
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/true"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 50m
+              memory: 64Mi
+      containers:
+        - name: pause
+          image: registry.k8s.io/pause:3.10
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 5m
+              memory: 8Mi
+            limits:
+              cpu: 20m
+              memory: 32Mi

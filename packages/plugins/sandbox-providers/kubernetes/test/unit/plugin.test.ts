@@ -92,6 +92,20 @@ describe("plugin", () => {
     expect(result.warnings).toBeUndefined();
   });
 
+  it("validateConfig warns when requireImmutableDigest is true and default adapter image has no digest", async () => {
+    const result = await plugin.definition.onEnvironmentValidateConfig!({
+      driverKey: "kubernetes",
+      config: {
+        inCluster: true,
+        adapterType: "claude_local",
+        egressMode: "cilium",
+        requireImmutableDigest: true,
+      },
+    });
+    expect(result.ok).toBe(true);
+    expect(result.warnings?.some((w) => w.includes("requireImmutableDigest=true"))).toBe(true);
+  });
+
   // Defining both hooks is what makes the worker advertise the
   // `environmentSyncIn`/`environmentSyncOut` verbs; the host runner then flips
   // K8s to native single-exec transfer. Absent them, the base64 fallback stays.

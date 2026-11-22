@@ -1,0 +1,23 @@
+# PriorityClasses for Delegra / Paperclip Kubernetes expert agent workloads.
+# Interactive expert tasks preempt batch/prepuller workloads under node pressure.
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: paperclip-expert-interactive
+  labels:
+    app.kubernetes.io/part-of: paperclip-sandbox-kubernetes
+value: 100000
+globalDefault: false
+preemptionPolicy: PreemptLowerPriority
+description: "Interactive expert agent sandboxes with latency-sensitive user sessions."
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: paperclip-expert-batch
+  labels:
+    app.kubernetes.io/part-of: paperclip-sandbox-kubernetes
+value: 50000
+globalDefault: false
+preemptionPolicy: Never
+description: "Background expert agent jobs, warm-pool placeholders, and image prepullers."
