@@ -737,6 +737,19 @@
       "verifiedAt": "2026-11-22",
       "retireWhen": "An accepted upstream release provides Server-Side Apply tenant reconciliation, 5-minute fingerprint caching, and zero-downtime standard/cilium policy switching.",
       "notes": "Closes hrygo/Delegra#74. Adds KubernetesObjectApi SSA reconciliation in kube-client.ts and tenant-orchestrator.ts with per-cluster 5-minute fingerprint cache, per-(cluster, namespace) serialization lock, namespace ownership verification, per-adapter CiliumNetworkPolicies (applied before standard policy deletion, revoked when empty, and discovered from Kubernetes on mode switch), zero-downtime apply-before-delete standard<->cilium switching with standard-only 403 tolerance, and optional Cilium gateway proxy egress endpoint rule. Upstream generic PR: https://github.com/paperclipai/paperclip/pull/22553."
+    },
+    {
+      "id": "delegra-k8s-gateway-authz",
+      "kind": "fork-only",
+      "status": "active",
+      "commits": [
+        "d58005e9dcd087d106af17c1231b5e1cba81dbb5"
+      ],
+      "owner": "hrygo",
+      "reviewBy": "2026-12-23",
+      "verifiedAt": "2026-11-23",
+      "retireWhen": "An accepted upstream release provides per-request zero-trust gateway authorization, session token issuance/revocation, and internal proxy reconcile routes.",
+      "notes": "Part of hrygo/Delegra#73 (PR-1/2). Adds control-plane per-request expert gateway authorization service (expert-gateway-authorization.ts) with hashed one-time session tokens, all 5 denial error codes (RUN_GENERATION_STALE, TASK_CANCELLED, USER_AUTH_REVOKED, MODEL_NOT_ALLOWED, BUDGET_EXHAUSTED), immediate run/user revocation event publishing, active lease reconciliation snapshots, and internal Express routes (/internal/runner/v1/gateway-authorize and /internal/runner/v1/gateway-reconcile)."
     }
   ]
 }
