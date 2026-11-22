@@ -6,6 +6,8 @@ export interface PodTemplateView {
   spec: {
     automountServiceAccountToken: boolean;
     restartPolicy: string;
+    nodeSelector?: Record<string, string>;
+    priorityClassName?: string;
     runtimeClassName?: string;
     imagePullSecrets?: { name: string }[];
     securityContext: {
@@ -15,17 +17,23 @@ export interface PodTemplateView {
       seccompProfile: { type: string };
     };
     containers: {
+      name?: string;
+      image?: string;
       command: string[];
       envFrom: { secretRef: { name: string } }[];
+      resources?: {
+        requests?: { cpu?: string; memory?: string };
+        limits?: { cpu?: string; memory?: string };
+      };
       securityContext: {
         runAsNonRoot: boolean;
         readOnlyRootFilesystem: boolean;
         allowPrivilegeEscalation: boolean;
         capabilities: { drop: string[] };
       };
-      volumeMounts: { mountPath: string }[];
+      volumeMounts: { name?: string; mountPath: string }[];
     }[];
-    volumes: { emptyDir?: unknown }[];
+    volumes: { name?: string; emptyDir?: { medium?: string; sizeLimit?: string } }[];
   };
 }
 
