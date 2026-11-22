@@ -721,6 +721,19 @@
       "verifiedAt": "2026-11-22",
       "retireWhen": "An accepted upstream release wires per-run imageOverride, digest runtime evidence, resource profiles, and agentId labels in plugin-sandbox-kubernetes.",
       "notes": "Part of hrygo/Delegra#72 (PR-2/2). Wires resolveImageDetailed, resolvePodSizing, nodeArch selector, priorityClassName, sanitized labels (fixing agentId), and Pod runtime digest evidence in plugin.ts and utils.ts, and adds PriorityClass and ARM64 image prepuller DaemonSet manifests."
+    },
+    {
+      "id": "delegra-k8s-ssa-cilium",
+      "kind": "fork-only",
+      "status": "active",
+      "commits": [
+        "95dad97c6910012806832d1ff3200f23139a1e57"
+      ],
+      "owner": "hrygo",
+      "reviewBy": "2026-12-22",
+      "verifiedAt": "2026-11-22",
+      "retireWhen": "An accepted upstream release provides Server-Side Apply tenant reconciliation, 5-minute fingerprint caching, and zero-downtime standard/cilium policy switching.",
+      "notes": "Closes hrygo/Delegra#74. Adds KubernetesObjectApi SSA reconciliation in kube-client.ts and tenant-orchestrator.ts with 5-minute fingerprint cache, zero-downtime apply-before-delete standard<->cilium switching, and optional Cilium gateway proxy egress endpoint rule."
     }
   ]
 }
