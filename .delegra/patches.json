@@ -729,13 +729,14 @@
       "commits": [
         "95dad97c6910012806832d1ff3200f23139a1e57",
         "4b40d44466193c3b6b9175aeaf1ecde1d47c5cda",
-        "353d8257560ff907723730e6d1add865752c177f"
+        "353d8257560ff907723730e6d1add865752c177f",
+        "0f8f3d14f836d94aad1d3db57964a8ac3ca0a1ee"
       ],
       "owner": "hrygo",
       "reviewBy": "2026-12-22",
       "verifiedAt": "2026-11-22",
       "retireWhen": "An accepted upstream release provides Server-Side Apply tenant reconciliation, 5-minute fingerprint caching, and zero-downtime standard/cilium policy switching.",
-      "notes": "Closes hrygo/Delegra#74. Adds KubernetesObjectApi SSA reconciliation in kube-client.ts and tenant-orchestrator.ts with per-cluster 5-minute fingerprint cache, per-(cluster, namespace) serialization lock, namespace ownership verification, per-adapter CiliumNetworkPolicies, zero-downtime apply-before-delete standard<->cilium switching with standard-only 403 tolerance, and optional Cilium gateway proxy egress endpoint rule. Upstream generic PR: https://github.com/paperclipai/paperclip/pull/22553."
+      "notes": "Closes hrygo/Delegra#74. Adds KubernetesObjectApi SSA reconciliation in kube-client.ts and tenant-orchestrator.ts with per-cluster 5-minute fingerprint cache, per-(cluster, namespace) serialization lock, namespace ownership verification, per-adapter CiliumNetworkPolicies (applied before standard policy deletion, revoked when empty, and discovered from Kubernetes on mode switch), zero-downtime apply-before-delete standard<->cilium switching with standard-only 403 tolerance, and optional Cilium gateway proxy egress endpoint rule. Upstream generic PR: https://github.com/paperclipai/paperclip/pull/22553."
     }
   ]
 }
