@@ -749,7 +749,7 @@
       "reviewBy": "2026-12-23",
       "verifiedAt": "2026-11-23",
       "retireWhen": "An accepted upstream release provides per-request zero-trust gateway authorization, session token issuance/revocation, and internal proxy reconcile routes.",
-      "notes": "Part of hrygo/Delegra#73 (PR-1/2). Adds control-plane per-request expert gateway authorization service (expert-gateway-authorization.ts) with hashed one-time session tokens, all 5 denial error codes (RUN_GENERATION_STALE, TASK_CANCELLED, USER_AUTH_REVOKED, MODEL_NOT_ALLOWED, BUDGET_EXHAUSTED), immediate run/user revocation event publishing, active lease reconciliation snapshots, and internal Express routes (/internal/runner/v1/gateway-authorize and /internal/runner/v1/gateway-reconcile). Data-plane cluster proxy and app.ts mounting follow in PR-5."
+      "notes": "Part of hrygo/Delegra#73 (PR-1/2). Adds control-plane per-request expert gateway authorization service (expert-gateway-authorization.ts) with hashed one-time session tokens, all 5 denial error codes (RUN_GENERATION_STALE, TASK_CANCELLED, USER_AUTH_REVOKED, MODEL_NOT_ALLOWED, BUDGET_EXHAUSTED), immediate run/user revocation event publishing, active lease reconciliation snapshots, and internal Express routes (/internal/runner/v1/gateway-authorize and /internal/runner/v1/gateway-reconcile). Data-plane cluster proxy follows in PR-5 (#81)."
     },
     {
       "id": "delegra-k8s-cluster-proxy",
@@ -762,7 +762,7 @@
       "reviewBy": "2026-12-23",
       "verifiedAt": "2026-11-23",
       "retireWhen": "An accepted upstream release provides a cluster-level zero-trust AI gateway proxy, zero-credential agent/proxy secret splitting, expertZeroTrustMode env suppression, and atomic stdin lease token delivery.",
-      "notes": "Closes hrygo/Delegra#73 (PR-2/2). Implements the cluster-level delegra-gateway-proxy HTTP service (POST /v1/responses allowlist, 16 MiB body cap, per-request control-plane authz, local revocation + in-flight AbortController stream termination, SSE keep-alive, in-place credential scrubbing, zero-credential access logs), zero-credential Secret splitting in secret-manager.ts, expertZeroTrustMode in adapter-defaults.ts, atomic stdin lease token delivery in pod-exec.ts, PSS restricted HA K8s manifests, and unit tests."
+      "notes": "Closes hrygo/Delegra#73 (PR-2/2, hrygo/Delegra#81). Implements the cluster-level delegra-gateway-proxy HTTP service (POST /v1/responses allowlist, 16 MiB body cap, per-request control-plane authz, local revocation + in-flight AbortController stream termination, SSE keep-alive, in-place credential scrubbing, zero-credential access logs), zero-credential Secret splitting in secret-manager.ts, expertZeroTrustMode in adapter-defaults.ts, atomic stdin lease token delivery in pod-exec.ts, PSS restricted HA K8s manifests, and unit tests."
     }
   ]
 }
