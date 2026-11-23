@@ -3,9 +3,14 @@ import {
   classifyCapacityBackpressureError,
   computeCapacityBackoffMs,
   isRetryableCapacityError,
+  materializeNativeProviderCapacityRetry,
 } from "./native-provider-capacity-retry.js";
 
 describe("native-provider-capacity-retry", () => {
+  it("exports materializeNativeProviderCapacityRetry alongside backpressure helpers", () => {
+    expect(materializeNativeProviderCapacityRetry).toBeTypeOf("function");
+  });
+
   it("classifies quota_exhausted, pending_backoff, pool_exhausted, and 429/503 as queued retries", () => {
     const q = classifyCapacityBackpressureError(
       { reason: "quota_exhausted", retryAfterMs: 3000 },
