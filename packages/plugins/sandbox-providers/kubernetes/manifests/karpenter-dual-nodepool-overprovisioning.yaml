@@ -1,0 +1,149 @@
+# Karpenter v1 dual ARM64 NodePools (standard Graviton 3/4 + bare-metal Kata-FC)
+# and low-priority Overprovisioning placeholder Deployment.
+#
+# ARM64 Kata-FC host prerequisites (hard requirements, verified at node bootstrap):
+#   - Bare-metal instance with /dev/kvm and GICv3
+#   - 4K kernel page size (`getconf PAGESIZE` == 4096)
+#   - Linux kernel >= 6.1
+#   - containerd devmapper snapshotter with `base_image_size = "10GB"`
+---
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata:
+  name: expert-sandbox-arm64
+  labels:
+    paperclip.io/managed-by: paperclip-k8s-plugin
+spec:
+  template:
+    metadata:
+      labels:
+        paperclip.io/node-pool: expert-sandbox-arm64
+        paperclip.io/managed-by: paperclip-k8s-plugin
+    spec:
+      nodeClassRef:
+        group: karpenter.k8s.aws
+        kind: EC2NodeClass
+        name: expert-sandbox-arm64
+      requirements:
+        - key: kubernetes.io/arch
+          operator: In
+          values: ["arm64"]
+        - key: kubernetes.io/os
+          operator: In
+          values: ["linux"]
+        - key: karpenter.sh/capacity-type
+          operator: In
+          values: ["on-demand"]
+        - key: karpenter.k8s.aws/instance-family
+          operator: In
+          values: ["c7g", "c8g", "m7g", "m8g"]
+        - key: karpenter.k8s.aws/instance-generation
+          operator: Gt
+          values: ["6"]
+  limits:
+    cpu: "256"
+    memory: "512Gi"
+  disruption:
+    consolidationPolicy: WhenEmptyOrUnderutilized
+    consolidateAfter: 5m
+---
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata:
+  name: expert-sandbox-kata-fc-arm64
+  labels:
+    paperclip.io/managed-by: paperclip-k8s-plugin
+spec:
+  template:
+    metadata:
+      labels:
+        paperclip.io/node-pool: expert-sandbox-kata-fc-arm64
+        paperclip.io/runtime: kata-fc
+        paperclip.io/managed-by: paperclip-k8s-plugin
+    spec:
+      nodeClassRef:
+        group: karpenter.k8s.aws
+        kind: EC2NodeClass
+        name: expert-sandbox-kata-fc-arm64
+      taints:
+        - key: paperclip.io/runtime
+          value: kata-fc
+          effect: NoSchedule
+      requirements:
+        - key: kubernetes.io/arch
+          operator: In
+          values: ["arm64"]
+        - key: kubernetes.io/os
+          operator: In
+          values: ["linux"]
+        - key: karpenter.sh/capacity-type
+          operator: In
+          values: ["on-demand"]
+        - key: karpenter.k8s.aws/instance-family
+          operator: In
+          values: ["c7g", "m7g"]
+        - key: karpenter.k8s.aws/instance-size
+          operator: In
+          values: ["metal"]
+  limits:
+    cpu: "192"
+    memory: "384Gi"
+  disruption:
+    consolidationPolicy: WhenEmpty
+    consolidateAfter: 10m
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: paperclip-overprovisioning
+  labels:
+    paperclip.io/managed-by: paperclip-k8s-plugin
+value: -10
+globalDefault: false
+preemptionPolicy: Never
+description: "Low-priority placeholder pods evicted immediately by interactive/warm-pool sandboxes to trigger proactive ARM64 node scale-out."
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: paperclip-arm64-overprovisioning
+  namespace: paperclip
+  labels:
+    app: paperclip-arm64-overprovisioning
+    paperclip.io/managed-by: paperclip-k8s-plugin
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: paperclip-arm64-overprovisioning
+  template:
+    metadata:
+      labels:
+        app: paperclip-arm64-overprovisioning
+        paperclip.io/managed-by: paperclip-k8s-plugin
+    spec:
+      priorityClassName: paperclip-overprovisioning
+      automountServiceAccountToken: false
+      nodeSelector:
+        kubernetes.io/arch: arm64
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: pause
+          image: registry.k8s.io/pause:3.10
+          resources:
+            requests:
+              cpu: "2"
+              memory: "4Gi"
+            limits:
+              cpu: "2"
+              memory: "4Gi"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
