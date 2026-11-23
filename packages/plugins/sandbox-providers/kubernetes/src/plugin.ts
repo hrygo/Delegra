@@ -33,14 +33,33 @@ import {
   type ExpertResourceProfileName,
 } from "./sandbox-cr-builder.js";
 import { ensureTenant } from "./tenant-orchestrator.js";
-import { createPerRunSecret } from "./secret-manager.js";
+import { createAgentSessionSecret, createPerRunSecret } from "./secret-manager.js";
 import { FastUploadInterceptor } from "./upload-interceptor.js";
 import { jobOrchestrator, JobTimeoutError } from "./job-orchestrator.js";
 import {
-  sandboxCrOrchestrator,
+  createSandboxCrOrchestrator,
   SandboxCrTimeoutError,
+  type SandboxCrApiVersion,
 } from "./sandbox-cr-orchestrator.js";
-import { execInPod, execInPodStreaming, wrapCommandWithEnv } from "./pod-exec.js";
+import {
+  buildSandboxClaimManifest,
+  createSandboxClaim,
+  destroyClaimedSandbox,
+  waitForSandboxClaimReady,
+  WarmPoolMetricsTracker,
+} from "./sandbox-claim-orchestrator.js";
+import {
+  evaluateCapacityAdmission,
+  readTenantQuotaWatermark,
+  resolveSensitiveIsolationPolicy,
+  type DataClassificationLevel,
+} from "./capacity-admission.js";
+import {
+  deliverLeaseTokenViaStdin,
+  execInPod,
+  execInPodStreaming,
+  wrapCommandWithEnv,
+} from "./pod-exec.js";
 import { performSyncIn, performSyncOut, type PodStreamExec } from "./file-sync.js";
 import { checkLeaseResumable, destroyLeaseResources } from "./lease-lifecycle.js";
 import {
@@ -75,6 +94,66 @@ const DEFAULT_RESOURCE_QUOTA = {
   limitsCpu: "20",
   limitsMemory: "40Gi",
 };
+
+const ZERO_TRUST_CREDENTIAL_KEY_PATTERNS: readonly RegExp[] = [
+  /^ANTHROPIC_API_KEY$/i,
+  /^OPENAI_API_KEY$/i,
+  /^GOOGLE_API_KEY$/i,
+  /^GEMINI_API_KEY$/i,
+  /^OPENROUTER_API_KEY$/i,
+  /^AWS_ACCESS_KEY_ID$/i,
+  /^AWS_SECRET_ACCESS_KEY$/i,
+  /^AWS_SESSION_TOKEN$/i,
+  /_API_KEY$/i,
+  /_ACCESS_TOKEN$/i,
+  /_SECRET_KEY$/i,
+];
+
+function stripZeroTrustCredentialEnv(env: Record<string, string>): Record<string, string> {
+  const safe: Record<string, string> = {};
+  for (const [key, value] of Object.entries(env)) {
+    if (key === "BOOTSTRAP_TOKEN" || key === "PROXY_SESSION_TOKEN") continue;
+    if (ZERO_TRUST_CREDENTIAL_KEY_PATTERNS.some((re) => re.test(key))) continue;
+    safe[key] = value;
+  }
+  return safe;
+}
+
+/**
+ * Typed backpressure error raised when pre-dispatch capacity admission defers
+ * a run (`queued`) due to tenant ResourceQuota exhaustion or cluster Pending
+ * Pod watermark backoff.
+ */
+export class CapacityAdmissionDeferredError extends Error {
+  readonly state = "queued" as const;
+  readonly reason: "quota_exhausted" | "pending_backoff";
+  readonly retryAfterMs: number;
+
+  constructor(
+    reason: "quota_exhausted" | "pending_backoff",
+    retryAfterMs: number,
+    detail: string,
+  ) {
+    super(detail);
+    this.name = "CapacityAdmissionDeferredError";
+    this.reason = reason;
+    this.retryAfterMs = retryAfterMs;
+  }
+}
+
+function resolveSandboxApiVersion(
+  config: KubernetesProviderConfig,
+  leaseMetadata?: Record<string, unknown> | null,
+): SandboxCrApiVersion {
+  const fromLease = leaseMetadata?.sandboxApiVersion;
+  if (
+    fromLease === "agents.x-k8s.io/v1alpha1" ||
+    fromLease === "agents.x-k8s.io/v1beta1"
+  ) {
+    return fromLease;
+  }
+  return config.sandboxApiVersion;
+}
 
 function deriveTenantNamespace(config: KubernetesProviderConfig, companyId: string): string {
   // TODO: future versions could thread companyName through AcquireLeaseParams
@@ -116,6 +195,18 @@ function getOrCreateUploadInterceptor(leaseId: string): FastUploadInterceptor {
 // On worker restart this resets, which is fine: the first exec on each
 // lease then re-confirms readiness from scratch.
 const readySandboxesByLease = new Set<string>();
+
+// Pending one-time proxy session tokens awaiting atomic stdin delivery once a
+// cold-start Sandbox CR pod reaches Ready. Immediately deleted after delivery
+// or upon release/destroy so tokens never linger in worker memory.
+const pendingLeaseTokensByLease = new Map<string, { token: string; targetPath: string }>();
+
+// In-memory warm-pool telemetry tracker for v1beta1 SandboxClaim acquisitions.
+const warmPoolMetrics = new WarmPoolMetricsTracker();
+
+export function getWarmPoolMetricsSnapshot() {
+  return warmPoolMetrics.snapshot();
+}
 
 // How long onEnvironmentResumeLease waits for an existing Sandbox pod to
 // report Ready before declaring the lease non-resumable. Deliberately short:
@@ -170,6 +261,10 @@ async function resolveSyncPodExec(
     );
   }
 
+  const sandboxOrchestrator = createSandboxCrOrchestrator(
+    resolveSandboxApiVersion(config, lease.metadata),
+  );
+
   const kc = createKubeConfig({
     inCluster: config.inCluster,
     kubeconfig: config.kubeconfig,
@@ -180,7 +275,7 @@ async function resolveSyncPodExec(
   // Ensure the Sandbox pod is Ready (wait only the first time for this lease),
   // then resolve the pod name — mirrors the onEnvironmentExecute resolution.
   if (!readySandboxesByLease.has(lease.providerLeaseId)) {
-    await sandboxCrOrchestrator.waitForCompletion(clients, namespace, lease.providerLeaseId, {
+    await sandboxOrchestrator.waitForCompletion(clients, namespace, lease.providerLeaseId, {
       timeoutMs,
       pollMs: 2000,
     });
@@ -190,7 +285,7 @@ async function resolveSyncPodExec(
   const podName =
     typeof lease.metadata?.podName === "string" && lease.metadata.podName
       ? lease.metadata.podName
-      : await sandboxCrOrchestrator.findPod(clients, namespace, lease.providerLeaseId);
+      : await sandboxOrchestrator.findPod(clients, namespace, lease.providerLeaseId);
   if (!podName) {
     throw new Error("Kubernetes file sync could not resolve the Sandbox pod name.");
   }
@@ -226,8 +321,26 @@ const plugin = definePlugin({
         errors: parsed.error.issues.map((i) => i.message),
       };
     }
-    const warnings: string[] = [];
     const cfg = parsed.data;
+    const errors: string[] = [];
+    const warnings: string[] = [];
+
+    if (cfg.expertZeroTrust?.enabled && !cfg.expertZeroTrust.gatewayProxyUrl) {
+      errors.push("expertZeroTrust.enabled requires expertZeroTrust.gatewayProxyUrl.");
+    }
+    if (cfg.warmPool?.enabled && !(cfg.warmPool.warmPoolName ?? cfg.warmPool.templateName)) {
+      errors.push("warmPool.enabled requires warmPool.warmPoolName or warmPool.templateName.");
+    }
+    if (errors.length > 0) {
+      return { ok: false, errors };
+    }
+
+    if (cfg.warmPool?.enabled && cfg.sandboxApiVersion !== "agents.x-k8s.io/v1beta1") {
+      warnings.push(
+        `warmPool.enabled uses extensions.agents.x-k8s.io/v1beta1 SandboxClaim; set sandboxApiVersion to "agents.x-k8s.io/v1beta1" to match your agent-sandbox controller.`,
+      );
+    }
+
     const adapterDefaults = getAdapterDefaults(cfg.adapterType, cfg.adapters);
     const totalFqdns = [...adapterDefaults.allowFqdns, ...cfg.egressAllowFqdns];
     if (cfg.egressMode === "standard" && totalFqdns.length > 0) {
@@ -246,7 +359,11 @@ const plugin = definePlugin({
         `requireImmutableDigest=true is enabled, but the default runtime image for adapter "${cfg.adapterType}" (${adapterDefaults.runtimeImage}) does not pin an @sha256 digest. Ensure per-run imageOverride or adapter registry entries pin immutable @sha256 digests.`,
       );
     }
-    return { ok: true, normalizedConfig: cfg as Record<string, unknown>, warnings: warnings.length > 0 ? warnings : undefined };
+    return {
+      ok: true,
+      normalizedConfig: cfg as Record<string, unknown>,
+      warnings: warnings.length > 0 ? warnings : undefined,
+    };
   },
 
   async onEnvironmentProbe(
@@ -308,10 +425,24 @@ const plugin = definePlugin({
       resourceProfile?: ExpertResourceProfileName | null;
       priorityClassName?: string | null;
       executionWorkspaceSettings?: Record<string, unknown> | null;
+      runGeneration?: number;
+      proxySessionToken?: string | null;
+      dataClassification?: DataClassificationLevel;
+      kataFcAvailable?: boolean;
+      clusterPendingPods?: number;
+      warmPoolReadyCount?: number;
     },
   ): Promise<PluginEnvironmentLease> {
     const config = kubernetesProviderConfigSchema.parse(params.config);
     const namespace = deriveTenantNamespace(config, params.companyId);
+    const runGeneration =
+      typeof params.runGeneration === "number" && Number.isInteger(params.runGeneration) && params.runGeneration >= 1
+        ? params.runGeneration
+        : 1;
+
+    if (config.expertZeroTrust?.enabled && !config.expertZeroTrust.gatewayProxyUrl) {
+      throw new Error("expertZeroTrust.enabled requires expertZeroTrust.gatewayProxyUrl");
+    }
 
     // The adapter for THIS run is the agent's adapter (params.adapterType) when
     // supplied, so one environment can serve mixed harnesses; otherwise fall back
@@ -323,8 +454,8 @@ const plugin = definePlugin({
     // Emit a runtime warning if FQDNs are configured but egressMode=standard
     // cannot enforce them. Mirrors the validateConfig warning so operators see
     // it in paperclip-server logs even if they missed the validation step.
-    const adapterDefaultsForWarn = getAdapterDefaults(effectiveAdapterType, config.adapters);
-    const totalFqdnsForWarn = [...adapterDefaultsForWarn.allowFqdns, ...config.egressAllowFqdns];
+    const adapterDefaults = getAdapterDefaults(effectiveAdapterType, config.adapters);
+    const totalFqdnsForWarn = [...adapterDefaults.allowFqdns, ...config.egressAllowFqdns];
     if (config.egressMode === "standard" && totalFqdnsForWarn.length > 0) {
       if (config.egressAllowCidrs.length === 0) {
         console.warn(
@@ -336,34 +467,6 @@ const plugin = definePlugin({
         );
       }
     }
-
-    const kc = createKubeConfig({
-      inCluster: config.inCluster,
-      kubeconfig: config.kubeconfig,
-    });
-    const clients = makeKubeClients(kc);
-
-    // Ensure the tenant namespace and all its RBAC / network policy resources
-    // exist before we try to create the Job.
-    const adapterDefaults = getAdapterDefaults(effectiveAdapterType, config.adapters);
-
-    await ensureTenant(clients, {
-      namespace,
-      companyId: params.companyId,
-      paperclipServerNamespace: PAPERCLIP_SERVER_NAMESPACE,
-      serviceAccountAnnotations: config.serviceAccountAnnotations,
-      egressMode: config.egressMode,
-      egressAllowFqdns: config.egressAllowFqdns,
-      adapterEgress: {
-        adapterType: effectiveAdapterType,
-        allowFqdns: adapterDefaults.allowFqdns,
-      },
-      egressAllowCidrs: config.egressAllowCidrs,
-      resourceQuota: DEFAULT_RESOURCE_QUOTA,
-    });
-
-    const jobName = `pc-${newRunUlidDns()}`;
-    const secretName = `${jobName}-env`;
 
     const resolvedImage = resolveImageDetailed(
       {
@@ -387,11 +490,91 @@ const plugin = definePlugin({
           limits: { ...sizing.limits, ...config.defaultResources?.limits },
         }
       : config.defaultResources ?? {};
-    const nodeSelector =
+
+    // Fail-closed C3/C4 regulated isolation enforcement BEFORE touching the cluster.
+    const isolation = resolveSensitiveIsolationPolicy({
+      dataClassification: params.dataClassification,
+      configuredRuntimeClassName: config.runtimeClassName,
+      kataFcAvailable: params.kataFcAvailable,
+      requestsMemory: effectiveResources.requests?.memory ?? sizing.requests.memory,
+      limitsMemory: effectiveResources.limits?.memory ?? sizing.limits.memory,
+    });
+
+    const baseNodeSelector =
       config.nodeArch !== "any"
         ? { "kubernetes.io/arch": config.nodeArch }
         : undefined;
+    const nodeSelector =
+      baseNodeSelector || isolation.nodeSelector
+        ? { ...(baseNodeSelector ?? {}), ...(isolation.nodeSelector ?? {}) }
+        : undefined;
     const priorityClassName = params.priorityClassName ?? config.priorityClassName;
+
+    const kc = createKubeConfig({
+      inCluster: config.inCluster,
+      kubeconfig: config.kubeconfig,
+    });
+    const clients = makeKubeClients(kc);
+
+    // Ensure the tenant namespace and all its RBAC / network policy resources
+    // exist before checking quota headroom or creating workloads.
+    await ensureTenant(clients, {
+      namespace,
+      companyId: params.companyId,
+      paperclipServerNamespace: PAPERCLIP_SERVER_NAMESPACE,
+      serviceAccountAnnotations: config.serviceAccountAnnotations,
+      egressMode: config.egressMode,
+      egressAllowFqdns: config.egressAllowFqdns,
+      adapterEgress: {
+        adapterType: effectiveAdapterType,
+        allowFqdns: adapterDefaults.allowFqdns,
+      },
+      egressAllowCidrs: config.egressAllowCidrs,
+      ...(config.expertZeroTrust?.enabled
+        ? {
+            gatewayProxy: {
+              namespace: config.expertZeroTrust.gatewayProxyNamespace,
+              port: config.expertZeroTrust.gatewayProxyPort,
+            },
+          }
+        : {}),
+      resourceQuota: DEFAULT_RESOURCE_QUOTA,
+    });
+
+    // Pre-dispatch capacity admission backpressure: read live ResourceQuota
+    // headroom before creating any Sandbox CR / SandboxClaim / Job so bursts
+    // remain queued instead of flooding the cluster with Pending Pods.
+    if (config.capacityAdmission?.enabled) {
+      const quota = await readTenantQuotaWatermark(
+        clients,
+        namespace,
+        config.capacityAdmission.quotaName,
+      );
+      const admission = evaluateCapacityAdmission({
+        quota,
+        requested: {
+          requestsCpu: effectiveResources.requests?.cpu ?? sizing.requests.cpu,
+          requestsMemory: effectiveResources.requests?.memory ?? sizing.requests.memory,
+          limitsCpu: effectiveResources.limits?.cpu ?? sizing.limits.cpu,
+          limitsMemory: effectiveResources.limits?.memory ?? sizing.limits.memory,
+        },
+        warmPoolReadyCount: params.warmPoolReadyCount,
+        clusterPendingPods: params.clusterPendingPods,
+        maxClusterPendingPods: config.capacityAdmission.maxClusterPendingPods,
+      });
+      if (!admission.admitted) {
+        throw new CapacityAdmissionDeferredError(
+          admission.reason,
+          admission.retryAfterMs,
+          admission.detail,
+        );
+      }
+    }
+
+    const jobName = `pc-${newRunUlidDns()}`;
+    const secretName = `${jobName}-env`;
+    const scopedNetworkEgress = parseScopedNetworkEgressGrant(params.executionWorkspaceSettings);
+    const isSandboxCrBackend = config.backend === "sandbox-cr";
 
     const labels = paperclipLabels({
       runId: params.runId,
@@ -402,9 +585,111 @@ const plugin = definePlugin({
       nodeArch: config.nodeArch,
     });
 
-    // Pick the orchestrator and build the appropriate manifest based on backend.
-    const isSandboxCrBackend = config.backend === "sandbox-cr";
-    const orchestrator = isSandboxCrBackend ? sandboxCrOrchestrator : jobOrchestrator;
+    // ── Declarative v1beta1 SandboxClaim / SandboxWarmPool path ──────────────
+    const isRegulatedWorkload =
+      params.dataClassification === "C3" || params.dataClassification === "C4";
+    if (isSandboxCrBackend && config.warmPool?.enabled && !isRegulatedWorkload) {
+      const warmPoolName = config.warmPool.warmPoolName ?? config.warmPool.templateName;
+      if (!warmPoolName) {
+        throw new Error("warmPool.enabled requires warmPool.warmPoolName or warmPool.templateName");
+      }
+
+      const claimManifest = buildSandboxClaimManifest({
+        namespace,
+        claimName: jobName,
+        warmPoolName,
+        runId: params.runId,
+        companyId: params.companyId,
+        runGeneration,
+        ttlSeconds: config.warmPool.defaultTtlSeconds,
+        extraLabels: labels,
+      });
+
+      await createSandboxClaim(clients, namespace, claimManifest);
+      let claimReady;
+      try {
+        claimReady = await waitForSandboxClaimReady(clients, namespace, jobName, {
+          timeoutMs: config.warmPool.claimTimeoutMs,
+        });
+      } catch (err) {
+        // Best-effort cleanup of failed/timed-out claim so it cannot leak.
+        await destroyClaimedSandbox(clients, {
+          namespace,
+          claimName: jobName,
+          sandboxApiVersion: "agents.x-k8s.io/v1beta1",
+        }).catch(() => undefined);
+        throw err;
+      }
+
+      warmPoolMetrics.recordClaim({
+        poolHit: claimReady.poolHit,
+        claimDurationMs: claimReady.claimDurationMs,
+      });
+      readySandboxesByLease.add(claimReady.sandboxName);
+
+      // Deliver one-time zero-trust lease token directly into the running warm
+      // pod over exec stdin (atomic tmpfs file), never via Secrets or envFrom.
+      if (config.expertZeroTrust?.enabled && params.proxySessionToken) {
+        await deliverLeaseTokenViaStdin(kc, {
+          namespace,
+          podName: claimReady.podName,
+          containerName: "agent",
+          token: params.proxySessionToken,
+          targetPath: config.expertZeroTrust.leaseTokenPath,
+        });
+      }
+
+      let podSnapshot: Record<string, unknown> | null = null;
+      if (typeof clients.core?.readNamespacedPod === "function") {
+        try {
+          podSnapshot = (await clients.core.readNamespacedPod({
+            namespace,
+            name: claimReady.podName,
+          })) as Record<string, unknown>;
+        } catch {
+          // Best-effort runtime evidence collection.
+        }
+      }
+      const runtimeEvidence = extractRuntimeEvidence(
+        podSnapshot,
+        resolvedImage.digest,
+        resolvedImage.expectedPlatformDigest,
+      );
+
+      const leaseMetadata: KubernetesLeaseMetadata = {
+        namespace,
+        jobName: claimReady.sandboxName,
+        podName: claimReady.podName,
+        secretName: "",
+        phase: "Running",
+        backend: "sandbox-cr",
+        sandboxApiVersion: "agents.x-k8s.io/v1beta1",
+        scopedNetworkPolicyName: null,
+        scopedNetworkEgress,
+        resolvedImage: resolvedImage.image,
+        resolvedImageDigest: resolvedImage.digest,
+        expectedPlatformDigest: resolvedImage.expectedPlatformDigest,
+        resourceProfile: sizing.profile,
+        nodeArch: config.nodeArch,
+        priorityClassName: priorityClassName ?? null,
+        sandboxClaimName: jobName,
+        poolHit: claimReady.poolHit,
+        zeroTrustMode: Boolean(config.expertZeroTrust?.enabled),
+        dataClassification: params.dataClassification,
+        runtimeEvidence,
+        nativeFileSyncUnsupported: false,
+      };
+
+      return {
+        providerLeaseId: claimReady.sandboxName,
+        metadata: leaseMetadata as unknown as Record<string, unknown>,
+      };
+    }
+
+    // ── Cold-start Sandbox CR or batch/v1 Job path ──────────────────────────
+    const orchestrator = isSandboxCrBackend
+      ? createSandboxCrOrchestrator(config.sandboxApiVersion)
+      : jobOrchestrator;
     const ownerApiVersion = isSandboxCrBackend ? config.sandboxApiVersion : "batch/v1";
 
     const manifest = isSandboxCrBackend
@@ -418,9 +703,11 @@ const plugin = definePlugin({
           serviceAccountName: TENANT_SERVICE_ACCOUNT,
           labels,
           resources: effectiveResources,
-          runtimeClassName: config.runtimeClassName,
+          runtimeClassName: isolation.runtimeClassName,
           imagePullSecrets: config.imagePullSecrets,
           nodeSelector,
+          tolerations: isolation.tolerations,
+          podAnnotations: isolation.podAnnotations,
           priorityClassName,
           workspaceSizeLimit: useProfileSizing ? sizing.workspaceSizeLimit : undefined,
           tmpSizeLimit: useProfileSizing ? sizing.tmpSizeLimit : undefined,
@@ -435,14 +722,13 @@ const plugin = definePlugin({
           serviceAccountName: TENANT_SERVICE_ACCOUNT,
           labels,
           resources: effectiveResources,
-          runtimeClassName: config.runtimeClassName,
+          runtimeClassName: isolation.runtimeClassName,
           activeDeadlineSec: config.podActivityDeadlineSec,
           ttlSecondsAfterFinished: config.jobTtlSecondsAfterFinished,
           imagePullSecrets: config.imagePullSecrets,
         });
 
     const { uid: ownerUid } = await orchestrator.claim(clients, namespace, manifest);
-    const scopedNetworkEgress = parseScopedNetworkEgressGrant(params.executionWorkspaceSettings);
     const scopedNetworkPolicyName = await createScopedNetworkEgressPolicyOrReleaseWorkload(
       {
         clients,
@@ -474,20 +760,39 @@ const plugin = definePlugin({
 
     // Secret ownerRef: for job backend, the Job owns the Secret (cascade delete).
     // For sandbox-cr backend, the Sandbox CR owns the Secret.
-    // NOTE: For sandbox-cr, if the Secret outlives the Sandbox due to a cluster
-    // quirk, the release() call will still clean it up via namespace GC or
-    // explicit delete in a future iteration.
-    await createPerRunSecret(clients, {
-      namespace,
-      secretName,
-      runId: params.runId,
-      ownerKind: isSandboxCrBackend ? "Sandbox" : "Job",
-      ownerApiVersion,
-      ownerName: jobName,
-      ownerUid,
-      bootstrapToken,
-      adapterEnv,
-    });
+    if (config.expertZeroTrust?.enabled) {
+      await createAgentSessionSecret(clients, {
+        namespace,
+        secretName,
+        runId: params.runId,
+        runGeneration,
+        ownerKind: isSandboxCrBackend ? "Sandbox" : "Job",
+        ownerApiVersion,
+        ownerName: jobName,
+        ownerUid,
+        bootstrapToken,
+        gatewayProxyUrl: config.expertZeroTrust.gatewayProxyUrl!,
+        runtimeEnv: stripZeroTrustCredentialEnv(adapterEnv),
+      });
+      if (params.proxySessionToken) {
+        pendingLeaseTokensByLease.set(jobName, {
+          token: params.proxySessionToken,
+          targetPath: config.expertZeroTrust.leaseTokenPath,
+        });
+      }
+    } else {
+      await createPerRunSecret(clients, {
+        namespace,
+        secretName,
+        runId: params.runId,
+        ownerKind: isSandboxCrBackend ? "Sandbox" : "Job",
+        ownerApiVersion,
+        ownerName: jobName,
+        ownerUid,
+        bootstrapToken,
+        adapterEnv,
+      });
+    }
 
     const podName = await orchestrator.findPod(clients, namespace, jobName);
     let podSnapshot: Record<string, unknown> | null = null;
@@ -514,6 +819,7 @@ const plugin = definePlugin({
       secretName,
       phase: "Pending",
       backend: config.backend,
+      ...(isSandboxCrBackend ? { sandboxApiVersion: config.sandboxApiVersion } : {}),
       scopedNetworkPolicyName,
       scopedNetworkEgress,
       resolvedImage: resolvedImage.image,
@@ -522,6 +828,8 @@ const plugin = definePlugin({
       resourceProfile: sizing.profile,
       nodeArch: config.nodeArch,
       priorityClassName: priorityClassName ?? null,
+      zeroTrustMode: Boolean(config.expertZeroTrust?.enabled),
+      dataClassification: params.dataClassification,
       runtimeEvidence,
       // Native file sync streams over a pod exec; only the sandbox-cr backend
       // exposes one. Flag the job backend so the server keeps the base64 fallback
@@ -547,6 +855,7 @@ const plugin = definePlugin({
       typeof params.leaseMetadata?.backend === "string"
         ? (params.leaseMetadata.backend as "sandbox-cr" | "job")
         : config.backend;
+    const sandboxApiVersion = resolveSandboxApiVersion(config, params.leaseMetadata);
     // acquireLease names the per-run Secret `${jobName}-env` and uses jobName
     // as the providerLeaseId, so the suffix fallback reconstructs it exactly.
     const secretName =
@@ -564,6 +873,7 @@ const plugin = definePlugin({
       namespace,
       name: params.providerLeaseId,
       backend: leaseBackend,
+      sandboxApiVersion,
       readyTimeoutMs: RESUME_READY_TIMEOUT_MS,
       pollMs: RESUME_READY_POLL_MS,
     });
@@ -596,6 +906,13 @@ const plugin = definePlugin({
       secretName,
       phase: check.phase,
       backend: leaseBackend,
+      ...(leaseBackend === "sandbox-cr" ? { sandboxApiVersion } : {}),
+      ...(typeof params.leaseMetadata?.sandboxClaimName === "string"
+        ? { sandboxClaimName: params.leaseMetadata.sandboxClaimName }
+        : {}),
+      ...(typeof params.leaseMetadata?.zeroTrustMode === "boolean"
+        ? { zeroTrustMode: params.leaseMetadata.zeroTrustMode }
+        : {}),
       scopedNetworkPolicyName:
         typeof params.leaseMetadata?.scopedNetworkPolicyName === "string"
           ? params.leaseMetadata.scopedNetworkPolicyName
@@ -656,14 +973,45 @@ const plugin = definePlugin({
       typeof params.leaseMetadata?.backend === "string"
         ? (params.leaseMetadata.backend as "sandbox-cr" | "job")
         : config.backend;
-    const releaseOrchestrator =
-      leaseBackend === "sandbox-cr" ? sandboxCrOrchestrator : jobOrchestrator;
+    const sandboxApiVersion = resolveSandboxApiVersion(config, params.leaseMetadata);
+    const sandboxClaimName =
+      typeof params.leaseMetadata?.sandboxClaimName === "string" &&
+      params.leaseMetadata.sandboxClaimName.length > 0
+        ? params.leaseMetadata.sandboxClaimName
+        : null;
+    const podName =
+      typeof params.leaseMetadata?.podName === "string" &&
+      params.leaseMetadata.podName.length > 0
+        ? params.leaseMetadata.podName
+        : null;
+    const secretName =
+      typeof params.leaseMetadata?.secretName === "string" &&
+      params.leaseMetadata.secretName.length > 0
+        ? params.leaseMetadata.secretName
+        : null;
 
-    // Drop the FastUploadInterceptor associated with THIS lease (only).
-    // Each lease has its own interceptor instance via uploadInterceptorsByLease,
-    // so unrelated concurrent leases keep their in-flight buffers intact.
+    // Drop per-lease in-memory state associated with THIS lease only.
     uploadInterceptorsByLease.delete(params.providerLeaseId);
     readySandboxesByLease.delete(params.providerLeaseId);
+    pendingLeaseTokensByLease.delete(params.providerLeaseId);
+
+    if (sandboxClaimName) {
+      // Strictly one-way teardown for warm-pool claimed sandboxes.
+      await destroyClaimedSandbox(clients, {
+        namespace,
+        claimName: sandboxClaimName,
+        sandboxName: params.providerLeaseId,
+        podName,
+        secretName,
+        sandboxApiVersion,
+      });
+      return;
+    }
+
+    const releaseOrchestrator =
+      leaseBackend === "sandbox-cr"
+        ? createSandboxCrOrchestrator(sandboxApiVersion)
+        : jobOrchestrator;
 
     try {
       await releaseOrchestrator.release(clients, namespace, params.providerLeaseId);
@@ -688,6 +1036,12 @@ const plugin = definePlugin({
       typeof params.leaseMetadata?.backend === "string"
         ? (params.leaseMetadata.backend as "sandbox-cr" | "job")
         : config.backend;
+    const sandboxApiVersion = resolveSandboxApiVersion(config, params.leaseMetadata);
+    const sandboxClaimName =
+      typeof params.leaseMetadata?.sandboxClaimName === "string" &&
+      params.leaseMetadata.sandboxClaimName.length > 0
+        ? params.leaseMetadata.sandboxClaimName
+        : null;
     const secretName =
       typeof params.leaseMetadata?.secretName === "string"
         ? params.leaseMetadata.secretName
@@ -702,6 +1056,7 @@ const plugin = definePlugin({
     // cluster says — the lease is dead either way.
     uploadInterceptorsByLease.delete(params.providerLeaseId);
     readySandboxesByLease.delete(params.providerLeaseId);
+    pendingLeaseTokensByLease.delete(params.providerLeaseId);
 
     const kc = createKubeConfig({
       inCluster: config.inCluster,
@@ -709,12 +1064,25 @@ const plugin = definePlugin({
     });
     const clients = makeKubeClients(kc);
 
+    if (sandboxClaimName) {
+      await destroyClaimedSandbox(clients, {
+        namespace,
+        claimName: sandboxClaimName,
+        sandboxName: params.providerLeaseId,
+        podName,
+        secretName: secretName || null,
+        sandboxApiVersion,
+      });
+      return;
+    }
+
     // Forcibly delete everything acquireLease created (Sandbox CR / Job, pod,
     // per-run Secret). 404s are success — destroy must be idempotent.
     await destroyLeaseResources(clients, {
       namespace,
       name: params.providerLeaseId,
       backend: leaseBackend,
+      sandboxApiVersion,
       podName,
       secretName,
     });
@@ -763,8 +1131,13 @@ const plugin = definePlugin({
     if (leaseBackend === "sandbox-cr") {
       // ── Sandbox-CR backend ──────────────────────────────────────────────────
       // 1. Ensure the Sandbox pod is Ready (wait only on first exec for this lease).
-      // 2. Exec the command into the running pod.
-      // 3. Return exec result directly (no log scraping needed).
+      // 2. Deliver any pending zero-trust lease token atomically via stdin.
+      // 3. Exec the command into the running pod.
+      // 4. Return exec result directly (no log scraping needed).
+
+      const sandboxOrchestrator = createSandboxCrOrchestrator(
+        resolveSandboxApiVersion(config, lease.metadata),
+      );
 
       let podName =
         typeof lease.metadata?.podName === "string" && lease.metadata.podName
@@ -783,7 +1156,7 @@ const plugin = definePlugin({
 
       if (!podAlreadyKnownReady) {
         try {
-          await sandboxCrOrchestrator.waitForCompletion(
+          await sandboxOrchestrator.waitForCompletion(
             clients,
             namespace,
             lease.providerLeaseId,
@@ -811,7 +1184,7 @@ const plugin = definePlugin({
 
       // Resolve pod name (may now be populated in Sandbox status).
       if (!podName) {
-        podName = await sandboxCrOrchestrator.findPod(
+        podName = await sandboxOrchestrator.findPod(
           clients,
           namespace,
           lease.providerLeaseId,
@@ -831,6 +1204,25 @@ const plugin = definePlugin({
             sandboxName: lease.providerLeaseId,
           },
         };
+      }
+
+      // Deliver deferred zero-trust lease token atomically via stdin before
+      // executing the first command in a cold-start Sandbox CR pod.
+      const pendingToken = pendingLeaseTokensByLease.get(lease.providerLeaseId);
+      if (pendingToken) {
+        const tokenTimeoutMs = Math.max(
+          5_000,
+          Math.min(10_000, effectiveTimeoutMs - (Date.now() - executeStartedAt)),
+        );
+        await deliverLeaseTokenViaStdin(kc, {
+          namespace,
+          podName,
+          containerName: "agent",
+          token: pendingToken.token,
+          targetPath: pendingToken.targetPath,
+          timeoutMs: tokenTimeoutMs,
+        });
+        pendingLeaseTokensByLease.delete(lease.providerLeaseId);
       }
 
       // Build the command to exec. The adapter passes shell invocations as

@@ -790,6 +790,20 @@
       "verifiedAt": "2026-11-23",
       "retireWhen": "An accepted upstream release provides pre-dispatch ResourceQuota watermark backpressure, aging priority queues, C3/C4 Kata-FC fail-closed isolation, and Karpenter dual ARM64 NodePool manifests.",
       "notes": "Closes hrygo/Delegra#76. Adds pre-dispatch ResourceQuota watermark admission and Pending-Pod backoff, Small/Medium/Large tenant quota tiers with <=25% warm-pool sub-quota, aging PriorityBackpressureQueue, fail-closed C3/C4 Kata-FC microVM isolation guard (requests.memory===limits.memory, >=512Mi offset, NoSchedule toleration), server-side capacity backpressure retry classifier, Karpenter v1 dual ARM64 NodePool + Overprovisioning manifests, and unit tests."
+    },
+    {
+      "id": "delegra-k8s-production-wiring",
+      "kind": "fork-only",
+      "status": "active",
+      "commits": [
+        "0d99334531b26956446af936080fc6b36c999b80",
+        "d93081399c47b41bdc4dff46ef9bf727d18ef981"
+      ],
+      "owner": "hrygo",
+      "reviewBy": "2026-12-23",
+      "verifiedAt": "2026-11-23",
+      "retireWhen": "An accepted upstream release wires expert gateway internal authz routes in server/src/app.ts and v1beta1 warmPool, zero-trust lease token delivery, and capacity admission in plugin-sandbox-kubernetes.",
+      "notes": "Wires the previously merged Kubernetes intelligent scheduling modules (#77-#84) into production entrypoints: mounts expertGatewayAuthzRoutes before actorMiddleware in server/src/app.ts, and integrates v1beta1 SandboxCrOrchestrator, declarative SandboxClaim/SandboxWarmPool one-way lifecycle, zero-trust createAgentSessionSecret + atomic stdin lease token delivery, and pre-dispatch capacity admission + C3/C4 kata-fc isolation into packages/plugins/sandbox-providers/kubernetes/src/plugin.ts."
     }
   ]
 }
