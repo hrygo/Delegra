@@ -35,6 +35,15 @@ export const kubernetesProviderConfigSchema = z
     sandboxApiVersion: z
       .enum(["agents.x-k8s.io/v1alpha1", "agents.x-k8s.io/v1beta1"])
       .default("agents.x-k8s.io/v1alpha1"),
+    warmPool: z
+      .object({
+        enabled: z.boolean().default(false),
+        templateName: z.string().min(1).optional(),
+        claimTimeoutMs: z.number().int().positive().default(15_000),
+        defaultTtlSeconds: z.number().int().positive().default(3600),
+        sameSessionIdleTtlSeconds: z.number().int().min(60).max(600).default(240),
+      })
+      .optional(),
     serviceAccountAnnotations: z.record(z.string(), z.string()).default({}),
 
     jobTtlSecondsAfterFinished: z.number().int().nonnegative().default(900),
@@ -63,7 +72,7 @@ export const kubernetesProviderConfigSchema = z
     /**
      * The sandbox backend to use.
      *
-     * - `"sandbox-cr"` (default, alpha) — uses the kubernetes-sigs/agent-sandbox
+     * - `"sandbox-cr"` (default, alpha/beta) — uses the kubernetes-sigs/agent-sandbox
      *   Sandbox CRD (agents.x-k8s.io/v1alpha1 or v1beta1). Creates a long-lived
      *   pod that paperclip-server can exec into for multi-command adapter-install
      *   workflows. Requires the agent-sandbox controller to be installed in the
@@ -121,6 +130,8 @@ export interface KubernetesLeaseMetadata {
   resourceProfile?: ExpertResourceProfileName;
   nodeArch?: "arm64" | "amd64" | "any";
   priorityClassName?: string | null;
+  sandboxClaimName?: string | null;
+  poolHit?: boolean;
   runtimeEvidence?: KubernetesRuntimeEvidence;
   /**
    * True when this lease's backend has NO data channel for the native file-sync

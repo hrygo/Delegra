@@ -1,0 +1,131 @@
+# Zero-trust one-way warm pool (`extensions.agents.x-k8s.io/v1beta1`, agent-sandbox v1.0.12+)
+#
+# Deployment note: configure the agent-sandbox controller with
+# `--sandbox-warm-pool-max-batch-size=4` to prevent thundering-herd pod bursts
+# during morning ramp-up or KEDA scale-out events.
+#
+# Replace `<PINNED_SHA256_DIGEST>` with the attested digest from
+# `expert-images-release.json` before applying. Floating tags are forbidden.
+---
+apiVersion: extensions.agents.x-k8s.io/v1beta1
+kind: SandboxTemplate
+metadata:
+  name: expert-codex-min-arm64
+  namespace: paperclip
+  labels:
+    paperclip.io/managed-by: paperclip-k8s-plugin
+    paperclip.io/pool-clean-state: "true"
+spec:
+  podTemplate:
+    metadata:
+      labels:
+        paperclip.io/role: agent
+        paperclip.io/managed-by: paperclip-k8s-plugin
+        paperclip.io/expert-profile: light
+    spec:
+      serviceAccountName: paperclip-tenant-sa
+      automountServiceAccountToken: false
+      restartPolicy: Always
+      priorityClassName: paperclip-warm-pool
+      nodeSelector:
+        kubernetes.io/arch: arm64
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: agent
+          image: ghcr.io/hrygo/delegra/codex-min@sha256:0000000000000000000000000000000000000000000000000000000000000000
+          imagePullPolicy: IfNotPresent
+          command:
+            - /usr/bin/tini
+            - --
+            - /bin/sh
+            - -c
+            - sleep infinity
+          env:
+            - name: HOME
+              value: /home/paperclip
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+            limits:
+              cpu: "1"
+              memory: "2Gi"
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+            - name: home
+              mountPath: /home/paperclip
+            - name: cache
+              mountPath: /home/paperclip/.cache
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: workspace
+          emptyDir:
+            sizeLimit: 8Gi
+        - name: home
+          emptyDir:
+            sizeLimit: 1Gi
+        - name: cache
+          emptyDir:
+            sizeLimit: 1Gi
+        - name: tmp
+          emptyDir:
+            sizeLimit: 2Gi
+---
+apiVersion: extensions.agents.x-k8s.io/v1beta1
+kind: SandboxWarmPool
+metadata:
+  name: expert-codex-min-arm64
+  namespace: paperclip
+  labels:
+    paperclip.io/managed-by: paperclip-k8s-plugin
+spec:
+  replicas: 0
+  sandboxTemplateRef:
+    name: expert-codex-min-arm64
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: expert-codex-min-arm64-tidal
+  namespace: paperclip
+  labels:
+    paperclip.io/managed-by: paperclip-k8s-plugin
+spec:
+  scaleTargetRef:
+    apiVersion: extensions.agents.x-k8s.io/v1beta1
+    kind: SandboxWarmPool
+    name: expert-codex-min-arm64
+  pollingInterval: 30
+  cooldownPeriod: 300
+  minReplicaCount: 0
+  maxReplicaCount: 12
+  triggers:
+    - type: cron
+      metadata:
+        timezone: Asia/Shanghai
+        start: "30 8 * * 1-5"
+        end: "30 20 * * 1-5"
+        desiredReplicas: "4"
+    - type: prometheus
+      metadata:
+        serverAddress: http://prometheus-operated.monitoring.svc.cluster.local:9090
+        metricName: delegra_warmpool_claim_rate
+        threshold: "2"
+        query: sum(rate(delegra_warmpool_claims_total{template="expert-codex-min-arm64"}[5m])) * 60
