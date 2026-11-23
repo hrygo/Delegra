@@ -105,16 +105,32 @@ export function resolveRunAdapterType(
   return trimmed.length > 0 ? trimmed : configAdapterType;
 }
 
+export interface BuildAdapterEnvOptions {
+  /**
+   * When true, host process credentials (`envKeys`) are never inherited into
+   * the sandbox container; expert sandboxes authenticate solely through the
+   * cluster-level `delegra-gateway-proxy`.
+   */
+  expertZeroTrustMode?: boolean;
+}
+
 /**
  * Build the per-run env for the Job: the non-secret `defaultEnv` is the base
  * and the process-env values (the secret API keys named by `envKeys`) override
- * it. Pure for testability.
+ * it unless `expertZeroTrustMode` is enabled. Pure for testability.
  */
 export function buildAdapterEnv(
   defaults: AdapterDefaults,
   processEnv: NodeJS.ProcessEnv = process.env,
+  options?: BuildAdapterEnvOptions,
 ): Record<string, string> {
   const out: Record<string, string> = { ...(defaults.defaultEnv ?? {}) };
+  if (options?.expertZeroTrustMode) {
+    for (const k of defaults.envKeys) {
+      delete out[k];
+    }
+    return out;
+  }
   for (const k of defaults.envKeys) {
     const v = processEnv[k];
     if (v) out[k] = v;

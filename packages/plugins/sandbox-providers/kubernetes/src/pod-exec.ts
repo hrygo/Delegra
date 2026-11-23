@@ -442,3 +442,72 @@ export async function execInPodStreaming(
       });
   });
 }
+
+export const DEFAULT_LEASE_TOKEN_PATH = "/run/delegra-auth/lease-token";
+
+/**
+ * Builds a POSIX shell command that reads a lease token from stdin and writes
+ * it atomically (`umask 077`, `chmod 0600`, `mv -f`) to a tmpfs path so the
+ * token never appears in process arguments, container env, or K8s Secrets.
+ */
+export function buildAtomicLeaseTokenWriteCommand(
+  targetPath: string = DEFAULT_LEASE_TOKEN_PATH,
+): string[] {
+  if (!targetPath.startsWith("/") || targetPath.includes("\0")) {
+    throw new Error(`Invalid lease token path: ${targetPath}`);
+  }
+  const lastSlash = targetPath.lastIndexOf("/");
+  const dir = lastSlash > 0 ? targetPath.slice(0, lastSlash) : "/";
+  const tmpPath = `${targetPath}.tmp.$$`;
+  const script = [
+    "set -eu",
+    "umask 077",
+    `mkdir -p ${shQuote(dir)}`,
+    `tmp=${shQuote(tmpPath)}`,
+    'cat > "$tmp"',
+    'chmod 0600 "$tmp"',
+    `mv -f "$tmp" ${shQuote(targetPath)}`,
+  ].join("; ");
+  return ["/bin/sh", "-c", script];
+}
+
+export interface DeliverLeaseTokenInput {
+  namespace: string;
+  podName: string;
+  containerName: string;
+  token: string;
+  targetPath?: string;
+  timeoutMs?: number;
+}
+
+/**
+ * Delivers a one-time proxy session lease token into a running sandbox pod
+ * via `execInPod` stdin, writing atomically to `/run/delegra-auth/lease-token`.
+ */
+export async function deliverLeaseTokenViaStdin(
+  kc: KubeConfig,
+  input: DeliverLeaseTokenInput,
+  execFn: typeof execInPod = execInPod,
+): Promise<void> {
+  if (!input.token || input.token.trim().length === 0) {
+    throw new Error("deliverLeaseTokenViaStdin requires a non-empty token");
+  }
+  const targetPath = input.targetPath ?? DEFAULT_LEASE_TOKEN_PATH;
+  const command = buildAtomicLeaseTokenWriteCommand(targetPath);
+  const result = await execFn(
+    kc,
+    input.namespace,
+    input.podName,
+    input.containerName,
+    command,
+    input.token,
+    input.timeoutMs ?? 10_000,
+    4096,
+    4096,
+  );
+  if (result.exitCode !== 0) {
+    throw new Error(
+      `Failed to deliver lease token to ${targetPath} (exit=${result.exitCode}): ${result.stderr.trim()}`,
+    );
+  }
+}
