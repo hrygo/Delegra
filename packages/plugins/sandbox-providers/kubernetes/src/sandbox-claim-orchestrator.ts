@@ -31,6 +31,7 @@
 import type { KubeClients } from "./kube-client.js";
 import { deleteSandboxCr } from "./sandbox-cr-orchestrator.js";
 import { isKubeNotFoundError } from "./lease-lifecycle.js";
+import { DEFAULT_SANDBOX_DNS_NDOTS } from "./sandbox-cr-builder.js";
 
 export const SANDBOX_EXTENSIONS_GROUP = "extensions.agents.x-k8s.io";
 export const SANDBOX_EXTENSIONS_VERSION = "v1beta1";
@@ -150,6 +151,7 @@ export interface BuildSandboxTemplateInput {
   workspaceSizeLimit?: string;
   tmpSizeLimit?: string;
   shmSizeLimit?: string;
+  dnsNdots?: number;
   labels?: Record<string, string>;
 }
 
@@ -178,6 +180,7 @@ export function buildSandboxTemplateManifest(
     volumeMounts.push({ name: "dshm", mountPath: "/dev/shm" });
     volumes.push({ name: "dshm", emptyDir: { medium: "Memory", sizeLimit: input.shmSizeLimit } });
   }
+  const ndots = input.dnsNdots ?? DEFAULT_SANDBOX_DNS_NDOTS;
 
   return {
     apiVersion: SANDBOX_EXTENSIONS_API_VERSION,
@@ -204,6 +207,9 @@ export function buildSandboxTemplateManifest(
           serviceAccountName: input.serviceAccountName,
           automountServiceAccountToken: false,
           restartPolicy: "Always",
+          dnsConfig: {
+            options: [{ name: "ndots", value: String(ndots) }],
+          },
           nodeSelector: input.nodeSelector ?? { "kubernetes.io/arch": "arm64" },
           priorityClassName: input.priorityClassName ?? DEFAULT_WARM_POOL_PRIORITY_CLASS,
           ...(input.runtimeClassName ? { runtimeClassName: input.runtimeClassName } : {}),
