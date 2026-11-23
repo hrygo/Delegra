@@ -132,6 +132,27 @@ describe("buildAdapterEnv", () => {
     };
     expect(buildAdapterEnv(defaults, {})).toEqual({});
   });
+
+  it("suppresses host credential inheritance and strips envKeys in expertZeroTrustMode", () => {
+    const defaults: AdapterDefaults = {
+      runtimeImage: "x",
+      envKeys: ["OPENAI_API_KEY", "ANTHROPIC_API_KEY"],
+      allowFqdns: [],
+      probeCommand: ["x"],
+      defaultEnv: {
+        OPENAI_BASE_URL: "http://delegra-gateway-proxy.paperclip.svc.cluster.local:8443/v1",
+        OPENAI_API_KEY: "should-be-stripped",
+      },
+    };
+    const env = buildAdapterEnv(
+      defaults,
+      { OPENAI_API_KEY: "sk-host", ANTHROPIC_API_KEY: "sk-ant-host" },
+      { expertZeroTrustMode: true },
+    );
+    expect(env).toEqual({
+      OPENAI_BASE_URL: "http://delegra-gateway-proxy.paperclip.svc.cluster.local:8443/v1",
+    });
+  });
 });
 
 describe("resolveRunAdapterType", () => {

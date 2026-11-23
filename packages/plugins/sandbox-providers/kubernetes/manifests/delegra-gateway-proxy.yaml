@@ -1,0 +1,179 @@
+# Cluster-level zero-trust AI gateway proxy (`delegra-gateway-proxy`)
+# Deployed in the `paperclip` namespace (PSS `restricted`, HPA 3-20, PDB minAvailable 2).
+# Agent sandboxes never hold user model API keys; they call this proxy with a
+# one-time run-bound session token, and the proxy authorizes every request
+# against `paperclip-server` before attaching ephemeral upstream credentials.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: delegra-gateway-proxy
+  namespace: paperclip
+  labels:
+    app: delegra-gateway-proxy
+    paperclip.io/managed-by: paperclip-k8s-plugin
+automountServiceAccountToken: true
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: delegra-gateway-proxy
+  namespace: paperclip
+  labels:
+    app: delegra-gateway-proxy
+    paperclip.io/managed-by: paperclip-k8s-plugin
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: delegra-gateway-proxy
+  template:
+    metadata:
+      labels:
+        app: delegra-gateway-proxy
+        paperclip.io/managed-by: paperclip-k8s-plugin
+    spec:
+      serviceAccountName: delegra-gateway-proxy
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        fsGroup: 1001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: proxy
+          image: ghcr.io/hrygo/delegra-gateway-proxy:v0.2.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: https
+              containerPort: 8443
+              protocol: TCP
+          envFrom:
+            - secretRef:
+                name: delegra-gateway-proxy-auth
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "256Mi"
+            limits:
+              cpu: "2"
+              memory: "1Gi"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8443
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8443
+            initialDelaySeconds: 3
+            periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: delegra-gateway-proxy
+  namespace: paperclip
+  labels:
+    app: delegra-gateway-proxy
+    paperclip.io/managed-by: paperclip-k8s-plugin
+spec:
+  selector:
+    app: delegra-gateway-proxy
+  ports:
+    - name: https
+      port: 8443
+      targetPort: 8443
+      protocol: TCP
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: delegra-gateway-proxy
+  namespace: paperclip
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: delegra-gateway-proxy
+  minReplicas: 3
+  maxReplicas: 20
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: delegra-gateway-proxy
+  namespace: paperclip
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: delegra-gateway-proxy
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: delegra-gateway-proxy-netpol
+  namespace: paperclip
+spec:
+  podSelector:
+    matchLabels:
+      app: delegra-gateway-proxy
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              paperclip.io/managed-by: paperclip-k8s-plugin
+          podSelector:
+            matchLabels:
+              paperclip.io/role: agent
+      ports:
+        - port: 8443
+          protocol: TCP
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    - to:
+        - podSelector:
+            matchLabels:
+              app: paperclip-server
+      ports:
+        - port: 3100
+          protocol: TCP
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 169.254.0.0/16
+              - 127.0.0.0/8
+      ports:
+        - port: 443
+          protocol: TCP
