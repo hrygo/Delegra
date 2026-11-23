@@ -22,6 +22,7 @@ import {
   deleteSandboxCr,
   findPodForSandbox,
   waitForSandboxReady,
+  type SandboxCrApiVersion,
 } from "./sandbox-cr-orchestrator.js";
 
 /** True when a Kubernetes API error means "resource not found" (HTTP 404). */
@@ -48,6 +49,7 @@ export interface ResumeCheckInput {
   /** Workload resource name (Sandbox CR name or Job name) == providerLeaseId. */
   name: string;
   backend: "sandbox-cr" | "job";
+  sandboxApiVersion?: SandboxCrApiVersion;
   /** Bounded wait for an existing Sandbox pod to report Ready. */
   readyTimeoutMs?: number;
   pollMs?: number;
@@ -72,6 +74,7 @@ export async function checkLeaseResumable(
       await waitForSandboxReady(clients, input.namespace, input.name, {
         timeoutMs: input.readyTimeoutMs ?? 30_000,
         pollMs: input.pollMs ?? 1_000,
+        apiVersion: input.sandboxApiVersion,
       });
     } catch (err) {
       if (isKubeNotFoundError(err)) {
@@ -85,7 +88,12 @@ export async function checkLeaseResumable(
 
     let podName: string | null;
     try {
-      podName = await findPodForSandbox(clients, input.namespace, input.name);
+      podName = await findPodForSandbox(
+        clients,
+        input.namespace,
+        input.name,
+        input.sandboxApiVersion,
+      );
     } catch (err) {
       // CR deleted between the readiness check and the pod lookup.
       if (isKubeNotFoundError(err)) {
@@ -154,6 +162,7 @@ export interface DestroyLeaseInput {
   /** Workload resource name (Sandbox CR name or Job name) == providerLeaseId. */
   name: string;
   backend: "sandbox-cr" | "job";
+  sandboxApiVersion?: SandboxCrApiVersion;
   podName: string | null;
   secretName: string | null;
 }
@@ -170,7 +179,9 @@ export async function destroyLeaseResources(
   input: DestroyLeaseInput,
 ): Promise<void> {
   if (input.backend === "sandbox-cr") {
-    await ignoreNotFound(deleteSandboxCr(clients, input.namespace, input.name));
+    await ignoreNotFound(
+      deleteSandboxCr(clients, input.namespace, input.name, input.sandboxApiVersion),
+    );
   } else {
     await ignoreNotFound(deleteJob(clients, input.namespace, input.name));
   }

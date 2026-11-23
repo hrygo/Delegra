@@ -2,6 +2,7 @@ import { z } from "zod";
 import { adapterRegistrySchema } from "./adapter-registry.js";
 import { KNOWN_ADAPTER_TYPES } from "./adapter-defaults.js";
 import type { ExpertResourceProfileName } from "./sandbox-cr-builder.js";
+import type { DataClassificationLevel } from "./capacity-admission.js";
 
 const cidrRegex = /^(\d{1,3}\.){3}\d{1,3}\/\d{1,2}$/;
 
@@ -38,10 +39,27 @@ export const kubernetesProviderConfigSchema = z
     warmPool: z
       .object({
         enabled: z.boolean().default(false),
+        warmPoolName: z.string().min(1).optional(),
         templateName: z.string().min(1).optional(),
         claimTimeoutMs: z.number().int().positive().default(15_000),
         defaultTtlSeconds: z.number().int().positive().default(3600),
         sameSessionIdleTtlSeconds: z.number().int().min(60).max(600).default(240),
+      })
+      .optional(),
+    expertZeroTrust: z
+      .object({
+        enabled: z.boolean().default(false),
+        gatewayProxyUrl: z.string().url().optional(),
+        gatewayProxyNamespace: z.string().min(1).default("paperclip"),
+        gatewayProxyPort: z.number().int().positive().default(8080),
+        leaseTokenPath: z.string().min(1).default("/run/delegra-auth/lease-token"),
+      })
+      .optional(),
+    capacityAdmission: z
+      .object({
+        enabled: z.boolean().default(false),
+        quotaName: z.string().min(1).default("paperclip-quota"),
+        maxClusterPendingPods: z.number().int().positive().default(10),
       })
       .optional(),
     serviceAccountAnnotations: z.record(z.string(), z.string()).default({}),
@@ -119,6 +137,7 @@ export interface KubernetesLeaseMetadata {
   phase: "Pending" | "Running" | "Succeeded" | "Failed";
   /** Which backend provisioned this lease. */
   backend: "sandbox-cr" | "job";
+  sandboxApiVersion?: "agents.x-k8s.io/v1alpha1" | "agents.x-k8s.io/v1beta1";
   scopedNetworkPolicyName: string | null;
   scopedNetworkEgress: {
     allowFqdns: string[];
@@ -132,6 +151,8 @@ export interface KubernetesLeaseMetadata {
   priorityClassName?: string | null;
   sandboxClaimName?: string | null;
   poolHit?: boolean;
+  zeroTrustMode?: boolean;
+  dataClassification?: DataClassificationLevel;
   runtimeEvidence?: KubernetesRuntimeEvidence;
   /**
    * True when this lease's backend has NO data channel for the native file-sync
