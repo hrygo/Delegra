@@ -1,0 +1,36 @@
+# Multi-stage PSS-restricted container image for `delegra-gateway-proxy`
+# Build from the repository root:
+#   docker build -f packages/plugins/sandbox-providers/kubernetes/Dockerfile.gateway-proxy -t ghcr.io/hrygo/delegra-gateway-proxy:v0.2.0 .
+
+FROM node:24-alpine AS builder
+WORKDIR /workspace
+
+RUN corepack enable
+
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.json ./
+COPY packages/plugins/sdk/package.json packages/plugins/sdk/package.json
+COPY packages/plugins/sandbox-providers/kubernetes/package.json packages/plugins/sandbox-providers/kubernetes/package.json
+
+RUN pnpm install --frozen-lockfile --filter @paperclipai/plugin-kubernetes...
+
+COPY packages/plugins/sdk packages/plugins/sdk
+COPY packages/plugins/sandbox-providers/kubernetes packages/plugins/sandbox-providers/kubernetes
+
+RUN pnpm --filter @paperclipai/plugin-kubernetes build
+
+FROM node:24-alpine AS runtime
+WORKDIR /app
+
+ENV NODE_ENV=production \
+    PORT=8443 \
+    HOST=0.0.0.0
+
+RUN addgroup -g 1001 -S proxy && adduser -u 1001 -S proxy -G proxy
+
+COPY --from=builder --chown=1001:1001 /workspace/packages/plugins/sandbox-providers/kubernetes/package.json ./package.json
+COPY --from=builder --chown=1001:1001 /workspace/packages/plugins/sandbox-providers/kubernetes/dist ./dist
+
+USER 1001:1001
+EXPOSE 8443
+
+ENTRYPOINT ["node", "--zero-fill-buffers", "dist/gateway-proxy-main.js"]
