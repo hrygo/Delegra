@@ -24,6 +24,11 @@ metadata:
     paperclip.io/managed-by: paperclip-k8s-plugin
 spec:
   replicas: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
   selector:
     matchLabels:
       app: delegra-gateway-proxy
@@ -31,9 +36,18 @@ spec:
     metadata:
       labels:
         app: delegra-gateway-proxy
+        paperclip.io/role: gateway-proxy
         paperclip.io/managed-by: paperclip-k8s-plugin
     spec:
       serviceAccountName: delegra-gateway-proxy
+      terminationGracePeriodSeconds: 180
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: delegra-gateway-proxy
       securityContext:
         runAsNonRoot: true
         runAsUser: 1001
@@ -45,10 +59,24 @@ spec:
         - name: proxy
           image: ghcr.io/hrygo/delegra-gateway-proxy:v0.2.0
           imagePullPolicy: IfNotPresent
+          args:
+            - "--zero-fill-buffers"
+            - "dist/gateway-proxy-main.js"
           ports:
             - name: https
               containerPort: 8443
               protocol: TCP
+          env:
+            - name: PORT
+              value: "8443"
+            - name: HOST
+              value: "0.0.0.0"
+            - name: PAPERCLIP_SERVER_URL
+              value: "http://paperclip-server.paperclip.svc:3100"
+            - name: GATEWAY_SSE_HEARTBEAT_MS
+              value: "15000"
+            - name: GATEWAY_RECONCILE_INTERVAL_MS
+              value: "30000"
           envFrom:
             - secretRef:
                 name: delegra-gateway-proxy-auth
@@ -64,6 +92,10 @@ spec:
             readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
+          lifecycle:
+            preStop:
+              exec:
+                command: ["/bin/sh", "-c", "sleep 10"]
           livenessProbe:
             httpGet:
               path: /healthz

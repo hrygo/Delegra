@@ -27,7 +27,7 @@
     "main": "./dist/index.js",
     "types": "./dist/index.d.ts"
   },
-  "files": ["dist", "manifests", "README.md"],
+  "files": ["dist", "manifests", "Dockerfile.gateway-proxy", "README.md"],
   "paperclipPlugin": {
     "manifest": "./dist/manifest.js",
     "worker": "./dist/worker.js"
@@ -44,6 +44,7 @@
     "clean": "rm -rf dist",
     "typecheck": "pnpm -C ../../../.. --filter @paperclipai/plugin-sdk ensure-build-deps && tsc --noEmit",
     "test": "vitest run --config vitest.config.ts",
+    "start:gateway-proxy": "node --zero-fill-buffers dist/gateway-proxy-main.js",
     "prepack": "rm -f package.dev.json && cp package.json package.dev.json && node ../../../../scripts/generate-plugin-package-json.mjs",
     "postpack": "if [ -f package.dev.json ]; then mv package.dev.json package.json; fi"
   },
