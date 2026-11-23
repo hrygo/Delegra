@@ -33,13 +33,29 @@ import {
   type ExpertResourceProfileName,
 } from "./sandbox-cr-builder.js";
 import { ensureTenant } from "./tenant-orchestrator.js";
-import { createPerRunSecret } from "./secret-manager.js";
+import { createAgentSessionSecret, createPerRunSecret } from "./secret-manager.js";
 import { FastUploadInterceptor } from "./upload-interceptor.js";
 import { jobOrchestrator, JobTimeoutError } from "./job-orchestrator.js";
 import {
+  createSandboxCrOrchestrator,
   sandboxCrOrchestrator,
   SandboxCrTimeoutError,
+  type SandboxCrApiVersion,
 } from "./sandbox-cr-orchestrator.js";
+import {
+  buildSandboxClaimManifest,
+  createSandboxClaim,
+  destroyClaimedSandbox,
+  waitForSandboxClaimReady,
+  WarmPoolMetricsTracker,
+} from "./sandbox-claim-orchestrator.js";
+import {
+  evaluateCapacityAdmission,
+  PriorityBackpressureQueue,
+  readTenantQuotaWatermark,
+  resolveSensitiveIsolationPolicy,
+  type DataClassificationLevel,
+} from "./capacity-admission.js";
 import { execInPod, execInPodStreaming, wrapCommandWithEnv } from "./pod-exec.js";
 import { performSyncIn, performSyncOut, type PodStreamExec } from "./file-sync.js";
 import { checkLeaseResumable, destroyLeaseResources } from "./lease-lifecycle.js";
@@ -116,6 +132,27 @@ function getOrCreateUploadInterceptor(leaseId: string): FastUploadInterceptor {
 // On worker restart this resets, which is fine: the first exec on each
 // lease then re-confirms readiness from scratch.
 const readySandboxesByLease = new Set<string>();
+const backpressureQueue = new PriorityBackpressureQueue();
+const warmPoolMetrics = new WarmPoolMetricsTracker();
+
+export class CapacityAdmissionDeniedError extends Error {
+  readonly reason: "quota_exhausted" | "pending_backoff";
+  readonly retryAfterMs: number;
+
+  constructor(reason: "quota_exhausted" | "pending_backoff", detail: string, retryAfterMs: number) {
+    super(`Kubernetes capacity admission denied (${reason}): ${detail}`);
+    this.name = "CapacityAdmissionDeniedError";
+    this.reason = reason;
+    this.retryAfterMs = retryAfterMs;
+  }
+}
+
+export function getKubernetesSchedulerMetrics() {
+  return {
+    backpressure: backpressureQueue.snapshot(),
+    warmPool: warmPoolMetrics.snapshot(),
+  };
+}
 
 // How long onEnvironmentResumeLease waits for an existing Sandbox pod to
 // report Ready before declaring the lease non-resumable. Deliberately short:
@@ -307,22 +344,20 @@ const plugin = definePlugin({
       platformDigest?: string | null;
       resourceProfile?: ExpertResourceProfileName | null;
       priorityClassName?: string | null;
+      dataClassification?: DataClassificationLevel;
+      kataFcAvailable?: boolean;
+      runGeneration?: number;
+      gatewayProxyUrl?: string | null;
+      proxySessionToken?: string | null;
+      warmPoolName?: string | null;
       executionWorkspaceSettings?: Record<string, unknown> | null;
     },
   ): Promise<PluginEnvironmentLease> {
     const config = kubernetesProviderConfigSchema.parse(params.config);
     const namespace = deriveTenantNamespace(config, params.companyId);
 
-    // The adapter for THIS run is the agent's adapter (params.adapterType) when
-    // supplied, so one environment can serve mixed harnesses; otherwise fall back
-    // to the environment's configured default adapter. getAdapterDefaults validates
-    // it is a registered adapter (throws otherwise), so a curated-out adapter fails
-    // the lease as before.
     const effectiveAdapterType = resolveRunAdapterType(params.adapterType, config.adapterType);
 
-    // Emit a runtime warning if FQDNs are configured but egressMode=standard
-    // cannot enforce them. Mirrors the validateConfig warning so operators see
-    // it in paperclip-server logs even if they missed the validation step.
     const adapterDefaultsForWarn = getAdapterDefaults(effectiveAdapterType, config.adapters);
     const totalFqdnsForWarn = [...adapterDefaultsForWarn.allowFqdns, ...config.egressAllowFqdns];
     if (config.egressMode === "standard" && totalFqdnsForWarn.length > 0) {
@@ -343,8 +378,6 @@ const plugin = definePlugin({
     });
     const clients = makeKubeClients(kc);
 
-    // Ensure the tenant namespace and all its RBAC / network policy resources
-    // exist before we try to create the Job.
     const adapterDefaults = getAdapterDefaults(effectiveAdapterType, config.adapters);
 
     await ensureTenant(clients, {
@@ -361,9 +394,6 @@ const plugin = definePlugin({
       egressAllowCidrs: config.egressAllowCidrs,
       resourceQuota: DEFAULT_RESOURCE_QUOTA,
     });
-
-    const jobName = `pc-${newRunUlidDns()}`;
-    const secretName = `${jobName}-env`;
 
     const resolvedImage = resolveImageDetailed(
       {
@@ -387,10 +417,45 @@ const plugin = definePlugin({
           limits: { ...sizing.limits, ...config.defaultResources?.limits },
         }
       : config.defaultResources ?? {};
-    const nodeSelector =
+
+    // Fail-closed C3/C4 regulated workload isolation (Kata-FC microVM).
+    const isolation = resolveSensitiveIsolationPolicy({
+      dataClassification: params.dataClassification,
+      configuredRuntimeClassName: config.runtimeClassName,
+      kataFcAvailable: params.kataFcAvailable,
+      requestsMemory: effectiveResources.requests?.memory ?? sizing.requests.memory,
+      limitsMemory: effectiveResources.limits?.memory ?? sizing.limits.memory,
+    });
+
+    // Pre-dispatch ResourceQuota watermark backpressure admission check.
+    if (typeof clients.core?.readNamespacedResourceQuota === "function") {
+      const quota = await readTenantQuotaWatermark(clients, namespace);
+      const admission = evaluateCapacityAdmission({
+        quota,
+        requested: {
+          requestsCpu: effectiveResources.requests?.cpu ?? sizing.requests.cpu,
+          requestsMemory: isolation.requestsMemory,
+          limitsCpu: effectiveResources.limits?.cpu ?? sizing.limits.cpu,
+          limitsMemory: isolation.limitsMemory,
+        },
+      });
+      if (!admission.admitted) {
+        backpressureQueue.recordAdmissionReject();
+        throw new CapacityAdmissionDeniedError(
+          admission.reason,
+          admission.detail,
+          admission.retryAfterMs,
+        );
+      }
+    }
+
+    const baseNodeSelector =
       config.nodeArch !== "any"
         ? { "kubernetes.io/arch": config.nodeArch }
         : undefined;
+    const nodeSelector = isolation.nodeSelector
+      ? { ...(baseNodeSelector ?? {}), ...isolation.nodeSelector }
+      : baseNodeSelector;
     const priorityClassName = params.priorityClassName ?? config.priorityClassName;
 
     const labels = paperclipLabels({
@@ -402,46 +467,120 @@ const plugin = definePlugin({
       nodeArch: config.nodeArch,
     });
 
-    // Pick the orchestrator and build the appropriate manifest based on backend.
     const isSandboxCrBackend = config.backend === "sandbox-cr";
-    const orchestrator = isSandboxCrBackend ? sandboxCrOrchestrator : jobOrchestrator;
+    const sandboxOrchestrator = createSandboxCrOrchestrator(config.sandboxApiVersion);
+    const orchestrator = isSandboxCrBackend ? sandboxOrchestrator : jobOrchestrator;
     const ownerApiVersion = isSandboxCrBackend ? config.sandboxApiVersion : "batch/v1";
+    const runGeneration = Number.isInteger(params.runGeneration) && (params.runGeneration as number) >= 1
+      ? (params.runGeneration as number)
+      : 1;
 
-    const manifest = isSandboxCrBackend
-      ? buildSandboxCrManifest({
-          apiVersion: config.sandboxApiVersion,
-          namespace,
-          sandboxName: jobName,
-          adapterType: effectiveAdapterType,
-          image: resolvedImage.image,
-          envSecretName: secretName,
-          serviceAccountName: TENANT_SERVICE_ACCOUNT,
-          labels,
-          resources: effectiveResources,
-          runtimeClassName: config.runtimeClassName,
-          imagePullSecrets: config.imagePullSecrets,
-          nodeSelector,
-          priorityClassName,
-          workspaceSizeLimit: useProfileSizing ? sizing.workspaceSizeLimit : undefined,
-          tmpSizeLimit: useProfileSizing ? sizing.tmpSizeLimit : undefined,
-          shmSizeLimit: useProfileSizing ? sizing.shmSizeLimit : undefined,
-        })
-      : buildJobManifest({
-          namespace,
-          jobName,
-          adapterType: effectiveAdapterType,
-          image: resolvedImage.image,
-          envSecretName: secretName,
-          serviceAccountName: TENANT_SERVICE_ACCOUNT,
-          labels,
-          resources: effectiveResources,
-          runtimeClassName: config.runtimeClassName,
-          activeDeadlineSec: config.podActivityDeadlineSec,
-          ttlSecondsAfterFinished: config.jobTtlSecondsAfterFinished,
-          imagePullSecrets: config.imagePullSecrets,
+    const warmPoolTarget = params.warmPoolName ?? config.warmPool?.templateName ?? null;
+    const useWarmPoolClaim =
+      isSandboxCrBackend &&
+      config.sandboxApiVersion === "agents.x-k8s.io/v1beta1" &&
+      config.warmPool?.enabled === true &&
+      Boolean(warmPoolTarget);
+
+    let jobName = `pc-${newRunUlidDns()}`;
+    let secretName = `${jobName}-env`;
+    let ownerUid = "";
+    let podName: string | null = null;
+    let sandboxClaimName: string | null = null;
+    let poolHit: boolean | undefined = undefined;
+    let ownerKind: string = isSandboxCrBackend ? "Sandbox" : "Job";
+    let effectiveOwnerApiVersion: string = ownerApiVersion;
+
+    if (useWarmPoolClaim && warmPoolTarget) {
+      sandboxClaimName = jobName;
+      const claimManifest = buildSandboxClaimManifest({
+        namespace,
+        claimName: sandboxClaimName,
+        warmPoolName: warmPoolTarget,
+        runId: params.runId,
+        companyId: params.companyId,
+        runGeneration,
+        ttlSeconds: config.warmPool?.defaultTtlSeconds,
+        extraLabels: labels,
+      });
+      const claimed = await createSandboxClaim(clients, namespace, claimManifest);
+      ownerUid = claimed.uid;
+      ownerKind = "SandboxClaim";
+      effectiveOwnerApiVersion = "extensions.agents.x-k8s.io/v1beta1";
+      try {
+        const ready = await waitForSandboxClaimReady(clients, namespace, sandboxClaimName, {
+          timeoutMs: config.warmPool?.claimTimeoutMs,
         });
+        warmPoolMetrics.recordClaim({ poolHit: ready.poolHit, claimDurationMs: ready.claimDurationMs });
+        jobName = ready.sandboxName;
+        podName = ready.podName;
+        poolHit = ready.poolHit;
+        secretName = `${jobName}-env`;
+        readySandboxesByLease.add(jobName);
+      } catch (err) {
+        await destroyClaimedSandbox(clients, {
+          namespace,
+          claimName: sandboxClaimName,
+          sandboxApiVersion: config.sandboxApiVersion,
+        });
+        throw err;
+      }
+    } else {
+      const manifest = isSandboxCrBackend
+        ? buildSandboxCrManifest({
+            apiVersion: config.sandboxApiVersion,
+            namespace,
+            sandboxName: jobName,
+            adapterType: effectiveAdapterType,
+            image: resolvedImage.image,
+            envSecretName: secretName,
+            serviceAccountName: TENANT_SERVICE_ACCOUNT,
+            labels,
+            resources: {
+              requests: { ...(effectiveResources.requests ?? {}), memory: isolation.requestsMemory },
+              limits: { ...(effectiveResources.limits ?? {}), memory: isolation.limitsMemory },
+            },
+            runtimeClassName: isolation.runtimeClassName,
+            imagePullSecrets: config.imagePullSecrets,
+            nodeSelector,
+            tolerations: isolation.tolerations,
+            podAnnotations: isolation.podAnnotations,
+            priorityClassName,
+            workspaceSizeLimit: useProfileSizing ? sizing.workspaceSizeLimit : undefined,
+            tmpSizeLimit: useProfileSizing ? sizing.tmpSizeLimit : undefined,
+            shmSizeLimit: useProfileSizing ? sizing.shmSizeLimit : undefined,
+          })
+        : buildJobManifest({
+            namespace,
+            jobName,
+            adapterType: effectiveAdapterType,
+            image: resolvedImage.image,
+            envSecretName: secretName,
+            serviceAccountName: TENANT_SERVICE_ACCOUNT,
+            labels,
+            resources: effectiveResources,
+            runtimeClassName: isolation.runtimeClassName,
+            activeDeadlineSec: config.podActivityDeadlineSec,
+            ttlSecondsAfterFinished: config.jobTtlSecondsAfterFinished,
+            imagePullSecrets: config.imagePullSecrets,
+          });
 
-    const { uid: ownerUid } = await orchestrator.claim(clients, namespace, manifest);
+      const claimed = await orchestrator.claim(clients, namespace, manifest);
+      ownerUid = claimed.uid;
+    }
+
+    const releaseOnError = () =>
+      sandboxClaimName
+        ? destroyClaimedSandbox(clients, {
+            namespace,
+            claimName: sandboxClaimName,
+            sandboxName: jobName,
+            podName,
+            secretName,
+            sandboxApiVersion: config.sandboxApiVersion,
+          })
+        : orchestrator.release(clients, namespace, jobName);
+
     const scopedNetworkEgress = parseScopedNetworkEgressGrant(params.executionWorkspaceSettings);
     const scopedNetworkPolicyName = await createScopedNetworkEgressPolicyOrReleaseWorkload(
       {
@@ -451,45 +590,59 @@ const plugin = definePlugin({
         runId: params.runId,
         workloadName: jobName,
         ownerReference: {
-          apiVersion: ownerApiVersion,
-          kind: isSandboxCrBackend ? "Sandbox" : "Job",
-          name: jobName,
+          apiVersion: effectiveOwnerApiVersion,
+          kind: ownerKind,
+          name: sandboxClaimName ?? jobName,
           uid: ownerUid,
           controller: false,
           blockOwnerDeletion: false,
         },
         grant: scopedNetworkEgress,
       },
-      () => orchestrator.release(clients, namespace, jobName),
+      releaseOnError,
     );
 
-    // defaultEnv (non-secret base, e.g. the inference base URL) is layered first;
-    // the process-env secrets named by envKeys override it.
     const adapterEnv = buildAdapterEnv(adapterDefaults);
     adapterEnv.PAPERCLIP_NETWORK_EGRESS_POLICY = "kubernetes-default-deny";
     adapterEnv.PAPERCLIP_NETWORK_EGRESS_GRANT_PATH = NETWORK_EGRESS_GRANT_PATH;
     adapterEnv.PAPERCLIP_NETWORK_EGRESS_ALLOW_FQDNS = scopedNetworkEgress.allowFqdns.join(",");
     adapterEnv.PAPERCLIP_NETWORK_EGRESS_ALLOW_CIDRS = scopedNetworkEgress.allowCidrs.join(",");
     const bootstrapToken = generateBootstrapToken();
+    const gatewayProxyUrl = params.gatewayProxyUrl ?? config.gatewayProxyUrl ?? null;
 
-    // Secret ownerRef: for job backend, the Job owns the Secret (cascade delete).
-    // For sandbox-cr backend, the Sandbox CR owns the Secret.
-    // NOTE: For sandbox-cr, if the Secret outlives the Sandbox due to a cluster
-    // quirk, the release() call will still clean it up via namespace GC or
-    // explicit delete in a future iteration.
-    await createPerRunSecret(clients, {
-      namespace,
-      secretName,
-      runId: params.runId,
-      ownerKind: isSandboxCrBackend ? "Sandbox" : "Job",
-      ownerApiVersion,
-      ownerName: jobName,
-      ownerUid,
-      bootstrapToken,
-      adapterEnv,
-    });
+    if (gatewayProxyUrl) {
+      // Zero-user-credential expert session Secret: enforces assertNoUserCredentialsInEnv.
+      await createAgentSessionSecret(clients, {
+        namespace,
+        secretName,
+        runId: params.runId,
+        runGeneration,
+        ownerKind,
+        ownerApiVersion: effectiveOwnerApiVersion,
+        ownerName: sandboxClaimName ?? jobName,
+        ownerUid,
+        bootstrapToken,
+        gatewayProxyUrl,
+        ...(params.proxySessionToken ? { proxySessionToken: params.proxySessionToken } : {}),
+        runtimeEnv: adapterEnv,
+      });
+    } else {
+      await createPerRunSecret(clients, {
+        namespace,
+        secretName,
+        runId: params.runId,
+        ownerKind,
+        ownerApiVersion: effectiveOwnerApiVersion,
+        ownerName: sandboxClaimName ?? jobName,
+        ownerUid,
+        bootstrapToken,
+        adapterEnv,
+      });
+    }
 
-    const podName = await orchestrator.findPod(clients, namespace, jobName);
+    if (!podName) {
+      podName = await orchestrator.findPod(clients, namespace, jobName);
+    }
     let podSnapshot: Record<string, unknown> | null = null;
     if (podName && typeof clients.core?.readNamespacedPod === "function") {
       try {
@@ -512,7 +665,7 @@ const plugin = definePlugin({
       jobName,
       podName,
       secretName,
-      phase: "Pending",
+      phase: sandboxClaimName ? "Running" : "Pending",
       backend: config.backend,
       scopedNetworkPolicyName,
       scopedNetworkEgress,
@@ -522,10 +675,11 @@ const plugin = definePlugin({
       resourceProfile: sizing.profile,
       nodeArch: config.nodeArch,
       priorityClassName: priorityClassName ?? null,
+      sandboxClaimName,
+      poolHit,
+      sandboxApiVersion: isSandboxCrBackend ? config.sandboxApiVersion : undefined,
+      zeroTrustGateway: Boolean(gatewayProxyUrl),
       runtimeEvidence,
-      // Native file sync streams over a pod exec; only the sandbox-cr backend
-      // exposes one. Flag the job backend so the server keeps the base64 fallback
-      // rather than routing its sync to a hook that would reject immediately.
       nativeFileSyncUnsupported: config.backend !== "sandbox-cr",
     };
 
@@ -656,19 +810,48 @@ const plugin = definePlugin({
       typeof params.leaseMetadata?.backend === "string"
         ? (params.leaseMetadata.backend as "sandbox-cr" | "job")
         : config.backend;
+    const leaseApiVersion =
+      typeof params.leaseMetadata?.sandboxApiVersion === "string"
+        ? (params.leaseMetadata.sandboxApiVersion as SandboxCrApiVersion)
+        : config.sandboxApiVersion;
+    const sandboxClaimName =
+      typeof params.leaseMetadata?.sandboxClaimName === "string" &&
+      params.leaseMetadata.sandboxClaimName.length > 0
+        ? params.leaseMetadata.sandboxClaimName
+        : null;
     const releaseOrchestrator =
-      leaseBackend === "sandbox-cr" ? sandboxCrOrchestrator : jobOrchestrator;
+      leaseBackend === "sandbox-cr"
+        ? createSandboxCrOrchestrator(leaseApiVersion)
+        : jobOrchestrator;
 
-    // Drop the FastUploadInterceptor associated with THIS lease (only).
-    // Each lease has its own interceptor instance via uploadInterceptorsByLease,
-    // so unrelated concurrent leases keep their in-flight buffers intact.
     uploadInterceptorsByLease.delete(params.providerLeaseId);
     readySandboxesByLease.delete(params.providerLeaseId);
+
+    if (sandboxClaimName) {
+      // Claimed warm-pool sandboxes are strictly one-way and must be destroyed.
+      const secretName =
+        typeof params.leaseMetadata?.secretName === "string"
+          ? params.leaseMetadata.secretName
+          : `${params.providerLeaseId}-env`;
+      const podName =
+        typeof params.leaseMetadata?.podName === "string" &&
+        params.leaseMetadata.podName.length > 0
+          ? params.leaseMetadata.podName
+          : null;
+      await destroyClaimedSandbox(clients, {
+        namespace,
+        claimName: sandboxClaimName,
+        sandboxName: params.providerLeaseId,
+        podName,
+        secretName,
+        sandboxApiVersion: leaseApiVersion,
+      });
+      return;
+    }
 
     try {
       await releaseOrchestrator.release(clients, namespace, params.providerLeaseId);
     } catch (err) {
-      // If the resource is already gone (404), that's fine.
       const code = (err as { code?: number; statusCode?: number }).code
         ?? (err as { code?: number; statusCode?: number }).statusCode;
       if (code !== 404) throw err;
@@ -688,6 +871,15 @@ const plugin = definePlugin({
       typeof params.leaseMetadata?.backend === "string"
         ? (params.leaseMetadata.backend as "sandbox-cr" | "job")
         : config.backend;
+    const leaseApiVersion =
+      typeof params.leaseMetadata?.sandboxApiVersion === "string"
+        ? (params.leaseMetadata.sandboxApiVersion as SandboxCrApiVersion)
+        : config.sandboxApiVersion;
+    const sandboxClaimName =
+      typeof params.leaseMetadata?.sandboxClaimName === "string" &&
+      params.leaseMetadata.sandboxClaimName.length > 0
+        ? params.leaseMetadata.sandboxClaimName
+        : null;
     const secretName =
       typeof params.leaseMetadata?.secretName === "string"
         ? params.leaseMetadata.secretName
@@ -698,8 +890,6 @@ const plugin = definePlugin({
         ? params.leaseMetadata.podName
         : null;
 
-    // Clear per-lease in-memory state up front, regardless of what the
-    // cluster says — the lease is dead either way.
     uploadInterceptorsByLease.delete(params.providerLeaseId);
     readySandboxesByLease.delete(params.providerLeaseId);
 
@@ -709,8 +899,18 @@ const plugin = definePlugin({
     });
     const clients = makeKubeClients(kc);
 
-    // Forcibly delete everything acquireLease created (Sandbox CR / Job, pod,
-    // per-run Secret). 404s are success — destroy must be idempotent.
+    if (sandboxClaimName) {
+      await destroyClaimedSandbox(clients, {
+        namespace,
+        claimName: sandboxClaimName,
+        sandboxName: params.providerLeaseId,
+        podName,
+        secretName,
+        sandboxApiVersion: leaseApiVersion,
+      });
+      return;
+    }
+
     await destroyLeaseResources(clients, {
       namespace,
       name: params.providerLeaseId,

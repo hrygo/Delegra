@@ -44,17 +44,12 @@ export const kubernetesProviderConfigSchema = z
         sameSessionIdleTtlSeconds: z.number().int().min(60).max(600).default(240),
       })
       .optional(),
+    gatewayProxyUrl: z.string().url().optional(),
     serviceAccountAnnotations: z.record(z.string(), z.string()).default({}),
 
     jobTtlSecondsAfterFinished: z.number().int().nonnegative().default(900),
     podActivityDeadlineSec: z.number().int().positive().default(3600),
 
-    /**
-     * The adapter type that Jobs in this environment will run.
-     * Each Kubernetes environment is bound to one adapter; create multiple
-     * environments for different adapters.
-     * Defaults to `"claude_local"`.
-     */
     adapterType: z
       .string()
       .default("claude_local")
@@ -62,26 +57,8 @@ export const kubernetesProviderConfigSchema = z
         message: "adapterType must be one of the known adapter types",
       }),
 
-    /**
-     * Optional declarative adapter registry. When present it is authoritative
-     * for runtime image / envKeys / allowFqdns / probe / defaultEnv resolution
-     * (replace semantics). Absent = built-in defaults.
-     */
     adapters: adapterRegistrySchema.optional(),
 
-    /**
-     * The sandbox backend to use.
-     *
-     * - `"sandbox-cr"` (default, alpha/beta) — uses the kubernetes-sigs/agent-sandbox
-     *   Sandbox CRD (agents.x-k8s.io/v1alpha1 or v1beta1). Creates a long-lived
-     *   pod that paperclip-server can exec into for multi-command adapter-install
-     *   workflows. Requires the agent-sandbox controller to be installed in the
-     *   cluster.
-     *
-     * - `"job"` — uses batch/v1 Job (stable fallback). One-shot entrypoint; does
-     *   NOT support multi-command exec. Use this for clusters without agent-sandbox
-     *   installed, or when you need stable (non-alpha) k8s APIs.
-     */
     backend: z.enum(["sandbox-cr", "job"]).default("sandbox-cr"),
   })
   .refine(
@@ -112,12 +89,10 @@ export interface KubernetesRuntimeEvidence {
 
 export interface KubernetesLeaseMetadata {
   namespace: string;
-  /** Name of the workload resource (Job name for job backend, Sandbox CR name for sandbox-cr backend). */
   jobName: string;
   podName: string | null;
   secretName: string;
   phase: "Pending" | "Running" | "Succeeded" | "Failed";
-  /** Which backend provisioned this lease. */
   backend: "sandbox-cr" | "job";
   scopedNetworkPolicyName: string | null;
   scopedNetworkEgress: {
@@ -132,15 +107,8 @@ export interface KubernetesLeaseMetadata {
   priorityClassName?: string | null;
   sandboxClaimName?: string | null;
   poolHit?: boolean;
+  sandboxApiVersion?: "agents.x-k8s.io/v1alpha1" | "agents.x-k8s.io/v1beta1";
+  zeroTrustGateway?: boolean;
   runtimeEvidence?: KubernetesRuntimeEvidence;
-  /**
-   * True when this lease's backend has NO data channel for the native file-sync
-   * transport. Native sync streams over a pod exec, which only the `sandbox-cr`
-   * backend exposes; the `job` backend carries no exec path, so its sync hook
-   * rejects immediately. The server's per-lease sync-capability gate honors this
-   * opt-out so a job lease keeps the byte-identical base64 fallback instead of
-   * being routed to a native hook that would only error. Absent/false ⇒ native
-   * sync may be used when the worker advertises the verbs.
-   */
   nativeFileSyncUnsupported?: boolean;
 }

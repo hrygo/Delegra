@@ -117,6 +117,8 @@ export interface BuildSandboxCrManifestInput {
   runtimeClassName?: string;
   imagePullSecrets?: string[];
   nodeSelector?: Record<string, string>;
+  tolerations?: Array<Record<string, unknown>>;
+  podAnnotations?: Record<string, string>;
   priorityClassName?: string;
   workspaceSizeLimit?: string;
   tmpSizeLimit?: string;
@@ -161,6 +163,9 @@ export function buildSandboxCrManifest(
       podTemplate: {
         metadata: {
           labels: podLabels,
+          ...(input.podAnnotations && Object.keys(input.podAnnotations).length > 0
+            ? { annotations: { ...input.podAnnotations } }
+            : {}),
         },
         spec: {
           serviceAccountName: input.serviceAccountName,
@@ -173,6 +178,9 @@ export function buildSandboxCrManifest(
           restartPolicy: "Always",
           ...(input.nodeSelector && Object.keys(input.nodeSelector).length > 0
             ? { nodeSelector: { ...input.nodeSelector } }
+            : {}),
+          ...(input.tolerations && input.tolerations.length > 0
+            ? { tolerations: input.tolerations.map((t) => ({ ...t })) }
             : {}),
           ...(input.priorityClassName
             ? { priorityClassName: input.priorityClassName }
