@@ -9,6 +9,11 @@ import {
   createExpertGatewayAuthorizationService,
   type ExpertGatewayAuthorizationService,
 } from "./services/native-runtime/expert-gateway-authorization.js";
+import { employeeExpertsRoutes } from "./routes/employee-experts.js";
+import {
+  createEmployeeExpertsService,
+  type EmployeeExpertsService,
+} from "./services/employee-experts.js";
 import { connectionEventWakeRoutes } from "./routes/connection-event-wake.js";
 import { registerGitHubReviewProjectionWork } from "./services/chat-channels/github/review-projection-work.js";
 import { finishServiceShutdown } from "./shutdown.js";
@@ -487,6 +492,8 @@ export async function createApp(
     bundledPluginCatalogRoot?: string;
     /** Optional override for the control-plane expert gateway authorization service. */
     expertGatewayAuthz?: ExpertGatewayAuthorizationService;
+    /** Optional override for the restricted employee experts API service (CORP-DSH-EXPERT-001). */
+    employeeExperts?: EmployeeExpertsService;
   },
 ) {
   const app = express();
@@ -587,6 +594,13 @@ export async function createApp(
     opts.expertGatewayAuthz ?? createExpertGatewayAuthorizationService();
   app.locals.expertGatewayAuthz = expertGatewayAuthz;
   app.use(expertGatewayAuthzRoutes({ service: expertGatewayAuthz }));
+  // Restricted employee experts API (CORP-DSH-EXPERT-001) authenticates via
+  // RFC 8693 exchanged employee bearer tokens rather than user cookies or
+  // agent API keys, so mount before actorMiddleware (fail-closed when unset).
+  const employeeExperts =
+    opts.employeeExperts ?? createEmployeeExpertsService();
+  app.locals.employeeExperts = employeeExperts;
+  app.use(employeeExpertsRoutes({ service: employeeExperts }));
   const hostServicesDisposers = new Map<string, () => void>();
   let lifecyclePluginsReady = false;
   const agentLifecycle = startAgentLifecycle(db, createLifecycleDriver(db, workerManager), () => lifecyclePluginsReady && !isWarmStandby() && !isIdleTaskDrainActive());
