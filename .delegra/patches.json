@@ -804,6 +804,19 @@
       "verifiedAt": "2026-11-23",
       "retireWhen": "An accepted upstream release wires expert gateway internal authz routes in server/src/app.ts and v1beta1 warmPool, zero-trust lease token delivery, and capacity admission in plugin-sandbox-kubernetes.",
       "notes": "Wires the previously merged Kubernetes intelligent scheduling modules (#77-#84) into production entrypoints: mounts expertGatewayAuthzRoutes before actorMiddleware in server/src/app.ts, and integrates v1beta1 SandboxCrOrchestrator, declarative SandboxClaim/SandboxWarmPool one-way lifecycle, zero-trust createAgentSessionSecret + atomic stdin lease token delivery, and pre-dispatch capacity admission + C3/C4 kata-fc isolation into packages/plugins/sandbox-providers/kubernetes/src/plugin.ts."
+    },
+    {
+      "id": "delegra-k8s-e2e-acceptance",
+      "kind": "fork-only",
+      "status": "active",
+      "commits": [
+        "a782e7b09c75501d047d67e6c459a0110ef784de"
+      ],
+      "owner": "hrygo",
+      "reviewBy": "2026-12-23",
+      "verifiedAt": "2026-11-23",
+      "retireWhen": "Live Kubernetes cluster E2E acceptance is automated in CI or superseded by an upstream smoke harness.",
+      "notes": "Adds the real-cluster Kubernetes intelligent scheduling E2E acceptance checklist (E2E-CLUSTER-ACCEPTANCE.md) and read-safe-by-default verification script (scripts/verify-k8s-scheduling-e2e.sh) covering CRDs, zero-trust gateway authz, v1beta1 warm-pool one-way claims, ResourceQuota backpressure, and C3/C4 kata-fc isolation."
     }
   ]
 }
