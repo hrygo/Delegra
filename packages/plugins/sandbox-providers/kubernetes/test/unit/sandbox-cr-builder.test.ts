@@ -56,6 +56,18 @@ describe("buildSandboxCrManifest", () => {
     expect(cr.spec.podTemplate.spec.restartPolicy).toBe("Always");
   });
 
+  it("injects dnsConfig ndots=2 by default for Cilium nameError + musl compatibility", () => {
+    const cr = buildSandboxCrManifest(baseInput);
+    expect(cr.spec.podTemplate.spec.dnsConfig).toEqual({
+      options: [{ name: "ndots", value: "2" }],
+    });
+
+    const custom = buildSandboxCrManifest({ ...baseInput, dnsNdots: 1 });
+    expect(custom.spec.podTemplate.spec.dnsConfig).toEqual({
+      options: [{ name: "ndots", value: "1" }],
+    });
+  });
+
   it("uses sleep-infinity entrypoint via Tini for multi-command exec", () => {
     const cr = buildSandboxCrManifest(baseInput);
     const container = cr.spec.podTemplate.spec.containers[0];

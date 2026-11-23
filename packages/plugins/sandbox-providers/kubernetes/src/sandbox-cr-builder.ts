@@ -18,6 +18,8 @@
 
 export type ExpertResourceProfileName = "light" | "build" | "browser" | "office" | "load";
 
+export const DEFAULT_SANDBOX_DNS_NDOTS = 2;
+
 export interface ResolvedPodSizing {
   profile: ExpertResourceProfileName;
   requests: { cpu: string; memory: string };
@@ -128,6 +130,8 @@ export interface BuildSandboxCrManifestInput {
   workspaceSizeLimit?: string;
   tmpSizeLimit?: string;
   shmSizeLimit?: string;
+  /** Pod `dnsConfig.options` ndots value (defaults to 2 for Cilium nameError + musl compatibility). */
+  dnsNdots?: number;
 }
 
 export function buildSandboxCrManifest(
@@ -153,6 +157,7 @@ export function buildSandboxCrManifest(
     volumeMounts.push({ name: "dshm", mountPath: "/dev/shm" });
     volumes.push({ name: "dshm", emptyDir: { medium: "Memory", sizeLimit: input.shmSizeLimit } });
   }
+  const ndots = input.dnsNdots ?? DEFAULT_SANDBOX_DNS_NDOTS;
 
   return {
     apiVersion: input.apiVersion ?? "agents.x-k8s.io/v1alpha1",
@@ -181,6 +186,9 @@ export function buildSandboxCrManifest(
           // Sandbox controller requires restartPolicy: Always so the pod
           // stays running between exec calls.
           restartPolicy: "Always",
+          dnsConfig: {
+            options: [{ name: "ndots", value: String(ndots) }],
+          },
           ...(input.nodeSelector && Object.keys(input.nodeSelector).length > 0
             ? { nodeSelector: { ...input.nodeSelector } }
             : {}),
