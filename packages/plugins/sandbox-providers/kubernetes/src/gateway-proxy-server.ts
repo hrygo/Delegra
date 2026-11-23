@@ -48,8 +48,24 @@ export interface ReconcileActiveLeasesOptions {
   knownLeases: Map<string, number>;
 }
 
+export interface GatewayRevocationMessage {
+  runId?: string;
+  runGeneration?: number;
+}
+
+/**
+ * Pluggable real-time revocation subscriber (e.g. Redis Pub/Sub channel
+ * `delegra:gateway:revocations`) for `<100ms` in-flight stream termination.
+ */
+export interface GatewayRevocationSubscriber {
+  subscribe(
+    onRevoke: (event: GatewayRevocationMessage) => void,
+  ): Promise<() => Promise<void> | void> | (() => Promise<void> | void);
+}
+
 export interface StartGatewayProxyServerDeps {
   fetchImpl?: typeof fetch;
+  revocationSubscriber?: GatewayRevocationSubscriber;
   onAccessLog?: (entry: ProxyAccessLogEntry) => void;
   onError?: (message: string) => void;
 }
@@ -296,8 +312,8 @@ export async function reconcileActiveLeasesOnce(
 
 /**
  * Starts the runnable cluster-level `delegra-gateway-proxy` HTTP server wired
- * to `paperclip-server` per-request authorization and periodic lease
- * reconciliation.
+ * to `paperclip-server` per-request authorization, real-time push/PubSub
+ * revocation, and periodic lease reconciliation.
  */
 export async function startDelegraGatewayProxyServer(
   config: GatewayProxyServerConfig,
@@ -313,6 +329,7 @@ export async function startDelegraGatewayProxyServer(
 
   const handle = createDelegraGatewayProxy({
     upstreamGatewayUrl: config.upstreamGatewayUrl,
+    internalAuthToken: config.internalToken,
     maxBodyBytes: config.maxBodyBytes,
     sseHeartbeatIntervalMs: config.sseHeartbeatIntervalMs,
     fetchImpl: deps.fetchImpl,
@@ -332,6 +349,15 @@ export async function startDelegraGatewayProxyServer(
       return result;
     },
   });
+
+  let unsubscribeRevocations: (() => Promise<void> | void) | null = null;
+  if (deps.revocationSubscriber) {
+    unsubscribeRevocations = await deps.revocationSubscriber.subscribe((event) => {
+      const runId = event.runId?.trim();
+      if (!runId) return;
+      handle.revokeRun(runId, event.runGeneration);
+    });
+  }
 
   const bound = await handle.listen(config.port, config.host);
 
@@ -371,6 +397,10 @@ export async function startDelegraGatewayProxyServer(
       if (reconcileTimer) {
         clearInterval(reconcileTimer);
         reconcileTimer = null;
+      }
+      if (unsubscribeRevocations) {
+        await unsubscribeRevocations();
+        unsubscribeRevocations = null;
       }
       await handle.close();
     },

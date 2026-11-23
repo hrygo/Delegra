@@ -759,13 +759,14 @@
       "status": "active",
       "commits": [
         "fd1b6c575c21aee8b305d846abf790eb1ac728bb",
-        "aa1fc85eb954db44a7a56c7f7a7ecd1759ae0320"
+        "aa1fc85eb954db44a7a56c7f7a7ecd1759ae0320",
+        "c0a8f9a27e293c5587e1648284385312047bb439"
       ],
       "owner": "hrygo",
       "reviewBy": "2026-12-23",
       "verifiedAt": "2026-11-24",
       "retireWhen": "An accepted upstream release provides a cluster-level zero-trust AI gateway proxy, zero-credential agent/proxy secret splitting, expertZeroTrustMode env suppression, and atomic stdin lease token delivery.",
-      "notes": "Closes hrygo/Delegra#73 (PR-2/2, hrygo/Delegra#81). Implements the cluster-level delegra-gateway-proxy HTTP service (POST /v1/responses allowlist, 16 MiB body cap, per-request control-plane authz, local revocation + in-flight AbortController stream termination, SSE keep-alive, in-place credential scrubbing, zero-credential access logs), zero-credential Secret splitting in secret-manager.ts, expertZeroTrustMode in adapter-defaults.ts, atomic stdin lease token delivery in pod-exec.ts, PSS restricted HA K8s manifests, standalone runnable server/CLI entrypoint (gateway-proxy-server.ts / gateway-proxy-main.ts), multi-stage Dockerfile.gateway-proxy, zero-downtime rollout manifest hardening, and unit tests."
+      "notes": "Closes hrygo/Delegra#73 (PR-2/2, hrygo/Delegra#81). Implements the cluster-level delegra-gateway-proxy HTTP service (POST /v1/responses allowlist, 16 MiB body cap, per-request control-plane authz, local revocation + in-flight AbortController stream termination, SSE keep-alive, in-place credential scrubbing, zero-credential access logs), zero-credential Secret splitting in secret-manager.ts, expertZeroTrustMode in adapter-defaults.ts, atomic stdin lease token delivery in pod-exec.ts, PSS restricted HA K8s manifests, standalone runnable server/CLI entrypoint (gateway-proxy-server.ts / gateway-proxy-main.ts), multi-stage Dockerfile.gateway-proxy, zero-downtime rollout manifest hardening, zero-timeout node:http/https upstream transport, zero-body SSE audit/STREAM_TRUNCATED_EOF detection, backpressure-aware streaming, authenticated POST /internal/revocations push revocation + pluggable GatewayRevocationSubscriber, and unit tests."
     },
     {
       "id": "delegra-k8s-v1beta1-warmpool",
