@@ -1,6 +1,6 @@
 /**
  * SandboxOrchestrator implementation backed by the kubernetes-sigs/agent-sandbox
- * Sandbox CRD (agents.x-k8s.io/v1alpha1).
+ * Sandbox CRD (`agents.x-k8s.io/v1alpha1` or `agents.x-k8s.io/v1beta1`).
  *
  * The Sandbox CR creates a long-lived pod that paperclip-server can exec into
  * for multi-command adapter-install workflows — the key architectural win over
@@ -25,8 +25,21 @@ import type { KubeClients } from "./kube-client.js";
 import type { SandboxOrchestrator, SandboxStatus } from "./sandbox-orchestrator.js";
 
 const SANDBOX_GROUP = "agents.x-k8s.io";
-const SANDBOX_VERSION = "v1alpha1";
+const DEFAULT_SANDBOX_VERSION = "v1alpha1";
 const SANDBOX_PLURAL = "sandboxes";
+
+export type SandboxCrApiVersion =
+  | "agents.x-k8s.io/v1alpha1"
+  | "agents.x-k8s.io/v1beta1";
+
+export function extractSandboxVersion(
+  apiVersion?: SandboxCrApiVersion | string,
+): "v1alpha1" | "v1beta1" {
+  if (apiVersion === "agents.x-k8s.io/v1beta1" || apiVersion === "v1beta1") {
+    return "v1beta1";
+  }
+  return DEFAULT_SANDBOX_VERSION;
+}
 
 export class SandboxCrTimeoutError extends Error {
   constructor(namespace: string, name: string, timeoutMs: number) {
@@ -98,10 +111,14 @@ export async function createSandboxCr(
   clients: KubeClients,
   namespace: string,
   manifest: Record<string, unknown>,
+  apiVersion?: SandboxCrApiVersion,
 ): Promise<{ uid: string }> {
+  const version = extractSandboxVersion(
+    apiVersion ?? (typeof manifest.apiVersion === "string" ? manifest.apiVersion : undefined),
+  );
   const result = await clients.custom.createNamespacedCustomObject({
     group: SANDBOX_GROUP,
-    version: SANDBOX_VERSION,
+    version,
     namespace,
     plural: SANDBOX_PLURAL,
     body: manifest,
@@ -115,10 +132,12 @@ export async function getSandboxCrStatus(
   clients: KubeClients,
   namespace: string,
   name: string,
+  apiVersion?: SandboxCrApiVersion,
 ): Promise<SandboxStatus> {
+  const version = extractSandboxVersion(apiVersion);
   const result = await clients.custom.getNamespacedCustomObject({
     group: SANDBOX_GROUP,
-    version: SANDBOX_VERSION,
+    version,
     namespace,
     plural: SANDBOX_PLURAL,
     name,
@@ -136,11 +155,13 @@ export async function findPodForSandbox(
   clients: KubeClients,
   namespace: string,
   name: string,
+  apiVersion?: SandboxCrApiVersion,
 ): Promise<string | null> {
+  const version = extractSandboxVersion(apiVersion);
   // Primary: read status.podName from the Sandbox CR
   const cr = await clients.custom.getNamespacedCustomObject({
     group: SANDBOX_GROUP,
-    version: SANDBOX_VERSION,
+    version,
     namespace,
     plural: SANDBOX_PLURAL,
     name,
@@ -152,13 +173,10 @@ export async function findPodForSandbox(
     return podName;
   }
 
-  // Secondary: the agent-sandbox controller (v0.4.x) names the backing pod
-  // EXACTLY after the Sandbox CR and labels it only with
+  // Secondary: the agent-sandbox controller (v0.4.x / v1.0.x) names the backing
+  // pod EXACTLY after the Sandbox CR and labels it only with
   // agents.x-k8s.io/sandbox-name-hash (a hash, not the full name), so the
-  // full-name label selector below matches nothing on that controller. An
-  // exact-name GET is collision-free (unlike name-prefix matching, which
-  // could hit a concurrent sandbox sharing a prefix) and resolves the pod on
-  // every controller version that keeps pod name == sandbox name.
+  // full-name label selector below matches nothing on that controller.
   try {
     const pod = (await clients.core.readNamespacedPod({ namespace, name })) as {
       metadata?: { name?: string };
@@ -174,9 +192,7 @@ export async function findPodForSandbox(
   }
 
   // Fallback: list pods by a full-name sandbox label, for controller versions
-  // that label pods with the sandbox name. A broader managed-by selector plus
-  // name-prefix narrowing could match a concurrent sandbox whose generated
-  // name shares a prefix, and exec would target the wrong lease's pod.
+  // that label pods with the sandbox name.
   const result = await clients.core.listNamespacedPod({
     namespace,
     labelSelector: `agents.x-k8s.io/sandbox-name=${name}`,
@@ -193,8 +209,6 @@ export async function findPodForSandbox(
       ).items
     ) ?? [];
 
-  // The label selector already scopes to exactly this sandbox's pod(s); keep a
-  // defensive re-check on the label value only (no name-prefix matching).
   const matching = items.filter(
     (p) => (p.metadata?.labels ?? {})["agents.x-k8s.io/sandbox-name"] === name,
   );
@@ -209,9 +223,6 @@ export async function streamSandboxLogs(
   podName: string,
   onChunk: (stream: "stdout" | "stderr", text: string) => Promise<void>,
 ): Promise<void> {
-  // V1 limitation: readNamespacedPodLog returns combined stdout. The
-  // sleep-infinity pod will have minimal output; this is provided for interface
-  // conformance. For actual command output, use execInPod() directly.
   const result = await clients.core.readNamespacedPodLog({
     namespace,
     name: podName,
@@ -224,10 +235,12 @@ export async function deleteSandboxCr(
   clients: KubeClients,
   namespace: string,
   name: string,
+  apiVersion?: SandboxCrApiVersion,
 ): Promise<void> {
+  const version = extractSandboxVersion(apiVersion);
   await clients.custom.deleteNamespacedCustomObject({
     group: SANDBOX_GROUP,
-    version: SANDBOX_VERSION,
+    version,
     namespace,
     plural: SANDBOX_PLURAL,
     name,
@@ -248,26 +261,39 @@ export async function waitForSandboxReady(
   clients: KubeClients,
   namespace: string,
   name: string,
-  opts: { timeoutMs: number; pollMs?: number } = {
+  opts: { timeoutMs: number; pollMs?: number; apiVersion?: SandboxCrApiVersion } = {
     timeoutMs: 120_000,
     pollMs: 2000,
   },
 ): Promise<SandboxStatus> {
   const deadline = Date.now() + opts.timeoutMs;
   const pollMs = opts.pollMs ?? 2000;
+  const version = extractSandboxVersion(opts.apiVersion);
 
   while (Date.now() < deadline) {
     const cr = await clients.custom.getNamespacedCustomObject({
       group: SANDBOX_GROUP,
-      version: SANDBOX_VERSION,
+      version,
       namespace,
       plural: SANDBOX_PLURAL,
       name,
     }) as Record<string, unknown>;
 
+    const metadata = (cr.metadata as Record<string, unknown>) ?? {};
     const status = (cr.status as Record<string, unknown>) ?? {};
-    // agent-sandbox v1alpha1 uses status.conditions[type=Ready,status=True],
-    // not status.phase. Fall back to phase for forward-compat.
+
+    // Guard against stale status when both generation and observedGeneration are reported.
+    if (
+      typeof metadata.generation === "number" &&
+      typeof status.observedGeneration === "number" &&
+      status.observedGeneration < metadata.generation
+    ) {
+      await sleep(pollMs);
+      continue;
+    }
+
+    // agent-sandbox v1alpha1/v1beta1 uses status.conditions[type=Ready,status=True],
+    // falling back to status.phase.
     const conditions = Array.isArray(status.conditions) ? status.conditions as Array<Record<string, unknown>> : [];
     const readyCondition = conditions.find((c) => c.type === "Ready");
     const failedCondition = conditions.find((c) => c.type === "Failed" || (c.type === "Ready" && c.status === "False" && typeof c.reason === "string" && /failed/i.test(c.reason)));
@@ -283,16 +309,10 @@ export async function waitForSandboxReady(
       );
     }
     if (phase === "Terminating") {
-      // A Sandbox being torn down will never transition to Ready. Polling
-      // until the deadline would burn the full timeoutMs (potentially
-      // 30+ minutes) before throwing a generic timeout. Fail fast instead
-      // so the caller can surface a clear "the lease is being released"
-      // error and decide whether to retry against a fresh Sandbox.
       throw new Error(
         `Sandbox ${namespace}/${name} is Terminating — cannot wait for Ready`,
       );
     }
-    // Pending — keep polling
     await sleep(pollMs);
   }
 
@@ -300,17 +320,28 @@ export async function waitForSandboxReady(
 }
 
 /**
- * Sandbox CR-backed conformance to SandboxOrchestrator.
- *
- * waitForCompletion semantics change: for this backend, "completion" means
- * "pod is up and Ready to exec into" — NOT "workload finished". The actual
- * command execution and its completion is handled by execInPod().
+ * Factory returning a SandboxOrchestrator bound to a specific Sandbox CRD
+ * apiVersion (`agents.x-k8s.io/v1alpha1` or `agents.x-k8s.io/v1beta1`).
  */
-export const sandboxCrOrchestrator: SandboxOrchestrator = {
-  claim: createSandboxCr,
-  getStatus: getSandboxCrStatus,
-  findPod: findPodForSandbox,
-  streamLogs: streamSandboxLogs,
-  release: deleteSandboxCr,
-  waitForCompletion: waitForSandboxReady,
-};
+export function createSandboxCrOrchestrator(
+  apiVersion: SandboxCrApiVersion = "agents.x-k8s.io/v1alpha1",
+): SandboxOrchestrator {
+  return {
+    claim: (clients, namespace, manifest) =>
+      createSandboxCr(clients, namespace, manifest, apiVersion),
+    getStatus: (clients, namespace, name) =>
+      getSandboxCrStatus(clients, namespace, name, apiVersion),
+    findPod: (clients, namespace, name) =>
+      findPodForSandbox(clients, namespace, name, apiVersion),
+    streamLogs: streamSandboxLogs,
+    release: (clients, namespace, name) =>
+      deleteSandboxCr(clients, namespace, name, apiVersion),
+    waitForCompletion: (clients, namespace, name, opts) =>
+      waitForSandboxReady(clients, namespace, name, { ...opts, apiVersion }),
+  };
+}
+
+/**
+ * Default Sandbox CR-backed conformance to SandboxOrchestrator (`v1alpha1`).
+ */
+export const sandboxCrOrchestrator: SandboxOrchestrator = createSandboxCrOrchestrator("agents.x-k8s.io/v1alpha1");

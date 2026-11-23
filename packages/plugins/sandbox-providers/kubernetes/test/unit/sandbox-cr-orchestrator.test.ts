@@ -1,7 +1,9 @@
 import { describe, it, expect, vi } from "vitest";
 import {
   createSandboxCr,
+  createSandboxCrOrchestrator,
   deleteSandboxCr,
+  extractSandboxVersion,
   getSandboxCrStatus,
   findPodForSandbox,
   SandboxCrTimeoutError,
@@ -41,6 +43,26 @@ describe("createSandboxCr", () => {
       body: manifest,
     });
     expect(result.uid).toBe("test-uid");
+  });
+
+  it("routes v1beta1 manifests to version=v1beta1", async () => {
+    const create = vi.fn().mockResolvedValue({ metadata: { uid: "beta-uid" } });
+    const clients = { custom: { createNamespacedCustomObject: create } };
+    const manifest = {
+      apiVersion: "agents.x-k8s.io/v1beta1",
+      kind: "Sandbox",
+      metadata: { name: "pc-beta", namespace: "paperclip-acme" },
+    };
+    const result = await createSandboxCr(clients as never, "paperclip-acme", manifest);
+    expect(create).toHaveBeenCalledWith({
+      group: SANDBOX_GROUP,
+      version: "v1beta1",
+      namespace: "paperclip-acme",
+      plural: SANDBOX_PLURAL,
+      body: manifest,
+    });
+    expect(result.uid).toBe("beta-uid");
+    expect(extractSandboxVersion("agents.x-k8s.io/v1beta1")).toBe("v1beta1");
   });
 
   it("throws if the API response has no UID", async () => {
@@ -105,18 +127,17 @@ describe("findPodForSandbox", () => {
     };
     const podName = await findPodForSandbox(clients as never, "ns", "pc-abc");
     expect(podName).toBe("pc-abc-pod-xyz");
-    // Primary path succeeded: neither the exact-name GET nor the label list runs.
     expect(clients.core.readNamespacedPod).not.toHaveBeenCalled();
     expect(clients.core.listNamespacedPod).not.toHaveBeenCalled();
   });
 
   it("resolves the pod by EXACT NAME when the controller names it after the sandbox (v0.4.x: pods carry only agents.x-k8s.io/sandbox-name-hash, never the full-name label)", async () => {
-    const get = vi.fn().mockResolvedValue(makeCr("Ready")); // no podName in status
+    const get = vi.fn().mockResolvedValue(makeCr("Ready"));
     const read = vi.fn().mockResolvedValue({
       metadata: { name: "pc-abc", labels: { "agents.x-k8s.io/sandbox-name-hash": "1a2b3c" } },
       status: { phase: "Running" },
     });
-    const list = vi.fn().mockResolvedValue({ items: [] }); // full-name label selector matches nothing on v0.4.x
+    const list = vi.fn().mockResolvedValue({ items: [] });
     const clients = {
       custom: { getNamespacedCustomObject: get },
       core: { readNamespacedPod: read, listNamespacedPod: list },
@@ -128,8 +149,8 @@ describe("findPodForSandbox", () => {
   });
 
   it("falls back to pod listing scoped by the unique sandbox-name label", async () => {
-    const get = vi.fn().mockResolvedValue(makeCr("Pending")); // no podName
-    const read = vi.fn().mockRejectedValue({ code: 404 }); // no exact-name pod
+    const get = vi.fn().mockResolvedValue(makeCr("Pending"));
+    const read = vi.fn().mockRejectedValue({ code: 404 });
     const list = vi.fn().mockResolvedValue({
       items: [
         {
@@ -154,7 +175,6 @@ describe("findPodForSandbox", () => {
     const list = vi.fn().mockResolvedValue({
       items: [
         {
-          // Same name prefix, different sandbox label: must NOT match.
           metadata: { name: "pc-abc-zzz", labels: { "agents.x-k8s.io/sandbox-name": "pc-abc-zzz" } },
           status: { phase: "Running" },
         },
@@ -222,8 +242,30 @@ describe("waitForSandboxReady", () => {
       "pc-abc",
       { timeoutMs: 5000, pollMs: 10 },
     );
-    expect(status.phase).toBe("Running"); // Ready maps to Running
+    expect(status.phase).toBe("Running");
     expect(get).toHaveBeenCalledTimes(1);
+  });
+
+  it("waits until observedGeneration catches up to metadata.generation", async () => {
+    const get = vi
+      .fn()
+      .mockResolvedValueOnce({
+        metadata: { generation: 2 },
+        status: { observedGeneration: 1, phase: "Ready" },
+      })
+      .mockResolvedValueOnce({
+        metadata: { generation: 2 },
+        status: { observedGeneration: 2, phase: "Ready" },
+      });
+    const clients = { custom: { getNamespacedCustomObject: get } };
+    const orch = createSandboxCrOrchestrator("agents.x-k8s.io/v1beta1");
+    const status = await orch.waitForCompletion(clients as never, "ns", "pc-beta", {
+      timeoutMs: 5000,
+      pollMs: 5,
+    });
+    expect(status.phase).toBe("Running");
+    expect(get).toHaveBeenCalledTimes(2);
+    expect(get).toHaveBeenCalledWith(expect.objectContaining({ version: "v1beta1" }));
   });
 
   it("polls until Ready", async () => {
