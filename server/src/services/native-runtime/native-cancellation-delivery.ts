@@ -5,6 +5,7 @@ import { DELIVERY_QUEUES, notifyDeliveryWork } from "../delivery-work-notificati
 import type { createDeliveryWorkCoordinator } from "../delivery-work-coordinator.js";
 import { activeNativeExecutionRunIds, subscribeActiveNativeExecutions } from "./native-active-runs.js";
 import { currentNativeControllerIdentity } from "./native-restart-recovery.js";
+import { revokeExpertGatewayRun } from "./expert-gateway-revocation-bridge.js";
 
 const object = (value: unknown): Record<string, unknown> => value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 export const notifyNativeCancellation = (tx: object) => notifyDeliveryWork(tx, DELIVERY_QUEUES.nativeCancellation);
@@ -78,6 +79,7 @@ export function registerNativeCancellationDelivery(db: Db, coordinator: ReturnTy
         if (!activeNativeExecutionRunIds.has(row.id)) continue;
         const intent = object(row.result?.nativeCancellation), startup = object(row.result?.startupCancellation);
         if (intent.schema !== "paperclip.native-cancellation.v1" || !["run", "issue", "turn"].includes(String(intent.scope))) continue;
+        void revokeExpertGatewayRun(row.id, "cancelled");
         const { cancelNativeSession } = await import("./native-session-executor.js");
         await cancelNativeSession(row.id, typeof intent.reason === "string" ? intent.reason : "Operator requested Stop", {
           db, scope: intent.scope as "run" | "issue" | "turn",
