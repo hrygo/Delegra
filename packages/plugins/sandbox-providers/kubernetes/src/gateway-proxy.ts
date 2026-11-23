@@ -1,9 +1,18 @@
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { randomUUID } from "node:crypto";
+import {
+  Agent as HttpAgent,
+  createServer,
+  request as httpRequest,
+  type IncomingMessage,
+  type Server,
+  type ServerResponse,
+} from "node:http";
+import { Agent as HttpsAgent, request as httpsRequest } from "node:https";
+import { randomUUID, timingSafeEqual } from "node:crypto";
 
 export const DEFAULT_GATEWAY_MAX_BODY_BYTES = 16 * 1024 * 1024; // 16 MiB
 export const DEFAULT_SSE_HEARTBEAT_INTERVAL_MS = 15_000;
 export const ALLOWED_PROXY_PATH = "/v1/responses";
+export const INTERNAL_REVOCATIONS_PATH = "/internal/revocations";
 
 export interface ProxyAuthorizeInput {
   runId: string;
@@ -29,6 +38,19 @@ export type ProxyAuthorizeResult =
       retryable: false;
     };
 
+export interface SseUsageMetrics {
+  inputTokens?: number;
+  outputTokens?: number;
+  totalTokens?: number;
+}
+
+export interface SseAuditSummary {
+  terminalEvent: string | null;
+  truncatedEof: boolean;
+  responseId?: string;
+  usage?: SseUsageMetrics;
+}
+
 export interface ProxyAccessLogEntry {
   clientRequestId: string;
   runId: string;
@@ -37,6 +59,7 @@ export interface ProxyAccessLogEntry {
   durationMs: number;
   outcome: "allowed" | "denied" | "aborted" | "error";
   code?: string;
+  sseSummary?: SseAuditSummary;
 }
 
 export interface CreateDelegraGatewayProxyOptions {
@@ -44,8 +67,16 @@ export interface CreateDelegraGatewayProxyOptions {
   upstreamGatewayUrl: string;
   /** Per-request control-plane authorization callback. */
   authorize: (input: ProxyAuthorizeInput) => Promise<ProxyAuthorizeResult>;
-  /** Optional custom fetch implementation (defaults to global `fetch`). */
+  /**
+   * Optional custom fetch implementation. Defaults to `createLongLivedUpstreamFetch()`,
+   * which disables Node/Undici's 300s default headers/body timeout for long reasoning streams.
+   */
   fetchImpl?: typeof fetch;
+  /**
+   * Optional shared internal token enabling `POST /internal/revocations` for
+   * `<100ms` push revocation from the control plane or a Redis Pub/Sub bridge.
+   */
+  internalAuthToken?: string;
   /** Maximum accepted request payload size in bytes (defaults to 16 MiB). */
   maxBodyBytes?: number;
   /** SSE keep-alive comment interval in ms (defaults to 15s; 0 disables). */
@@ -65,6 +96,275 @@ export interface DelegraGatewayProxyHandle {
   activeStreamCount(): number;
   listen(port: number, host?: string): Promise<{ port: number; host: string }>;
   close(): Promise<void>;
+}
+
+const LONG_LIVED_HTTP_AGENT = new HttpAgent({
+  keepAlive: true,
+  keepAliveMsecs: 60_000,
+});
+
+const LONG_LIVED_HTTPS_AGENT = new HttpsAgent({
+  keepAlive: true,
+  keepAliveMsecs: 60_000,
+});
+
+/**
+ * Creates a `fetch`-compatible upstream transport backed by `node:http` /
+ * `node:https` with `timeout: 0` (no 300s Undici headersTimeout/bodyTimeout
+ * truncation on long reasoning streams), native backpressure (`pause`/`resume`),
+ * and immediate `AbortSignal` socket teardown.
+ */
+export function createLongLivedUpstreamFetch(): typeof fetch {
+  return (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+    const rawUrl =
+      typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input.toString()
+          : input.url;
+    const url = new URL(rawUrl);
+    const isHttps = url.protocol === "https:";
+    const requestFn = isHttps ? httpsRequest : httpRequest;
+    const agent = isHttps ? LONG_LIVED_HTTPS_AGENT : LONG_LIVED_HTTP_AGENT;
+
+    return new Promise<Response>((resolve, reject) => {
+      const signal = init?.signal ?? undefined;
+      if (signal?.aborted) {
+        reject(new DOMException("The operation was aborted.", "AbortError"));
+        return;
+      }
+
+      const headers: Record<string, string> = {};
+      if (init?.headers) {
+        if (init.headers instanceof Headers) {
+          init.headers.forEach((value, key) => {
+            headers[key] = value;
+          });
+        } else if (Array.isArray(init.headers)) {
+          for (const [key, value] of init.headers) {
+            headers[key] = value;
+          }
+        } else {
+          for (const [key, value] of Object.entries(init.headers)) {
+            if (value !== undefined) headers[key] = String(value);
+          }
+        }
+      }
+
+      const req = requestFn(
+        url,
+        {
+          method: init?.method ?? "GET",
+          headers,
+          agent,
+          timeout: 0,
+        },
+        (upstreamRes) => {
+          const responseHeaders = new Headers();
+          for (const [key, val] of Object.entries(upstreamRes.headers)) {
+            if (val === undefined) continue;
+            if (Array.isArray(val)) {
+              for (const entry of val) responseHeaders.append(key, entry);
+            } else {
+              responseHeaders.set(key, val);
+            }
+          }
+
+          const stream = new ReadableStream<Uint8Array>({
+            start(controller) {
+              const onAbort = () => {
+                upstreamRes.destroy();
+                try {
+                  controller.error(new DOMException("The operation was aborted.", "AbortError"));
+                } catch {
+                  // Stream already closed or errored.
+                }
+              };
+              signal?.addEventListener("abort", onAbort, { once: true });
+
+              upstreamRes.on("data", (chunk: Buffer | string) => {
+                const bytes = Buffer.isBuffer(chunk) ? new Uint8Array(chunk) : Buffer.from(chunk);
+                try {
+                  controller.enqueue(bytes);
+                  if (controller.desiredSize !== null && controller.desiredSize <= 0) {
+                    upstreamRes.pause();
+                  }
+                } catch {
+                  upstreamRes.destroy();
+                }
+              });
+
+              upstreamRes.once("end", () => {
+                signal?.removeEventListener("abort", onAbort);
+                try {
+                  controller.close();
+                } catch {
+                  // Stream already closed.
+                }
+              });
+
+              upstreamRes.once("error", (err) => {
+                signal?.removeEventListener("abort", onAbort);
+                try {
+                  controller.error(err);
+                } catch {
+                  // Stream already closed.
+                }
+              });
+            },
+            pull() {
+              upstreamRes.resume();
+            },
+            cancel() {
+              upstreamRes.destroy();
+              req.destroy();
+            },
+          });
+
+          resolve(
+            new Response(stream, {
+              status: upstreamRes.statusCode ?? 502,
+              statusText: upstreamRes.statusMessage ?? "",
+              headers: responseHeaders,
+            }),
+          );
+        },
+      );
+
+      req.setTimeout(0);
+
+      const onAbortBeforeResponse = () => {
+        req.destroy(new DOMException("The operation was aborted.", "AbortError"));
+      };
+      signal?.addEventListener("abort", onAbortBeforeResponse, { once: true });
+
+      req.once("response", () => {
+        signal?.removeEventListener("abort", onAbortBeforeResponse);
+      });
+
+      req.once("error", (err) => {
+        signal?.removeEventListener("abort", onAbortBeforeResponse);
+        reject(err);
+      });
+
+      if (init?.body !== undefined && init.body !== null) {
+        if (typeof init.body === "string") {
+          req.end(Buffer.from(init.body, "utf8"));
+        } else if (init.body instanceof Uint8Array) {
+          req.end(Buffer.from(init.body.buffer, init.body.byteOffset, init.body.byteLength));
+        } else if (init.body instanceof ArrayBuffer) {
+          req.end(Buffer.from(init.body));
+        } else {
+          req.end(String(init.body));
+        }
+      } else {
+        req.end();
+      }
+    });
+  };
+}
+
+const SSE_TERMINAL_EVENT_TYPES = new Set([
+  "response.completed",
+  "response.incomplete",
+  "response.failed",
+]);
+
+/**
+ * Zero-body incremental SSE audit accumulator:
+ * - Never retains prompt, delta, or assistant content.
+ * - Extracts only terminal event name, responseId, and numeric token usage.
+ * - Flags `truncatedEof: true` when an HTTP 200 SSE stream closes without a
+ *   terminal event (`[DONE]` or `response.completed`/`incomplete`/`failed`).
+ */
+export function createSseAuditAccumulator() {
+  const decoder = new TextDecoder("utf-8", { fatal: false });
+  let lineBuffer = "";
+  let terminalEvent: string | null = null;
+  let responseId: string | undefined;
+  let usage: SseUsageMetrics | undefined;
+
+  function processLine(rawLine: string): void {
+    const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
+    if (!line.startsWith("data:")) return;
+    const data = line.slice(5).trim();
+    if (!data) return;
+    if (data === "[DONE]") {
+      if (terminalEvent === null) terminalEvent = "[DONE]";
+      return;
+    }
+    if (!data.startsWith("{")) return;
+
+    let parsed: Record<string, unknown>;
+    try {
+      parsed = JSON.parse(data) as Record<string, unknown>;
+    } catch {
+      return;
+    }
+
+    const eventType = typeof parsed.type === "string" ? parsed.type : "";
+    if (!SSE_TERMINAL_EVENT_TYPES.has(eventType)) return;
+
+    terminalEvent = eventType;
+    const responseObj =
+      parsed.response && typeof parsed.response === "object"
+        ? (parsed.response as Record<string, unknown>)
+        : parsed;
+
+    if (typeof responseObj.id === "string" && responseObj.id.trim().length > 0) {
+      responseId = responseObj.id.trim();
+    }
+
+    const usageObj =
+      responseObj.usage && typeof responseObj.usage === "object"
+        ? (responseObj.usage as Record<string, unknown>)
+        : undefined;
+    if (usageObj) {
+      const extracted: SseUsageMetrics = {};
+      if (typeof usageObj.input_tokens === "number") extracted.inputTokens = usageObj.input_tokens;
+      if (typeof usageObj.output_tokens === "number") extracted.outputTokens = usageObj.output_tokens;
+      if (typeof usageObj.total_tokens === "number") extracted.totalTokens = usageObj.total_tokens;
+      if (Object.keys(extracted).length > 0) usage = extracted;
+    }
+  }
+
+  return {
+    feed(chunk: Uint8Array): void {
+      lineBuffer += decoder.decode(chunk, { stream: true });
+      let newlineIdx = lineBuffer.indexOf("\n");
+      while (newlineIdx !== -1) {
+        const line = lineBuffer.slice(0, newlineIdx);
+        lineBuffer = lineBuffer.slice(newlineIdx + 1);
+        processLine(line);
+        newlineIdx = lineBuffer.indexOf("\n");
+      }
+      // Cap residual partial line buffer to prevent unbounded growth on huge non-newline frames.
+      if (lineBuffer.length > 64 * 1024) {
+        lineBuffer = "";
+      }
+    },
+    finish(statusCode: number, aborted: boolean): SseAuditSummary {
+      lineBuffer += decoder.decode();
+      if (lineBuffer.length > 0) {
+        processLine(lineBuffer);
+        lineBuffer = "";
+      }
+      const truncatedEof = statusCode === 200 && !aborted && terminalEvent === null;
+      return {
+        terminalEvent,
+        truncatedEof,
+        ...(responseId ? { responseId } : {}),
+        ...(usage ? { usage } : {}),
+      };
+    },
+  };
+}
+
+function constantTimeEqualStrings(a: string, b: string): boolean {
+  const bufA = Buffer.from(a, "utf8");
+  const bufB = Buffer.from(b, "utf8");
+  if (bufA.length === 0 || bufA.length !== bufB.length) return false;
+  return timingSafeEqual(bufA, bufB);
 }
 
 function extractBearer(headerValue: string | string[] | undefined): string | null {
@@ -110,6 +410,21 @@ async function readBoundedBody(req: IncomingMessage, maxBytes: number): Promise<
   return Buffer.concat(chunks);
 }
 
+function waitForDrain(res: ServerResponse, signal: AbortSignal): Promise<void> {
+  if (signal.aborted || res.writableEnded) return Promise.resolve();
+  return new Promise((resolve) => {
+    const onDone = () => {
+      res.off("drain", onDone);
+      res.off("close", onDone);
+      signal.removeEventListener("abort", onDone);
+      resolve();
+    };
+    res.once("drain", onDone);
+    res.once("close", onDone);
+    signal.addEventListener("abort", onDone, { once: true });
+  });
+}
+
 class PayloadTooLargeError extends Error {
   constructor(maxBytes: number) {
     super(`Request body exceeded ${maxBytes} byte limit.`);
@@ -132,23 +447,26 @@ function scrubHeaders(headers: Record<string, string>): void {
  * Cluster-level zero-trust HTTP proxy (`delegra-gateway-proxy`) deployed in the
  * `paperclip` namespace.
  *
- * - Accepts only `POST /v1/responses` (plus `/healthz` and `/readyz`).
+ * - Accepts only `POST /v1/responses` (plus `/healthz`, `/readyz`, and optional
+ *   internal-token-authenticated `POST /internal/revocations`).
  * - Enforces a strict 16 MiB request body cap before JSON parsing.
  * - Requires `Authorization: Bearer <PROXY_SESSION_TOKEN>`,
  *   `X-Paperclip-Run-Id`, and `X-Paperclip-Run-Generation`.
  * - Calls control-plane per-request authorization before forwarding; denied or
  *   revoked requests produce zero upstream gateway traffic.
- * - Attaches ephemeral `upstream.headers` in request-local memory only, streams
- *   SSE responses verbatim with `X-Gateway-Request-Id` and 15s keep-alive
+ * - Defaults to `createLongLivedUpstreamFetch()` (`timeout: 0`, no 300s Undici
+ *   truncation), applies backpressure on slow consumers, tracks zero-body SSE
+ *   completion/truncation (`STREAM_TRUNCATED_EOF`), sends 15s keep-alive
  *   heartbeats, and scrubs credentials immediately on completion or abort.
  */
 export function createDelegraGatewayProxy(
   options: CreateDelegraGatewayProxyOptions,
 ): DelegraGatewayProxyHandle {
-  const fetchFn = options.fetchImpl ?? fetch;
+  const fetchFn = options.fetchImpl ?? createLongLivedUpstreamFetch();
   const maxBodyBytes = options.maxBodyBytes ?? DEFAULT_GATEWAY_MAX_BODY_BYTES;
   const heartbeatMs = options.sseHeartbeatIntervalMs ?? DEFAULT_SSE_HEARTBEAT_INTERVAL_MS;
   const upstreamBase = options.upstreamGatewayUrl.replace(/\/+$/, "");
+  const internalAuthToken = options.internalAuthToken?.trim() || null;
 
   const revokedRuns = new Map<string, number | "all">();
   const inFlightByRun = new Map<string, Set<AbortController>>();
@@ -158,6 +476,20 @@ export function createDelegraGatewayProxy(
     if (entry === undefined) return false;
     if (entry === "all") return true;
     return runGeneration <= entry;
+  }
+
+  function revokeRunInternal(runId: string, runGeneration?: number): number {
+    revokedRuns.set(runId, runGeneration ?? "all");
+    const active = inFlightByRun.get(runId);
+    if (!active) return 0;
+    let aborted = 0;
+    for (const controller of active) {
+      if (!controller.signal.aborted) {
+        controller.abort();
+        aborted += 1;
+      }
+    }
+    return aborted;
   }
 
   function trackController(runId: string, controller: AbortController): () => void {
@@ -185,6 +517,52 @@ export function createDelegraGatewayProxy(
 
     if (req.method === "GET" && (urlPath === "/healthz" || urlPath === "/readyz")) {
       writeJson(res, 200, { status: "ok" });
+      return;
+    }
+
+    if (urlPath === INTERNAL_REVOCATIONS_PATH && internalAuthToken) {
+      if (req.method !== "POST") {
+        res.setHeader("Allow", "POST");
+        writeJson(res, 405, {
+          error: { code: "METHOD_NOT_ALLOWED", message: "Only POST /internal/revocations is allowed." },
+        });
+        return;
+      }
+      const presented = extractBearer(req.headers.authorization);
+      if (!presented || !constantTimeEqualStrings(presented, internalAuthToken)) {
+        writeJson(res, 401, {
+          error: { code: "UNAUTHORIZED", message: "Invalid internal revocation credentials." },
+        });
+        return;
+      }
+      let revBody: Record<string, unknown>;
+      try {
+        const raw = await readBoundedBody(req, 64 * 1024);
+        revBody = JSON.parse(raw.toString("utf8")) as Record<string, unknown>;
+      } catch {
+        writeJson(res, 400, {
+          error: { code: "BAD_REQUEST", message: "Revocation payload must be valid JSON." },
+        });
+        return;
+      }
+      const targetRunId = typeof revBody.runId === "string" ? revBody.runId.trim() : "";
+      const targetGen =
+        typeof revBody.runGeneration === "number" && Number.isInteger(revBody.runGeneration) && revBody.runGeneration >= 1
+          ? revBody.runGeneration
+          : undefined;
+      if (!targetRunId) {
+        writeJson(res, 400, {
+          error: { code: "BAD_REQUEST", message: "runId is required." },
+        });
+        return;
+      }
+      const abortedStreams = revokeRunInternal(targetRunId, targetGen);
+      writeJson(res, 200, {
+        revoked: true,
+        runId: targetRunId,
+        ...(targetGen !== undefined ? { runGeneration: targetGen } : {}),
+        abortedStreams,
+      });
       return;
     }
 
@@ -428,6 +806,11 @@ export function createDelegraGatewayProxy(
       res.setHeader("X-Gateway-Request-Id", gatewayReqId);
 
       const isSse = contentType.toLowerCase().includes("text/event-stream");
+      const sseAudit = isSse ? createSseAuditAccumulator() : null;
+      if (isSse) {
+        res.setHeader("X-Accel-Buffering", "no");
+        res.setHeader("Connection", "keep-alive");
+      }
       if (isSse && heartbeatMs > 0) {
         heartbeatTimer = setInterval(() => {
           if (!res.writableEnded && !controller.signal.aborted) {
@@ -446,13 +829,18 @@ export function createDelegraGatewayProxy(
             break;
           }
           if (value && value.byteLength > 0) {
-            res.write(Buffer.from(value));
+            sseAudit?.feed(value);
+            const canContinue = res.write(Buffer.from(value));
+            if (!canContinue) {
+              await waitForDrain(res, controller.signal);
+            }
           }
         }
       }
       if (!res.writableEnded) {
         res.end();
       }
+      const sseSummary = sseAudit?.finish(upstreamRes.status, controller.signal.aborted);
       emitLog({
         clientRequestId,
         runId,
@@ -460,6 +848,8 @@ export function createDelegraGatewayProxy(
         status: upstreamRes.status,
         durationMs: Date.now() - startedAt,
         outcome: controller.signal.aborted ? "aborted" : "allowed",
+        ...(sseSummary?.truncatedEof ? { code: "STREAM_TRUNCATED_EOF" } : {}),
+        ...(sseSummary ? { sseSummary } : {}),
       });
     } catch {
       if (!res.headersSent) {
@@ -501,19 +891,7 @@ export function createDelegraGatewayProxy(
 
   return {
     server,
-    revokeRun(runId: string, runGeneration?: number): number {
-      revokedRuns.set(runId, runGeneration ?? "all");
-      const active = inFlightByRun.get(runId);
-      if (!active) return 0;
-      let aborted = 0;
-      for (const controller of active) {
-        if (!controller.signal.aborted) {
-          controller.abort();
-          aborted += 1;
-        }
-      }
-      return aborted;
-    },
+    revokeRun: revokeRunInternal,
     activeStreamCount(): number {
       let total = 0;
       for (const set of inFlightByRun.values()) total += set.size;
