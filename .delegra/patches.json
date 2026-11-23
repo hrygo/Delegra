@@ -745,13 +745,15 @@
       "kind": "fork-only",
       "status": "active",
       "commits": [
-        "d58005e9dcd087d106af17c1231b5e1cba81dbb5"
+        "d58005e9dcd087d106af17c1231b5e1cba81dbb5",
+        "b60135cb9fcc6157c24d336cab2a40bd78a26ee3",
+        "ee78efa875b392f6e30724226adf87609e7f9680"
       ],
       "owner": "hrygo",
       "reviewBy": "2026-12-23",
-      "verifiedAt": "2026-11-23",
+      "verifiedAt": "2026-11-24",
       "retireWhen": "An accepted upstream release provides per-request zero-trust gateway authorization, session token issuance/revocation, and internal proxy reconcile routes.",
-      "notes": "Part of hrygo/Delegra#73 (PR-1/2). Adds control-plane per-request expert gateway authorization service (expert-gateway-authorization.ts) with hashed one-time session tokens, all 5 denial error codes (RUN_GENERATION_STALE, TASK_CANCELLED, USER_AUTH_REVOKED, MODEL_NOT_ALLOWED, BUDGET_EXHAUSTED), immediate run/user revocation event publishing, active lease reconciliation snapshots, and internal Express routes (/internal/runner/v1/gateway-authorize and /internal/runner/v1/gateway-reconcile). Data-plane cluster proxy follows in PR-5 (#81)."
+      "notes": "Part of hrygo/Delegra#73 (PR-1/2). Adds control-plane per-request expert gateway authorization service (expert-gateway-authorization.ts) with hashed one-time session tokens, all 5 denial error codes (RUN_GENERATION_STALE, TASK_CANCELLED, USER_AUTH_REVOKED, MODEL_NOT_ALLOWED, BUDGET_EXHAUSTED), immediate run/user revocation event publishing, active lease reconciliation snapshots, internal Express routes (/internal/runner/v1/gateway-authorize and /internal/runner/v1/gateway-reconcile), HTTP push revocation fan-out bridge to delegra-gateway-proxy POST /internal/revocations, and native run cancellation lifecycle revocation hook."
     },
     {
       "id": "delegra-k8s-cluster-proxy",
