@@ -776,6 +776,19 @@
       "verifiedAt": "2026-11-23",
       "retireWhen": "An accepted upstream release provides declarative v1beta1 SandboxClaim adoption, one-way SandboxWarmPool lifecycle guards, TTL shutdownTime enforcement, and KEDA tidal autoscaling manifests.",
       "notes": "Closes hrygo/Delegra#75. Adds declarative extensions.agents.x-k8s.io/v1beta1 SandboxClaim/SandboxTemplate/SandboxWarmPool builders and orchestrator with mandatory shutdownTime + DeleteForeground TTL, observedGeneration stale-status guard, secondary Pod GET (Running + restartCount===0) CrashLoop guard, fail-closed never-return-to-pool guard, idempotent 404-tolerant teardown, WarmPoolMetricsTracker, v1beta1 Sandbox CR version support in sandbox-cr-orchestrator.ts, warmPool config schema in types.ts, and KEDA tidal ScaledObject manifests."
+    },
+    {
+      "id": "delegra-k8s-backpressure-kata",
+      "kind": "fork-only",
+      "status": "active",
+      "commits": [
+        "099afadd6a76e8fe827db2cd3c3ba3f161ca6745"
+      ],
+      "owner": "hrygo",
+      "reviewBy": "2026-12-23",
+      "verifiedAt": "2026-11-23",
+      "retireWhen": "An accepted upstream release provides pre-dispatch ResourceQuota watermark backpressure, aging priority queues, C3/C4 Kata-FC fail-closed isolation, and Karpenter dual ARM64 NodePool manifests.",
+      "notes": "Closes hrygo/Delegra#76. Adds pre-dispatch ResourceQuota watermark admission and Pending-Pod backoff, Small/Medium/Large tenant quota tiers with <=25% warm-pool sub-quota, aging PriorityBackpressureQueue, fail-closed C3/C4 Kata-FC microVM isolation guard (requests.memory===limits.memory, >=512Mi offset, NoSchedule toleration), server-side capacity backpressure retry classifier, Karpenter v1 dual ARM64 NodePool + Overprovisioning manifests, and unit tests."
     }
   ]
 }
