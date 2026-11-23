@@ -783,13 +783,14 @@
       "kind": "fork-only",
       "status": "active",
       "commits": [
-        "099afadd6a76e8fe827db2cd3c3ba3f161ca6745"
+        "099afadd6a76e8fe827db2cd3c3ba3f161ca6745",
+        "85b8a81e7b193d1ac02aeb342a22b0a8e638db7a"
       ],
       "owner": "hrygo",
       "reviewBy": "2026-12-23",
       "verifiedAt": "2026-11-23",
       "retireWhen": "An accepted upstream release provides pre-dispatch ResourceQuota watermark backpressure, aging priority queues, C3/C4 Kata-FC fail-closed isolation, and Karpenter dual ARM64 NodePool manifests.",
-      "notes": "Closes hrygo/Delegra#76. Adds pre-dispatch ResourceQuota watermark admission and Pending-Pod backoff, Small/Medium/Large tenant quota tiers with <=25% warm-pool sub-quota, aging PriorityBackpressureQueue, fail-closed C3/C4 Kata-FC microVM isolation guard (requests.memory===limits.memory, >=512Mi offset, NoSchedule toleration), server-side capacity backpressure retry classifier, Karpenter v1 dual ARM64 NodePool + Overprovisioning manifests, and unit tests."
+      "notes": "Closes hrygo/Delegra#76. Adds pre-dispatch ResourceQuota watermark admission and Pending-Pod backoff, Small/Medium/Large tenant quota tiers with <=25% warm-pool sub-quota, aging PriorityBackpressureQueue, fail-closed C3/C4 Kata-FC microVM isolation guard (requests.memory===limits.memory, >=512Mi offset, NoSchedule toleration), server-side capacity backpressure retry classifier, Karpenter v1 dual ARM64 NodePool + Overprovisioning manifests, and unit tests. Follow-up commit restores the upstream materializeNativeProviderCapacityRetry export alongside the new backpressure classifier."
     },
     {
       "id": "delegra-k8s-production-wiring",
