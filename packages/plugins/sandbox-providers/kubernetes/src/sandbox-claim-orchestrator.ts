@@ -2,16 +2,27 @@
  * Declarative v1beta1 SandboxClaim & one-way SandboxWarmPool orchestrator
  * (`extensions.agents.x-k8s.io/v1beta1`, kubernetes-sigs/agent-sandbox v1.0.12+).
  *
+ * Schema contract verified against `kubernetes-sigs/agent-sandbox`
+ * `k8s/crds/extensions.agents.x-k8s.io_sandboxclaims.yaml` and
+ * `k8s/crds/extensions.agents.x-k8s.io_sandboxwarmpools.yaml` (`v1beta1`):
+ * - `SandboxClaim.spec` requires `warmPoolRef: { name }` and accepts
+ *   `lifecycle: { shutdownTime, shutdownPolicy: "Delete" | "DeleteForeground" | "Retain" }`.
+ * - `SandboxClaim.status` reports `sandbox: { name, podIPs?, serviceFQDN? }` and
+ *   per-condition `observedGeneration` on `status.conditions[]`.
+ * - `SandboxWarmPool.spec` requires `sandboxTemplateRef: { name }`.
+ *
  * Key invariants:
  * - Zero-credential warm pods: SandboxTemplate pods carry NO user Secrets, NO
  *   workspace data, and NO historical session state.
  * - Atomic declarative claim: creates a `SandboxClaim` referencing a
- *   `SandboxTemplate` with mandatory `spec.lifecycle.shutdownTime` and
- *   `shutdownPolicy: DeleteForeground` to guarantee bounded TTL cleanup.
- * - Anti-stale & anti-CrashLoop readiness: waits for
- *   `status.observedGeneration >= metadata.generation` + `Ready=True` +
+ *   `SandboxWarmPool` (`spec.warmPoolRef.name`) with mandatory
+ *   `spec.lifecycle.shutdownTime` and `shutdownPolicy: DeleteForeground`.
+ * - Anti-stale & anti-CrashLoop readiness: verifies condition-level
+ *   `observedGeneration >= metadata.generation` + `Ready=True` +
  *   `status.sandbox.name`, then performs a secondary Pod `GET` verifying
- *   `phase === "Running"`, no `deletionTimestamp`, and `restartCount === 0`.
+ *   `phase === "Running"`, no `deletionTimestamp`, and an explicit `"agent"`
+ *   container status entry with `restartCount === 0` (keeps polling if only
+ *   sidecar container statuses are present).
  * - Strictly one-way lifecycle: once claimed, a pod is NEVER returned to any
  *   warm pool; completion, timeout, cancellation, or revocation destroys it
  *   idempotently (404 treated as success).
@@ -69,7 +80,8 @@ export function assertNeverReturnToWarmPool(input: {
 export interface BuildSandboxClaimInput {
   namespace: string;
   claimName: string;
-  templateName: string;
+  /** Target `SandboxWarmPool` name (`spec.warmPoolRef.name` in v1beta1). */
+  warmPoolName: string;
   runId: string;
   companyId: string;
   runGeneration: number;
@@ -83,6 +95,9 @@ export interface BuildSandboxClaimInput {
 export function buildSandboxClaimManifest(
   input: BuildSandboxClaimInput,
 ): Record<string, unknown> {
+  if (!input.warmPoolName || input.warmPoolName.trim().length === 0) {
+    throw new Error("SandboxClaim requires a non-empty warmPoolName");
+  }
   const ttlSeconds = input.ttlSeconds ?? DEFAULT_CLAIM_TTL_SECONDS;
   if (!Number.isInteger(ttlSeconds) || ttlSeconds <= 0) {
     throw new Error(`SandboxClaim requires a positive integer ttlSeconds (got ${ttlSeconds})`);
@@ -108,8 +123,8 @@ export function buildSandboxClaimManifest(
       },
     },
     spec: {
-      sandboxTemplateRef: {
-        name: input.templateName,
+      warmPoolRef: {
+        name: input.warmPoolName,
       },
       lifecycle: {
         shutdownTime,
@@ -294,21 +309,43 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function getAgentRestartCount(pod: {
+type AgentContainerHealth =
+  | { status: "ready" }
+  | { status: "pending" }
+  | { status: "restarted"; restartCount: number };
+
+function inspectAgentContainerStatus(pod: {
   status?: { containerStatuses?: Array<{ name?: string; restartCount?: number }> };
-}): number {
-  const statuses = pod.status?.containerStatuses ?? [];
-  const agent = statuses.find((c) => c.name === "agent") ?? statuses[0];
-  return typeof agent?.restartCount === "number" ? agent.restartCount : 0;
+}): AgentContainerHealth {
+  const statuses = pod.status?.containerStatuses;
+  if (!Array.isArray(statuses)) return { status: "pending" };
+  const agent = statuses.find((c) => c.name === "agent");
+  if (!agent || typeof agent.restartCount !== "number") {
+    return { status: "pending" };
+  }
+  if (agent.restartCount > 0) {
+    return { status: "restarted", restartCount: agent.restartCount };
+  }
+  return { status: "ready" };
+}
+
+function isConditionCurrent(
+  condition: { observedGeneration?: number },
+  generation: number | undefined,
+): boolean {
+  if (typeof generation !== "number") return true;
+  if (typeof condition.observedGeneration !== "number") return true;
+  return condition.observedGeneration >= generation;
 }
 
 /**
  * Waits for a `SandboxClaim` (`v1beta1`) to bind a sandbox and become Ready:
- * 1. Verifies `status.observedGeneration >= metadata.generation` (no stale status).
+ * 1. Verifies condition-level `observedGeneration >= metadata.generation`
+ *    (matching `extensions.agents.x-k8s.io_sandboxclaims.yaml`).
  * 2. Requires `Ready=True` condition and non-empty `status.sandbox.name`.
  * 3. Performs a secondary Pod `GET` confirming `phase === "Running"`, no
- *    `deletionTimestamp`, and `restartCount === 0` (defends against CrashLoop
- *    false-ready pods).
+ *    `deletionTimestamp`, and an explicit `"agent"` container status entry with
+ *    `restartCount === 0` (defends against sidecar-only or CrashLoop pods).
  */
 export async function waitForSandboxClaimReady(
   clients: KubeClients,
@@ -331,10 +368,15 @@ export async function waitForSandboxClaimReady(
     })) as {
       metadata?: { generation?: number; deletionTimestamp?: unknown };
       status?: {
-        observedGeneration?: number;
-        sandbox?: { name?: string };
+        sandbox?: { name?: string; podIPs?: string[]; serviceFQDN?: string };
         poolHit?: boolean;
-        conditions?: Array<{ type?: string; status?: string; reason?: string; message?: string }>;
+        conditions?: Array<{
+          type?: string;
+          status?: string;
+          reason?: string;
+          message?: string;
+          observedGeneration?: number;
+        }>;
       };
     };
 
@@ -342,61 +384,63 @@ export async function waitForSandboxClaimReady(
       throw new Error(`SandboxClaim ${namespace}/${claimName} is Terminating`);
     }
 
-    const generation = claim.metadata?.generation ?? 1;
+    const generation = claim.metadata?.generation;
     const status = claim.status ?? {};
-    const observedGeneration = status.observedGeneration ?? 0;
+    const conditions = Array.isArray(status.conditions) ? status.conditions : [];
 
-    if (observedGeneration >= generation) {
-      const conditions = Array.isArray(status.conditions) ? status.conditions : [];
-      const failedCond = conditions.find(
-        (c) =>
-          c.type === "Failed" ||
+    const failedCond = conditions.find(
+      (c) =>
+        isConditionCurrent(c, generation) &&
+        (c.type === "Failed" ||
           (c.type === "Ready" &&
             c.status === "False" &&
             typeof c.reason === "string" &&
-            /failed|expired|invalid/i.test(c.reason)),
+            /failed|expired|invalid/i.test(c.reason))),
+    );
+    if (failedCond) {
+      throw new Error(
+        `SandboxClaim ${namespace}/${claimName} failed: ${failedCond.reason ?? "unknown"} — ${failedCond.message ?? ""}`,
       );
-      if (failedCond?.status === "True" || (failedCond?.type === "Ready" && failedCond.status === "False")) {
+    }
+
+    const readyCond = conditions.find((c) => c.type === "Ready");
+    const sandboxName = status.sandbox?.name?.trim();
+    if (
+      readyCond &&
+      readyCond.status === "True" &&
+      isConditionCurrent(readyCond, generation) &&
+      sandboxName
+    ) {
+      const pod = (await clients.core.readNamespacedPod({
+        namespace,
+        name: sandboxName,
+      })) as {
+        metadata?: { name?: string; deletionTimestamp?: unknown };
+        status?: {
+          phase?: string;
+          containerStatuses?: Array<{ name?: string; restartCount?: number }>;
+        };
+      };
+
+      if (pod.metadata?.deletionTimestamp) {
         throw new Error(
-          `SandboxClaim ${namespace}/${claimName} failed: ${failedCond.reason ?? "unknown"} — ${failedCond.message ?? ""}`,
+          `Claimed pod ${namespace}/${sandboxName} is already terminating — refusing lease`,
         );
       }
 
-      const readyCond = conditions.find((c) => c.type === "Ready");
-      const sandboxName = status.sandbox?.name?.trim();
-      if (readyCond?.status === "True" && sandboxName) {
-        // Secondary Pod GET: verify Running, non-terminating, and restartCount === 0.
-        const pod = (await clients.core.readNamespacedPod({
-          namespace,
-          name: sandboxName,
-        })) as {
-          metadata?: { name?: string; deletionTimestamp?: unknown };
-          status?: {
-            phase?: string;
-            containerStatuses?: Array<{ name?: string; restartCount?: number }>;
-          };
+      const agentHealth = inspectAgentContainerStatus(pod);
+      if (agentHealth.status === "restarted") {
+        throw new Error(
+          `Claimed pod ${namespace}/${sandboxName} has restartCount=${agentHealth.restartCount} (CrashLoop guard)`,
+        );
+      }
+      if (pod.status?.phase === "Running" && agentHealth.status === "ready") {
+        return {
+          sandboxName,
+          podName: pod.metadata?.name ?? sandboxName,
+          claimDurationMs: Date.now() - startedAt,
+          poolHit: status.poolHit ?? true,
         };
-
-        const podPhase = pod.status?.phase;
-        const restartCount = getAgentRestartCount(pod);
-        if (pod.metadata?.deletionTimestamp) {
-          throw new Error(
-            `Claimed pod ${namespace}/${sandboxName} is already terminating — refusing lease`,
-          );
-        }
-        if (restartCount > 0) {
-          throw new Error(
-            `Claimed pod ${namespace}/${sandboxName} has restartCount=${restartCount} (CrashLoop guard)`,
-          );
-        }
-        if (podPhase === "Running") {
-          return {
-            sandboxName,
-            podName: pod.metadata?.name ?? sandboxName,
-            claimDurationMs: Date.now() - startedAt,
-            poolHit: status.poolHit ?? true,
-          };
-        }
       }
     }
 

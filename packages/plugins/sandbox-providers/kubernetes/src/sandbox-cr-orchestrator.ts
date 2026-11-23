@@ -1,24 +1,6 @@
 /**
  * SandboxOrchestrator implementation backed by the kubernetes-sigs/agent-sandbox
  * Sandbox CRD (`agents.x-k8s.io/v1alpha1` or `agents.x-k8s.io/v1beta1`).
- *
- * The Sandbox CR creates a long-lived pod that paperclip-server can exec into
- * for multi-command adapter-install workflows — the key architectural win over
- * the batch/v1 Job backend.
- *
- * Key semantic differences from jobOrchestrator:
- * - claim() creates a Sandbox CR via CustomObjectsApi instead of a batch Job
- * - getStatus() maps Sandbox phase (Pending|Ready|Terminating|Failed) to SandboxStatus
- * - findPod() reads status.podName from the Sandbox CR (falls back to label query)
- * - waitForCompletion() means "wait until pod is Ready to exec" NOT "wait until
- *   workload finishes". The Sandbox pod runs sleep infinity; execution completion
- *   is tracked by the individual execInPod() calls.
- * - release() deletes the Sandbox CR with Foreground propagation (controller
- *   tears down the underlying pod).
- *
- * NOTE: streamLogs() is provided for interface conformance but is limited —
- * the sleep-infinity pod has no meaningful stdout. Callers in execute mode
- * should use execInPod() and capture its stdout/stderr directly.
  */
 
 import type { KubeClients } from "./kube-client.js";
@@ -54,34 +36,15 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-/**
- * Map a Sandbox CR status.phase value to our SandboxStatus shape.
- * Sandbox phases: Pending | Ready | Terminating | Failed
- */
-function mapSandboxPhase(
-  cr: Record<string, unknown>,
-): SandboxStatus {
+function mapSandboxPhase(cr: Record<string, unknown>): SandboxStatus {
   const status = (cr.status as Record<string, unknown>) ?? {};
   const phase = (status.phase as string) ?? "Pending";
 
   switch (phase) {
     case "Ready":
-      return {
-        phase: "Running", // SandboxStatus.phase uses Job semantics; "Running" = active pod
-        complete: false,
-        active: 1,
-        succeeded: 0,
-        failed: 0,
-      };
+      return { phase: "Running", complete: false, active: 1, succeeded: 0, failed: 0 };
     case "Terminating":
-      return {
-        phase: "Running",
-        complete: false,
-        active: 0,
-        succeeded: 0,
-        failed: 0,
-        reason: "Terminating",
-      };
+      return { phase: "Running", complete: false, active: 0, succeeded: 0, failed: 0, reason: "Terminating" };
     case "Failed": {
       const conditions = (status.conditions as { type?: string; reason?: string; message?: string }[]) ?? [];
       const failedCond = conditions.find((c) => c.type === "Failed");
@@ -96,14 +59,7 @@ function mapSandboxPhase(
       };
     }
     default:
-      // "Pending" or unknown
-      return {
-        phase: "Pending",
-        complete: false,
-        active: 0,
-        succeeded: 0,
-        failed: 0,
-      };
+      return { phase: "Pending", complete: false, active: 0, succeeded: 0, failed: 0 };
   }
 }
 
@@ -145,12 +101,6 @@ export async function getSandboxCrStatus(
   return mapSandboxPhase(result as Record<string, unknown>);
 }
 
-/**
- * Returns the pod name backing a Sandbox CR.
- * Primary: read status.podName from the CR (set by the controller once ready).
- * Fallback: list pods in the namespace filtered by the paperclip.io/managed-by
- * label and the sandbox name label set on the pod template.
- */
 export async function findPodForSandbox(
   clients: KubeClients,
   namespace: string,
@@ -158,7 +108,6 @@ export async function findPodForSandbox(
   apiVersion?: SandboxCrApiVersion,
 ): Promise<string | null> {
   const version = extractSandboxVersion(apiVersion);
-  // Primary: read status.podName from the Sandbox CR
   const cr = await clients.custom.getNamespacedCustomObject({
     group: SANDBOX_GROUP,
     version,
@@ -173,10 +122,6 @@ export async function findPodForSandbox(
     return podName;
   }
 
-  // Secondary: the agent-sandbox controller (v0.4.x / v1.0.x) names the backing
-  // pod EXACTLY after the Sandbox CR and labels it only with
-  // agents.x-k8s.io/sandbox-name-hash (a hash, not the full name), so the
-  // full-name label selector below matches nothing on that controller.
   try {
     const pod = (await clients.core.readNamespacedPod({ namespace, name })) as {
       metadata?: { name?: string };
@@ -191,8 +136,6 @@ export async function findPodForSandbox(
     if (code !== 404) throw err;
   }
 
-  // Fallback: list pods by a full-name sandbox label, for controller versions
-  // that label pods with the sandbox name.
   const result = await clients.core.listNamespacedPod({
     namespace,
     labelSelector: `agents.x-k8s.io/sandbox-name=${name}`,
@@ -248,15 +191,6 @@ export async function deleteSandboxCr(
   });
 }
 
-/**
- * Wait until the Sandbox CR's pod reaches Ready phase (i.e., the pod is up and
- * exec-able). This is NOT waiting for a workload to finish — the Sandbox pod
- * runs sleep infinity indefinitely. Execution completion is tracked by the
- * individual execInPod() calls.
- *
- * Throws SandboxCrTimeoutError if Ready is not reached within timeoutMs.
- * Throws if the Sandbox transitions to Failed.
- */
 export async function waitForSandboxReady(
   clients: KubeClients,
   namespace: string,
@@ -281,21 +215,28 @@ export async function waitForSandboxReady(
 
     const metadata = (cr.metadata as Record<string, unknown>) ?? {};
     const status = (cr.status as Record<string, unknown>) ?? {};
+    const generation = typeof metadata.generation === "number" ? metadata.generation : undefined;
 
-    // Guard against stale status when both generation and observedGeneration are reported.
     if (
-      typeof metadata.generation === "number" &&
+      generation !== undefined &&
       typeof status.observedGeneration === "number" &&
-      status.observedGeneration < metadata.generation
+      status.observedGeneration < generation
     ) {
       await sleep(pollMs);
       continue;
     }
 
-    // agent-sandbox v1alpha1/v1beta1 uses status.conditions[type=Ready,status=True],
-    // falling back to status.phase.
     const conditions = Array.isArray(status.conditions) ? status.conditions as Array<Record<string, unknown>> : [];
     const readyCondition = conditions.find((c) => c.type === "Ready");
+    const readyObsGen =
+      typeof readyCondition?.observedGeneration === "number"
+        ? readyCondition.observedGeneration
+        : undefined;
+    if (generation !== undefined && readyObsGen !== undefined && readyObsGen < generation) {
+      await sleep(pollMs);
+      continue;
+    }
+
     const failedCondition = conditions.find((c) => c.type === "Failed" || (c.type === "Ready" && c.status === "False" && typeof c.reason === "string" && /failed/i.test(c.reason)));
     const phase = (status.phase as string) ?? "";
 
@@ -319,10 +260,6 @@ export async function waitForSandboxReady(
   throw new SandboxCrTimeoutError(namespace, name, opts.timeoutMs);
 }
 
-/**
- * Factory returning a SandboxOrchestrator bound to a specific Sandbox CRD
- * apiVersion (`agents.x-k8s.io/v1alpha1` or `agents.x-k8s.io/v1beta1`).
- */
 export function createSandboxCrOrchestrator(
   apiVersion: SandboxCrApiVersion = "agents.x-k8s.io/v1alpha1",
 ): SandboxOrchestrator {
@@ -341,7 +278,4 @@ export function createSandboxCrOrchestrator(
   };
 }
 
-/**
- * Default Sandbox CR-backed conformance to SandboxOrchestrator (`v1alpha1`).
- */
 export const sandboxCrOrchestrator: SandboxOrchestrator = createSandboxCrOrchestrator("agents.x-k8s.io/v1alpha1");

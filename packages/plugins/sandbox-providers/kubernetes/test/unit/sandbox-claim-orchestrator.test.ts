@@ -13,13 +13,20 @@ import {
   WarmPoolReturnForbiddenError,
 } from "../../src/sandbox-claim-orchestrator.js";
 
+/**
+ * Contract subset derived from kubernetes-sigs/agent-sandbox v1beta1 CRDs
+ * (`k8s/crds/extensions.agents.x-k8s.io_sandboxclaims.yaml` and
+ * `k8s/crds/extensions.agents.x-k8s.io_sandboxwarmpools.yaml`, commit 1b7d5336).
+ */
+const V1BETA1_SHUTDOWN_POLICY_ENUM = new Set(["Delete", "DeleteForeground", "Retain"]);
+
 describe("v1beta1 SandboxClaim / SandboxTemplate / SandboxWarmPool builders", () => {
-  it("builds a v1beta1 SandboxClaim with mandatory TTL shutdownTime and DeleteForeground", () => {
+  it("conforms to agent-sandbox v1beta1 SandboxClaim CRD schema (warmPoolRef + lifecycle.shutdownTime/shutdownPolicy)", () => {
     const nowMs = Date.parse("2026-11-23T00:00:00.000Z");
     const manifest = buildSandboxClaimManifest({
       namespace: "paperclip-acme",
       claimName: "claim-01",
-      templateName: "expert-codex-min-arm64",
+      warmPoolName: "expert-codex-min-arm64",
       runId: "run-01",
       companyId: "comp-01",
       runGeneration: 3,
@@ -30,31 +37,45 @@ describe("v1beta1 SandboxClaim / SandboxTemplate / SandboxWarmPool builders", ()
       kind: string;
       metadata: { labels: Record<string, string> };
       spec: {
-        sandboxTemplateRef: { name: string };
+        warmPoolRef: { name: string };
+        sandboxTemplateRef?: unknown;
         lifecycle: { shutdownTime: string; shutdownPolicy: string };
       };
     };
 
     expect(manifest.apiVersion).toBe(SANDBOX_EXTENSIONS_API_VERSION);
     expect(manifest.kind).toBe("SandboxClaim");
-    expect(manifest.spec.sandboxTemplateRef.name).toBe("expert-codex-min-arm64");
+    expect(manifest.spec.warmPoolRef).toEqual({ name: "expert-codex-min-arm64" });
+    expect(manifest.spec.sandboxTemplateRef).toBeUndefined();
     expect(manifest.spec.lifecycle.shutdownTime).toBe("2026-11-23T00:30:00.000Z");
+    expect(V1BETA1_SHUTDOWN_POLICY_ENUM.has(manifest.spec.lifecycle.shutdownPolicy)).toBe(true);
     expect(manifest.spec.lifecycle.shutdownPolicy).toBe("DeleteForeground");
     expect(manifest.metadata.labels["paperclip.io/run-generation"]).toBe("3");
   });
 
-  it("rejects non-positive TTL or invalid runGeneration", () => {
+  it("rejects non-positive TTL or empty warmPoolName", () => {
     expect(() =>
       buildSandboxClaimManifest({
         namespace: "ns",
         claimName: "c1",
-        templateName: "tpl",
+        warmPoolName: "pool-1",
         runId: "r1",
         companyId: "co1",
         runGeneration: 1,
         ttlSeconds: 0,
       }),
     ).toThrow(/ttlSeconds/);
+
+    expect(() =>
+      buildSandboxClaimManifest({
+        namespace: "ns",
+        claimName: "c1",
+        warmPoolName: "",
+        runId: "r1",
+        companyId: "co1",
+        runGeneration: 1,
+      }),
+    ).toThrow(/warmPoolName/);
   });
 
   it("builds a zero-credential clean SandboxTemplate aligned with PSS restricted baseline", () => {
@@ -111,26 +132,22 @@ describe("v1beta1 SandboxClaim / SandboxTemplate / SandboxWarmPool builders", ()
 });
 
 describe("waitForSandboxClaimReady & one-way lifecycle guards", () => {
-  it("waits until observedGeneration >= generation and verifies Pod Running + restartCount === 0", async () => {
+  it("handles representative v1beta1 controller response (condition-level observedGeneration) and verifies agent restartCount === 0", async () => {
     const getCustom = vi
       .fn()
-      // First poll: stale observedGeneration (0 < 2) must NOT be accepted even with Ready=True
       .mockResolvedValueOnce({
         metadata: { generation: 2 },
         status: {
-          observedGeneration: 1,
-          sandbox: { name: "sb-warm-1" },
-          conditions: [{ type: "Ready", status: "True" }],
+          sandbox: { name: "sb-warm-1", podIPs: ["10.42.0.18"] },
+          conditions: [{ type: "Ready", status: "True", observedGeneration: 1 }],
         },
       })
-      // Second poll: up-to-date observedGeneration
       .mockResolvedValueOnce({
         metadata: { generation: 2 },
         status: {
-          observedGeneration: 2,
-          sandbox: { name: "sb-warm-1" },
+          sandbox: { name: "sb-warm-1", podIPs: ["10.42.0.18"] },
           poolHit: true,
-          conditions: [{ type: "Ready", status: "True" }],
+          conditions: [{ type: "Ready", status: "True", observedGeneration: 2 }],
         },
       });
     const readPod = vi.fn().mockResolvedValue({
@@ -157,15 +174,55 @@ describe("waitForSandboxClaimReady & one-way lifecycle guards", () => {
     expect(res.poolHit).toBe(true);
   });
 
+  it("keeps polling when Pod is Running with only a sidecar container status and no agent status yet", async () => {
+    const getCustom = vi.fn().mockResolvedValue({
+      metadata: { generation: 1 },
+      status: {
+        sandbox: { name: "sb-sidecar" },
+        conditions: [{ type: "Ready", status: "True", observedGeneration: 1 }],
+      },
+    });
+    const readPod = vi
+      .fn()
+      .mockResolvedValueOnce({
+        metadata: { name: "sb-sidecar" },
+        status: {
+          phase: "Running",
+          containerStatuses: [{ name: "istio-proxy", restartCount: 0 }],
+        },
+      })
+      .mockResolvedValueOnce({
+        metadata: { name: "sb-sidecar" },
+        status: {
+          phase: "Running",
+          containerStatuses: [
+            { name: "istio-proxy", restartCount: 0 },
+            { name: "agent", restartCount: 0 },
+          ],
+        },
+      });
+    const clients = {
+      custom: { getNamespacedCustomObject: getCustom },
+      core: { readNamespacedPod: readPod },
+    };
+
+    const res = await waitForSandboxClaimReady(clients as never, "paperclip-acme", "claim-sidecar", {
+      timeoutMs: 2000,
+      pollMs: 5,
+    });
+
+    expect(readPod).toHaveBeenCalledTimes(2);
+    expect(res.podName).toBe("sb-sidecar");
+  });
+
   it("rejects CrashLoop false-ready pods with restartCount > 0", async () => {
     const clients = {
       custom: {
         getNamespacedCustomObject: vi.fn().mockResolvedValue({
           metadata: { generation: 1 },
           status: {
-            observedGeneration: 1,
             sandbox: { name: "sb-crash" },
-            conditions: [{ type: "Ready", status: "True" }],
+            conditions: [{ type: "Ready", status: "True", observedGeneration: 1 }],
           },
         }),
       },
@@ -193,7 +250,7 @@ describe("waitForSandboxClaimReady & one-way lifecycle guards", () => {
       custom: {
         getNamespacedCustomObject: vi.fn().mockResolvedValue({
           metadata: { generation: 1 },
-          status: { observedGeneration: 1, conditions: [{ type: "Ready", status: "False" }] },
+          status: { conditions: [{ type: "Ready", status: "False", observedGeneration: 1 }] },
         }),
       },
       core: { readNamespacedPod: vi.fn() },
