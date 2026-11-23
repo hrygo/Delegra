@@ -4,6 +4,11 @@ import { registerIdleMcpOwners } from "./services/public-mcp/idle-sleep-proof.js
 import { startMcpRevocationIndexSync } from "./services/public-mcp/revocation-index-sync.js";
 import { startMcpIngressHandoffExpiry } from "./services/public-mcp/ingress-handoff-expiry.js";
 import { nativeRunMcpRoutes } from "./routes/native-run-mcp.js";
+import { expertGatewayAuthzRoutes } from "./routes/expert-gateway-authz.js";
+import {
+  createExpertGatewayAuthorizationService,
+  type ExpertGatewayAuthorizationService,
+} from "./services/native-runtime/expert-gateway-authorization.js";
 import { connectionEventWakeRoutes } from "./routes/connection-event-wake.js";
 import { registerGitHubReviewProjectionWork } from "./services/chat-channels/github/review-projection-work.js";
 import { finishServiceShutdown } from "./shutdown.js";
@@ -480,6 +485,8 @@ export async function createApp(
     managedPluginAutoInstall?: readonly string[] | null;
     /** Test override for the bundled plugin catalog root. */
     bundledPluginCatalogRoot?: string;
+    /** Optional override for the control-plane expert gateway authorization service. */
+    expertGatewayAuthz?: ExpertGatewayAuthorizationService;
   },
 ) {
   const app = express();
@@ -573,6 +580,13 @@ export async function createApp(
   // agent API key. Every request revalidates the active heartbeat row.
   app.use(runtimeConnectionIntentRoutes(db));
   app.use(nativeRunMcpRoutes());
+  // Cluster-level delegra-gateway-proxy authenticates with its dedicated
+  // internal bearer token (DELEGRA_GATEWAY_INTERNAL_TOKEN) rather than user or
+  // agent API keys, so mount before actorMiddleware (fail-closed when unset).
+  const expertGatewayAuthz =
+    opts.expertGatewayAuthz ?? createExpertGatewayAuthorizationService();
+  app.locals.expertGatewayAuthz = expertGatewayAuthz;
+  app.use(expertGatewayAuthzRoutes({ service: expertGatewayAuthz }));
   const hostServicesDisposers = new Map<string, () => void>();
   let lifecyclePluginsReady = false;
   const agentLifecycle = startAgentLifecycle(db, createLifecycleDriver(db, workerManager), () => lifecyclePluginsReady && !isWarmStandby() && !isIdleTaskDrainActive());
