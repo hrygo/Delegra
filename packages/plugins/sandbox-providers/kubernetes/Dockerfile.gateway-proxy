@@ -8,15 +8,15 @@ WORKDIR /workspace
 RUN corepack enable
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.json ./
-COPY packages/plugins/sdk/package.json packages/plugins/sdk/package.json
-COPY packages/plugins/sandbox-providers/kubernetes/package.json packages/plugins/sandbox-providers/kubernetes/package.json
-
-RUN pnpm install --frozen-lockfile --filter @paperclipai/plugin-kubernetes...
-
 COPY packages/plugins/sdk packages/plugins/sdk
 COPY packages/plugins/sandbox-providers/kubernetes packages/plugins/sandbox-providers/kubernetes
 
-RUN pnpm --filter @paperclipai/plugin-kubernetes build
+# Build workspace SDK dependency first, then install and build the standalone
+# sandbox-provider plugin (excluded from root pnpm-workspace.yaml).
+RUN pnpm install --frozen-lockfile --filter @paperclipai/plugin-sdk... && \
+    pnpm --filter @paperclipai/plugin-sdk build && \
+    pnpm --dir packages/plugins/sandbox-providers/kubernetes install --ignore-workspace && \
+    pnpm --dir packages/plugins/sandbox-providers/kubernetes exec tsc
 
 FROM node:24-alpine AS runtime
 WORKDIR /app
