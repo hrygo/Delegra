@@ -769,13 +769,14 @@
       "kind": "fork-only",
       "status": "active",
       "commits": [
-        "1858d1bae4da6ea6836d9d581e833e1565290a32"
+        "1858d1bae4da6ea6836d9d581e833e1565290a32",
+        "7f98835953655c9edc0cb011f252cc55bc72012e"
       ],
       "owner": "hrygo",
       "reviewBy": "2026-12-23",
       "verifiedAt": "2026-11-23",
       "retireWhen": "An accepted upstream release provides declarative v1beta1 SandboxClaim adoption, one-way SandboxWarmPool lifecycle guards, TTL shutdownTime enforcement, and KEDA tidal autoscaling manifests.",
-      "notes": "Closes hrygo/Delegra#75. Adds declarative extensions.agents.x-k8s.io/v1beta1 SandboxClaim/SandboxTemplate/SandboxWarmPool builders and orchestrator with mandatory shutdownTime + DeleteForeground TTL, observedGeneration stale-status guard, secondary Pod GET (Running + restartCount===0) CrashLoop guard, fail-closed never-return-to-pool guard, idempotent 404-tolerant teardown, WarmPoolMetricsTracker, v1beta1 Sandbox CR version support in sandbox-cr-orchestrator.ts, warmPool config schema in types.ts, and KEDA tidal ScaledObject manifests."
+      "notes": "Closes hrygo/Delegra#75. Adds declarative extensions.agents.x-k8s.io/v1beta1 SandboxClaim/SandboxTemplate/SandboxWarmPool builders and orchestrator verified against kubernetes-sigs/agent-sandbox v1beta1 CRDs (spec.warmPoolRef, lifecycle.shutdownTime/DeleteForeground, condition-level observedGeneration, explicit agent container status with restartCount===0), fail-closed never-return-to-pool guard, idempotent 404-tolerant teardown, WarmPoolMetricsTracker, v1beta1 Sandbox CR version support, warmPool config schema, and KEDA tidal ScaledObject manifests. Upstream generic PR: https://github.com/paperclipai/paperclip/pull/22585."
     },
     {
       "id": "delegra-k8s-backpressure-kata",
