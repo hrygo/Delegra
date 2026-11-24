@@ -730,26 +730,30 @@
         "95dad97c6910012806832d1ff3200f23139a1e57",
         "4b40d44466193c3b6b9175aeaf1ecde1d47c5cda",
         "353d8257560ff907723730e6d1add865752c177f",
-        "0f8f3d14f836d94aad1d3db57964a8ac3ca0a1ee"
+        "0f8f3d14f836d94aad1d3db57964a8ac3ca0a1ee",
+        "6aa5e68a7c8f951e89630378a4c47c1c5ed0318d",
+        "eab7a4b410262c5b81df96a78d2c62944abfc20c"
       ],
       "owner": "hrygo",
       "reviewBy": "2026-12-22",
-      "verifiedAt": "2026-11-22",
+      "verifiedAt": "2026-11-24",
       "retireWhen": "An accepted upstream release provides Server-Side Apply tenant reconciliation, 5-minute fingerprint caching, and zero-downtime standard/cilium policy switching.",
-      "notes": "Closes hrygo/Delegra#74. Adds KubernetesObjectApi SSA reconciliation in kube-client.ts and tenant-orchestrator.ts with per-cluster 5-minute fingerprint cache, per-(cluster, namespace) serialization lock, namespace ownership verification, per-adapter CiliumNetworkPolicies (applied before standard policy deletion, revoked when empty, and discovered from Kubernetes on mode switch), zero-downtime apply-before-delete standard<->cilium switching with standard-only 403 tolerance, and optional Cilium gateway proxy egress endpoint rule. Upstream generic PR: https://github.com/paperclipai/paperclip/pull/22553."
+      "notes": "Closes hrygo/Delegra#74. Adds KubernetesObjectApi SSA reconciliation in kube-client.ts and tenant-orchestrator.ts with per-cluster 5-minute fingerprint cache, per-(cluster, namespace) serialization lock, namespace ownership verification, per-adapter CiliumNetworkPolicies (applied before standard policy deletion, revoked when empty, and discovered from Kubernetes on mode switch), zero-downtime apply-before-delete standard<->cilium switching with standard-only 403 tolerance, optional Cilium gateway proxy egress endpoint rule, @kubernetes/client-node ^1.1.1 upgrade (fixing SSA HTTP 400), non-wildcard Cilium DNS proxy rules with IMDS/lateral agent egressDeny, and Pod dnsConfig ndots=2 for musl + Cilium nameError compatibility. Upstream generic PR: https://github.com/paperclipai/paperclip/pull/22553."
     },
     {
       "id": "delegra-k8s-gateway-authz",
       "kind": "fork-only",
       "status": "active",
       "commits": [
-        "d58005e9dcd087d106af17c1231b5e1cba81dbb5"
+        "d58005e9dcd087d106af17c1231b5e1cba81dbb5",
+        "b60135cb9fcc6157c24d336cab2a40bd78a26ee3",
+        "ee78efa875b392f6e30724226adf87609e7f9680"
       ],
       "owner": "hrygo",
       "reviewBy": "2026-12-23",
-      "verifiedAt": "2026-11-23",
+      "verifiedAt": "2026-11-24",
       "retireWhen": "An accepted upstream release provides per-request zero-trust gateway authorization, session token issuance/revocation, and internal proxy reconcile routes.",
-      "notes": "Part of hrygo/Delegra#73 (PR-1/2). Adds control-plane per-request expert gateway authorization service (expert-gateway-authorization.ts) with hashed one-time session tokens, all 5 denial error codes (RUN_GENERATION_STALE, TASK_CANCELLED, USER_AUTH_REVOKED, MODEL_NOT_ALLOWED, BUDGET_EXHAUSTED), immediate run/user revocation event publishing, active lease reconciliation snapshots, and internal Express routes (/internal/runner/v1/gateway-authorize and /internal/runner/v1/gateway-reconcile). Data-plane cluster proxy follows in PR-5 (#81)."
+      "notes": "Part of hrygo/Delegra#73 (PR-1/2). Adds control-plane per-request expert gateway authorization service (expert-gateway-authorization.ts) with hashed one-time session tokens, all 5 denial error codes (RUN_GENERATION_STALE, TASK_CANCELLED, USER_AUTH_REVOKED, MODEL_NOT_ALLOWED, BUDGET_EXHAUSTED), immediate run/user revocation event publishing, active lease reconciliation snapshots, internal Express routes (/internal/runner/v1/gateway-authorize and /internal/runner/v1/gateway-reconcile), HTTP push revocation fan-out bridge to delegra-gateway-proxy POST /internal/revocations, and native run cancellation lifecycle revocation hook."
     },
     {
       "id": "delegra-k8s-cluster-proxy",
@@ -757,13 +761,14 @@
       "status": "active",
       "commits": [
         "fd1b6c575c21aee8b305d846abf790eb1ac728bb",
-        "aa1fc85eb954db44a7a56c7f7a7ecd1759ae0320"
+        "aa1fc85eb954db44a7a56c7f7a7ecd1759ae0320",
+        "c0a8f9a27e293c5587e1648284385312047bb439"
       ],
       "owner": "hrygo",
       "reviewBy": "2026-12-23",
       "verifiedAt": "2026-11-24",
       "retireWhen": "An accepted upstream release provides a cluster-level zero-trust AI gateway proxy, zero-credential agent/proxy secret splitting, expertZeroTrustMode env suppression, and atomic stdin lease token delivery.",
-      "notes": "Closes hrygo/Delegra#73 (PR-2/2, hrygo/Delegra#81). Implements the cluster-level delegra-gateway-proxy HTTP service (POST /v1/responses allowlist, 16 MiB body cap, per-request control-plane authz, local revocation + in-flight AbortController stream termination, SSE keep-alive, in-place credential scrubbing, zero-credential access logs), zero-credential Secret splitting in secret-manager.ts, expertZeroTrustMode in adapter-defaults.ts, atomic stdin lease token delivery in pod-exec.ts, PSS restricted HA K8s manifests, standalone runnable server/CLI entrypoint (gateway-proxy-server.ts / gateway-proxy-main.ts), multi-stage Dockerfile.gateway-proxy, zero-downtime rollout manifest hardening, and unit tests."
+      "notes": "Closes hrygo/Delegra#73 (PR-2/2, hrygo/Delegra#81). Implements the cluster-level delegra-gateway-proxy HTTP service (POST /v1/responses allowlist, 16 MiB body cap, per-request control-plane authz, local revocation + in-flight AbortController stream termination, SSE keep-alive, in-place credential scrubbing, zero-credential access logs), zero-credential Secret splitting in secret-manager.ts, expertZeroTrustMode in adapter-defaults.ts, atomic stdin lease token delivery in pod-exec.ts, PSS restricted HA K8s manifests, standalone runnable server/CLI entrypoint (gateway-proxy-server.ts / gateway-proxy-main.ts), multi-stage Dockerfile.gateway-proxy, zero-downtime rollout manifest hardening, zero-timeout node:http/https upstream transport, zero-body SSE audit/STREAM_TRUNCATED_EOF detection, backpressure-aware streaming, authenticated POST /internal/revocations push revocation + pluggable GatewayRevocationSubscriber, and unit tests."
     },
     {
       "id": "delegra-k8s-v1beta1-warmpool",

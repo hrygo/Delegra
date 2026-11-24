@@ -4,6 +4,7 @@ import {
   type ExpertGatewayAuthorizationService,
   type GatewayWireApi,
 } from "../services/native-runtime/expert-gateway-authorization.js";
+import { registerExpertGatewayAuthzService } from "../services/native-runtime/expert-gateway-revocation-bridge.js";
 
 export const GATEWAY_AUTHORIZE_PATH = "/internal/runner/v1/gateway-authorize";
 export const GATEWAY_RECONCILE_PATH = "/internal/runner/v1/gateway-reconcile";
@@ -48,6 +49,7 @@ function applyNoStoreHeaders(res: Response): void {
  * (`GET /internal/runner/v1/gateway-reconcile`).
  */
 export function expertGatewayAuthzRoutes(options: ExpertGatewayAuthzRoutesOptions) {
+  registerExpertGatewayAuthzService(options.service);
   const router = Router();
 
   async function authenticateProxy(req: Request, res: Response): Promise<boolean> {

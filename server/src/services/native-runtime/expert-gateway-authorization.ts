@@ -1,4 +1,5 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { createEnvGatewayRevocationPublisher } from "./expert-gateway-revocation-bridge.js";
 
 export type GatewayWireApi = "responses" | "chat_completions" | "messages";
 
@@ -227,7 +228,8 @@ export function createExpertGatewayAuthorizationService(
   options: CreateExpertGatewayAuthorizationServiceOptions = {},
 ): ExpertGatewayAuthorizationService {
   const store = options.store ?? createInMemoryExpertGatewayLeaseStore();
-  const revocationPublisher = options.revocationPublisher;
+  const revocationPublisher =
+    options.revocationPublisher ?? createEnvGatewayRevocationPublisher(process.env);
   const onAuditEvent = options.onAuditEvent;
   const nowFn = options.now ?? Date.now;
 

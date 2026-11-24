@@ -6,6 +6,7 @@ export interface PodTemplateView {
   spec: {
     automountServiceAccountToken: boolean;
     restartPolicy: string;
+    dnsConfig?: { options?: { name: string; value?: string }[] };
     nodeSelector?: Record<string, string>;
     priorityClassName?: string;
     runtimeClassName?: string;
@@ -90,7 +91,10 @@ export interface EgressAllowPolicyView {
 
 export interface CiliumEgressRuleView {
   toEndpoints?: { matchLabels: Record<string, string> }[];
-  toPorts?: { ports: { port: string }[] }[];
+  toPorts?: {
+    ports: { port: string }[];
+    rules?: { dns?: Array<{ matchName?: string; matchPattern?: string }> };
+  }[];
   toFQDNs?: { matchName: string }[];
   toCIDRSet?: { cidr: string }[];
 }
@@ -102,5 +106,6 @@ export interface CiliumNetworkPolicyView {
   spec: {
     endpointSelector: { matchLabels: Record<string, string> };
     egress: CiliumEgressRuleView[];
+    egressDeny?: CiliumEgressRuleView[];
   };
 }
