@@ -7,16 +7,31 @@ WORKDIR /workspace
 
 RUN corepack enable
 
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.json ./
-COPY packages/plugins/sdk packages/plugins/sdk
-COPY packages/plugins/sandbox-providers/kubernetes packages/plugins/sandbox-providers/kubernetes
+# Copy root package.json so Corepack resolves the repository's pinned pnpm version.
+COPY package.json ./
+COPY packages/plugins/sandbox-providers/kubernetes/package.json ./packages/plugins/sandbox-providers/kubernetes/package.json
+COPY packages/plugins/sandbox-providers/kubernetes/src/gateway-proxy.ts \
+     packages/plugins/sandbox-providers/kubernetes/src/gateway-proxy-server.ts \
+     packages/plugins/sandbox-providers/kubernetes/src/gateway-proxy-main.ts \
+     ./packages/plugins/sandbox-providers/kubernetes/src/
 
-# Build workspace SDK dependency first, then install and build the standalone
-# sandbox-provider plugin (excluded from root pnpm-workspace.yaml).
-RUN pnpm install --frozen-lockfile --filter @paperclipai/plugin-sdk... && \
-    pnpm --filter @paperclipai/plugin-sdk build && \
-    pnpm --dir packages/plugins/sandbox-providers/kubernetes install --ignore-workspace && \
-    pnpm --dir packages/plugins/sandbox-providers/kubernetes exec tsc
+# Install the standalone sandbox-provider plugin devDependencies (excluded from
+# root pnpm-workspace.yaml) and compile only the zero-dependency gateway-proxy
+# entrypoints without pulling workspace SDK/shared packages into the image build.
+RUN pnpm -C packages/plugins/sandbox-providers/kubernetes install --ignore-workspace --no-lockfile && \
+    pnpm -C packages/plugins/sandbox-providers/kubernetes exec tsc \
+      --target ES2023 \
+      --module NodeNext \
+      --moduleResolution NodeNext \
+      --lib ES2023 \
+      --types node \
+      --strict \
+      --skipLibCheck \
+      --rootDir src \
+      --outDir dist \
+      src/gateway-proxy.ts \
+      src/gateway-proxy-server.ts \
+      src/gateway-proxy-main.ts
 
 FROM node:24-alpine AS runtime
 WORKDIR /app
