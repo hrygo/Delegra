@@ -115,7 +115,16 @@ const HTTP_METHODS = new Set([
   "patch",
   "trace",
 ]);
-const explicitOpenApiCoverageExclusions = new Set<string>();
+const explicitOpenApiCoverageExclusions = new Set<string>([
+  // Cluster-level delegra-gateway-proxy internal endpoints authenticate with
+  // DELEGRA_GATEWAY_INTERNAL_TOKEN before actorMiddleware and are not part of
+  // the public Paperclip board/agent OpenAPI document.
+  "expert-gateway-authz.ts",
+  // Restricted employee experts API (CORP-DSH-EXPERT-001) authenticates via
+  // RFC 8693 exchanged employee bearer tokens before actorMiddleware and is
+  // documented separately from the public Paperclip board/agent OpenAPI spec.
+  "employee-experts.ts",
+]);
 
 const explicitOpenApiOperationCoverageExclusions = new Set([
   // Exact Cloud-control signed action; ordinary board/agent credentials cannot invoke it.
