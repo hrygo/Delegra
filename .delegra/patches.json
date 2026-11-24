@@ -85,9 +85,9 @@
       "status": "active",
       "upstreamPr": "paperclipai/paperclip#17459",
       "upstreamBase": "410e5c6eedba98588a87e4104153898fb0437532",
-      "upstreamHead": "a2da41c76bbb0096baba3f6affe9b88d7257489e",
+      "upstreamHead": "a2da61c76bbb0096baba3f6affe9b88d7257489e",
       "upstreamCommits": [
-        "a2da41c76bbb0096baba3f6affe9b88d7257489e"
+        "a2da61c76bbb0096baba3f6affe9b88d7257489e"
       ],
       "commits": [
         "9ac8aa552f50f27cbc6091bd5a8e310cba4ac0ee"
@@ -322,7 +322,7 @@
       "kind": "upstream-pr",
       "status": "active",
       "upstreamPr": "paperclipai/paperclip#17859",
-      "upstreamBase": "2d72f2c4c0b2f119db3b94ea75bd8ee8b70ed959",
+      "upstreamBase": "2d72f2c4c0b2f119db94ea75bd8ee8b70ed959",
       "upstreamHead": "8349ba0aa868b4f70125705dd1a729078e083ef7",
       "upstreamCommits": [
         "8349ba0aa868b4f70125705dd1a729078e083ef7"
@@ -763,7 +763,8 @@
         "fd1b6c575c21aee8b305d846abf790eb1ac728bb",
         "aa1fc85eb954db44a7a56c7f7a7ecd1759ae0320",
         "c0a8f9a27e293c5587e1648284385312047bb439",
-        "63569e7ff042d80d6d993336066855d66ba3f7f4"
+        "63569e7ff042d80d6d993336066855d66ba3f7f4",
+        "f6feaa2a033ff84fb94eb96633f732b01960d1d5"
       ],
       "owner": "hrygo",
       "reviewBy": "2026-12-23",
