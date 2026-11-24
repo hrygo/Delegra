@@ -827,6 +827,20 @@
       "verifiedAt": "2026-11-23",
       "retireWhen": "Live Kubernetes cluster E2E acceptance is automated in CI or superseded by an upstream smoke harness.",
       "notes": "Adds the real-cluster Kubernetes intelligent scheduling E2E acceptance checklist (E2E-CLUSTER-ACCEPTANCE.md) and read-safe-by-default verification script (scripts/verify-k8s-scheduling-e2e.sh) covering CRDs, zero-trust gateway authz, v1beta1 warm-pool one-way claims, ResourceQuota backpressure, and C3/C4 kata-fc isolation."
+    },
+    {
+      "id": "delegra-employee-experts-api",
+      "kind": "fork-only",
+      "status": "active",
+      "commits": [
+        "3db7733ce66f1697305109ba28957c5ea863cbb7",
+        "3d2771347249dba677c86c385533b4b82a89ca65"
+      ],
+      "owner": "hrygo",
+      "reviewBy": "2026-12-24",
+      "verifiedAt": "2026-11-24",
+      "retireWhen": "An accepted upstream release provides the CORP-DSH-EXPERT-001 restricted employee experts catalog, scope-check, and task lifecycle API.",
+      "notes": "Implements Stage B of CORP-DSH-EXPERT-001: restricted employee experts API (/api/v1/employee/experts, /api/v1/employee/experts/scope-check, /api/v1/employee/expert-tasks, followup, cancel) mounted before actorMiddleware in server/src/app.ts with fail-closed Bearer auth when unconfigured, owner-only ACL, idempotency replay & request digest conflict detection, and Vitest route coverage."
     }
   ]
 }
