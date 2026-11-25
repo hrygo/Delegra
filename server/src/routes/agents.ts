@@ -7259,7 +7259,7 @@ export function agentRoutes(
 
     const visibleRows = await filterPrivateEmployeeExpertRuns(db, companyId, req.actor, rows);
     const projections = await executionProjectionsForRuns(db, companyId, visibleRows.map(run => run.id));
-    res.json(await runRedactions.redactForRuns(companyId, await Promise.all(visibleRows.map(async (run) => !(await actorCanReadRun(req, run)) ? redactHeartbeatRunListRow(run) : ({
+    res.json(await runRedactions.redactForRuns(companyId, await Promise.all(visibleRows.map(async (run) => !(await canActorReadHeartbeatRun(db, access, req.actor, run)) ? redactHeartbeatRunListRow(run) : ({
       ...heartbeat.decorateActiveRunStatus(run),
       agentAppearance: resolveAgentAppearance(run.agentAppearance, run.agentId),
       avatarUrl: agentAvatarUrl(resolveAgentAppearance(run.agentAppearance, run.agentId), 512),

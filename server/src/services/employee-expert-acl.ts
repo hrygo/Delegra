@@ -104,6 +104,15 @@ export function filterPrivateEmployeeExpertRunsFromRecords<
   });
 }
 
+function hasQueryableDb(db: unknown): db is Db {
+  return Boolean(
+    db &&
+      typeof (db as { select?: unknown }).select === "function" &&
+      (typeof (db as { transaction?: unknown }).transaction === "function" ||
+        typeof (db as { execute?: unknown }).execute === "function"),
+  );
+}
+
 /**
  * Database-backed filter used by generic `/heartbeat-runs` and `/live-runs`
  * endpoints to strip unauthorized private employee expert runs before
@@ -132,28 +141,30 @@ export async function filterPrivateEmployeeExpertRuns<
     runId: string | null;
   }> = [];
 
-  try {
-    matchedTasks = await db
-      .select({
-        taskId: employeeExpertTasks.taskId,
-        orgId: employeeExpertTasks.orgId,
-        issuer: employeeExpertTasks.issuer,
-        responsibleUserId: employeeExpertTasks.responsibleUserId,
-        visibility: employeeExpertTasks.visibility,
-        originClient: employeeExpertTasks.originClient,
-        runId: employeeExpertTasks.runId,
-      })
-      .from(employeeExpertTasks)
-      .where(
-        and(
-          eq(employeeExpertTasks.orgId, companyId),
-          inArray(employeeExpertTasks.runId, runIds),
-        ),
-      );
-  } catch {
-    // If table is not yet migrated in an isolated legacy test fixture, fall back
-    // to contextSnapshot inspection only.
-    matchedTasks = [];
+  if (hasQueryableDb(db)) {
+    try {
+      matchedTasks = await db
+        .select({
+          taskId: employeeExpertTasks.taskId,
+          orgId: employeeExpertTasks.orgId,
+          issuer: employeeExpertTasks.issuer,
+          responsibleUserId: employeeExpertTasks.responsibleUserId,
+          visibility: employeeExpertTasks.visibility,
+          originClient: employeeExpertTasks.originClient,
+          runId: employeeExpertTasks.runId,
+        })
+        .from(employeeExpertTasks)
+        .where(
+          and(
+            eq(employeeExpertTasks.orgId, companyId),
+            inArray(employeeExpertTasks.runId, runIds),
+          ),
+        );
+    } catch {
+      // If table is not yet migrated in an isolated legacy test fixture, fall back
+      // to contextSnapshot inspection only.
+      matchedTasks = [];
+    }
   }
 
   const byRunId = new Map<string, PrivateEmployeeExpertTaskDescriptor>();
@@ -224,6 +235,7 @@ export async function canActorReceivePrivateEmployeeExpertEvent(
         : null;
 
   if (!runId && !taskId) return true;
+  if (!hasQueryableDb(db)) return true;
 
   try {
     const rows = taskId
