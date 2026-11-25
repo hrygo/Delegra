@@ -3158,6 +3158,13 @@
       "when": 1795130636762,
       "tag": "0452_gigantic_owl",
       "breakpoints": true
+    },
+    {
+      "idx": 453,
+      "version": "7",
+      "when": 1795560000000,
+      "tag": "0453_employee_expert_tasks",
+      "breakpoints": true
     }
   ]
 }

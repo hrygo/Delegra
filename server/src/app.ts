@@ -18,6 +18,10 @@ import {
   createProductionEmployeeTokenExchangeService,
   type EmployeeTokenExchangeService,
 } from "./services/employee-token-exchange.js";
+import {
+  createPgEmployeeExpertsAdapters,
+  createPgEmployeeExpertsStore,
+} from "./services/employee-experts-store.js";
 import { connectionEventWakeRoutes } from "./routes/connection-event-wake.js";
 import { registerGitHubReviewProjectionWork } from "./services/chat-channels/github/review-projection-work.js";
 import { finishServiceShutdown } from "./shutdown.js";
@@ -609,10 +613,15 @@ export async function createApp(
       instanceId: opts.instanceId,
     });
   app.locals.employeeTokenExchange = employeeTokenExchange;
+  const employeeExpertsStore = createPgEmployeeExpertsStore(db);
+  const employeeExpertsAdapters = createPgEmployeeExpertsAdapters(db);
   const employeeExperts =
     opts.employeeExperts ??
     createEmployeeExpertsService({
+      store: employeeExpertsStore,
       verifyCredential: employeeTokenExchange.verifyCredential,
+      listOrgExperts: employeeExpertsAdapters.listOrgExperts,
+      checkSessionScope: employeeExpertsAdapters.checkSessionScope,
     });
   app.locals.employeeExperts = employeeExperts;
   app.use(

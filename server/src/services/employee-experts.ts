@@ -1,4 +1,9 @@
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
+import {
+  createInMemoryEmployeeExpertsStore,
+  type DispatchIntentRecord,
+  type EmployeeExpertsStore,
+} from "./employee-experts-store.js";
 
 export type EmployeeExpertErrorCode =
   | "EXPERT_AUTH_INVALID"
@@ -185,8 +190,12 @@ export interface EmployeeExpertsServiceOptions {
   }) => Promise<{ scopeVerified: boolean; results: EmployeeScopeCheckItem[] }>;
   /** Returns true when cross-task context isolation is verified by the target runner. */
   isIsolationVerified?: () => boolean;
-  /** Optional durable dispatch callback executed within task acceptance. */
+  /** Optional durable persistence store (PostgreSQL in production; in-memory by default). */
+  store?: EmployeeExpertsStore;
+  /** Optional durable dispatch callback executed after atomic task commit. */
   onTaskAccepted?: (task: EmployeeExpertTaskRecord) => Promise<void> | void;
+  /** Optional hook injected before transaction commit (for rollback fault-injection tests). */
+  beforeTaskCommit?: () => Promise<void> | void;
   /** Optional explicit audit subjects allowed to read private tasks under compliance policy. */
   auditSubjects?: ReadonlySet<string>;
   /** Optional HMAC secret for signing opaque pagination cursors. */
@@ -244,13 +253,10 @@ export function createEmployeeExpertsService(options: EmployeeExpertsServiceOpti
   const now = options.now ?? (() => Date.now());
   const cursorSecret = options.cursorSecret ?? randomUUID();
   const auditSubjects = options.auditSubjects;
+  const store = options.store ?? createInMemoryEmployeeExpertsStore();
 
+  // In-memory mirror kept in sync for synchronous unit-test helpers.
   const tasksById = new Map<string, EmployeeExpertTaskRecord>();
-  const idempotencyReceipts = new Map<string, { payloadDigest: string; taskId: string }>();
-  const followupReceipts = new Map<
-    string,
-    { payloadDigest: string; taskId: string; requestId: string; status: EmployeeExpertTaskStatus; runGeneration: number }
-  >();
 
   function signCursor(payload: Record<string, unknown>): string {
     const encoded = Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
@@ -529,7 +535,6 @@ export function createEmployeeExpertsService(options: EmployeeExpertsServiceOpti
     const cleanScope = input.delegationScope.trim();
     const cleanRequestId = input.requestId.trim();
     const cleanDigest = input.payloadDigest.trim();
-    const idempKey = JSON.stringify([cred.orgId, cred.issuer, cred.subject, "create_task", cleanRequestId]);
 
     // Evaluate current expert visibility & callable authorization BEFORE idempotent replay
     // so revoked replay returns 404 EXPERT_TASK_NOT_FOUND with zero taskId leakage (§7.1).
@@ -570,7 +575,13 @@ export function createEmployeeExpertsService(options: EmployeeExpertsServiceOpti
       }
     }
 
-    const existingReceipt = idempotencyReceipts.get(idempKey);
+    const existingReceipt = await store.findIdempotencyReceipt({
+      orgId: cred.orgId,
+      issuer: cred.issuer,
+      subject: cred.subject,
+      op: "create_task",
+      requestId: cleanRequestId,
+    });
     if (existingReceipt) {
       if (existingReceipt.payloadDigest !== cleanDigest) {
         throw new EmployeeExpertsError(
@@ -578,10 +589,11 @@ export function createEmployeeExpertsService(options: EmployeeExpertsServiceOpti
           "requestId was already used with a different payloadDigest.",
         );
       }
-      const existingTask = tasksById.get(existingReceipt.taskId);
+      const existingTask = await store.findTaskById(existingReceipt.taskId);
       if (!existingTask || !expertVisible || !expertCallable || !isPrivateTaskVisibleTo(existingTask, cred, auditSubjects)) {
         throw new EmployeeExpertsError("EXPERT_TASK_NOT_FOUND", "Task is not accessible.");
       }
+      tasksById.set(existingTask.taskId, existingTask);
       return {
         httpStatus: 200 as const,
         body: {
@@ -633,12 +645,65 @@ export function createEmployeeExpertsService(options: EmployeeExpertsServiceOpti
       artifacts: [],
     };
 
-    tasksById.set(task.taskId, task);
-    idempotencyReceipts.set(idempKey, { payloadDigest: cleanDigest, taskId: task.taskId });
+    const atomicResult = await store.acceptTaskAtomically({
+      task,
+      receipt: {
+        orgId: cred.orgId,
+        issuer: cred.issuer,
+        subject: cred.subject,
+        op: "create_task",
+        requestId: cleanRequestId,
+        taskId: task.taskId,
+        payloadDigest: cleanDigest,
+        status: task.status,
+        runGeneration: task.runGeneration,
+      },
+      dispatchIntent: {
+        taskId: task.taskId,
+        orgId: task.orgId,
+        expertId: task.expertId,
+        runGeneration: task.runGeneration,
+        kind: "initial",
+        payload: {
+          delegationScope: task.delegationScope,
+          originSessionRef: task.originSessionRef,
+          taskText: task.taskText,
+          reuseRefs: task.reuseRefs,
+          requestId: task.requestId,
+        },
+        status: "pending",
+      },
+      beforeCommitHook: options.beforeTaskCommit,
+    });
+
+    if (!atomicResult.created) {
+      if (atomicResult.receipt.payloadDigest !== cleanDigest) {
+        throw new EmployeeExpertsError(
+          "EXPERT_IDEMPOTENCY_CONFLICT",
+          "requestId was already used with a different payloadDigest.",
+        );
+      }
+      tasksById.set(atomicResult.task.taskId, atomicResult.task);
+      return {
+        httpStatus: 200 as const,
+        body: {
+          scope: toScopeEnvelope(cred),
+          taskId: atomicResult.task.taskId,
+          requestId: atomicResult.task.requestId,
+          status: atomicResult.task.status,
+          acceptedAt: atomicResult.task.acceptedAt,
+          runGeneration: atomicResult.task.runGeneration,
+          resultVersion: atomicResult.task.resultVersion,
+          idempotentReplay: true,
+        },
+      };
+    }
+
+    tasksById.set(atomicResult.task.taskId, atomicResult.task);
 
     if (options.onTaskAccepted) {
       try {
-        await options.onTaskAccepted(task);
+        await options.onTaskAccepted(atomicResult.task);
       } catch {
         throw new EmployeeExpertsError(
           "EXPERT_ACCEPTANCE_UNKNOWN",
@@ -651,22 +716,23 @@ export function createEmployeeExpertsService(options: EmployeeExpertsServiceOpti
       httpStatus: 201 as const,
       body: {
         scope: toScopeEnvelope(cred),
-        taskId: task.taskId,
-        requestId: task.requestId,
-        status: task.status,
-        acceptedAt: task.acceptedAt,
-        runGeneration: task.runGeneration,
-        resultVersion: task.resultVersion,
+        taskId: atomicResult.task.taskId,
+        requestId: atomicResult.task.requestId,
+        status: atomicResult.task.status,
+        acceptedAt: atomicResult.task.acceptedAt,
+        runGeneration: atomicResult.task.runGeneration,
+        resultVersion: atomicResult.task.resultVersion,
         idempotentReplay: false,
       },
     };
   }
 
-  function requireVisibleTask(taskId: string, cred: EmployeeCredentialContext): EmployeeExpertTaskRecord {
-    const task = tasksById.get(taskId.trim());
+  async function requireVisibleTask(taskId: string, cred: EmployeeCredentialContext): Promise<EmployeeExpertTaskRecord> {
+    const task = await store.findTaskById(taskId.trim());
     if (!task || !isPrivateTaskVisibleTo(task, cred, auditSubjects)) {
       throw new EmployeeExpertsError("EXPERT_TASK_NOT_FOUND", "Task does not exist or is not accessible.");
     }
+    tasksById.set(task.taskId, task);
     return task;
   }
 
@@ -675,12 +741,17 @@ export function createEmployeeExpertsService(options: EmployeeExpertsServiceOpti
     if (!isNonEmptyString(input.requestId)) {
       throw new EmployeeExpertsError("EXPERT_REQUEST_INVALID", "requestId is required.");
     }
-    const idempKey = JSON.stringify([cred.orgId, cred.issuer, cred.subject, "create_task", input.requestId.trim()]);
-    const receipt = idempotencyReceipts.get(idempKey);
+    const receipt = await store.findIdempotencyReceipt({
+      orgId: cred.orgId,
+      issuer: cred.issuer,
+      subject: cred.subject,
+      op: "create_task",
+      requestId: input.requestId.trim(),
+    });
     if (!receipt) {
       throw new EmployeeExpertsError("EXPERT_TASK_NOT_FOUND", "Task request does not exist or is not accessible.");
     }
-    const task = requireVisibleTask(receipt.taskId, cred);
+    const task = await requireVisibleTask(receipt.taskId, cred);
     return {
       scope: toScopeEnvelope(cred),
       taskId: task.taskId,
@@ -698,7 +769,7 @@ export function createEmployeeExpertsService(options: EmployeeExpertsServiceOpti
     if (!isNonEmptyString(input.taskId)) {
       throw new EmployeeExpertsError("EXPERT_REQUEST_INVALID", "taskId is required.");
     }
-    const task = requireVisibleTask(input.taskId, cred);
+    const task = await requireVisibleTask(input.taskId, cred);
     return {
       scope: toScopeEnvelope(cred),
       taskId: task.taskId,
@@ -715,7 +786,7 @@ export function createEmployeeExpertsService(options: EmployeeExpertsServiceOpti
     if (!isNonEmptyString(input.taskId)) {
       throw new EmployeeExpertsError("EXPERT_REQUEST_INVALID", "taskId is required.");
     }
-    const task = requireVisibleTask(input.taskId, cred);
+    const task = await requireVisibleTask(input.taskId, cred);
     return {
       scope: toScopeEnvelope(cred),
       taskId: task.taskId,
@@ -750,15 +821,60 @@ export function createEmployeeExpertsService(options: EmployeeExpertsServiceOpti
         "taskId, requestId, taskText, and payloadDigest are required.",
       );
     }
-    const task = requireVisibleTask(input.taskId, cred);
+    const task = await requireVisibleTask(input.taskId, cred);
     if (task.responsibleUserId !== cred.subject || task.issuer !== cred.issuer) {
       throw new EmployeeExpertsError("EXPERT_TASK_NOT_FOUND", "Task does not exist or is not accessible.");
     }
 
+    // Re-check employee callable permission and expert acceptingTasks === 'accepting'
+    // BEFORE enqueuing a followup (CORP-DSH-EXPERT-001 §7.2).
+    if (options.listOrgExperts) {
+      const cat = await options.listOrgExperts({
+        orgId: cred.orgId,
+        issuer: cred.issuer,
+        subject: cred.subject,
+      });
+      const found = cat.items.find((item) => item.expertId === task.expertId && item.access.readable);
+      if (!found) {
+        throw new EmployeeExpertsError("EXPERT_NOT_FOUND", "Expert does not exist or is not visible.");
+      }
+      if (!found.access.callableInOrg) {
+        throw new EmployeeExpertsError("EXPERT_CALL_FORBIDDEN", "Employee no longer has permission to call this expert.");
+      }
+      if (found.availability.acceptingTasks !== "accepting") {
+        throw new EmployeeExpertsError("EXPERT_NOT_ACCEPTING", "Expert is currently not accepting followups.");
+      }
+    }
+    if (options.checkSessionScope) {
+      const sc = await options.checkSessionScope({
+        orgId: cred.orgId,
+        issuer: cred.issuer,
+        subject: cred.subject,
+        delegationScope: task.delegationScope,
+        expertIds: [task.expertId],
+      });
+      if (!sc.scopeVerified) {
+        throw new EmployeeExpertsError("EXPERT_SCOPE_UNVERIFIED", "Session delegation scope could not be verified.");
+      }
+      const row = sc.results.find((r) => r.expertId === task.expertId);
+      if (!row || !row.callableInScope) {
+        throw new EmployeeExpertsError("EXPERT_CALL_FORBIDDEN", "Employee no longer has permission to call this expert in scope.");
+      }
+      if (row.acceptingTasks !== "accepting") {
+        throw new EmployeeExpertsError("EXPERT_NOT_ACCEPTING", "Expert is currently not accepting followups.");
+      }
+    }
+
     const cleanReqId = input.requestId.trim();
     const cleanDigest = input.payloadDigest.trim();
-    const fKey = JSON.stringify([cred.orgId, cred.issuer, cred.subject, "followup", task.taskId, cleanReqId]);
-    const existing = followupReceipts.get(fKey);
+    const followupKey = {
+      orgId: cred.orgId,
+      issuer: cred.issuer,
+      subject: cred.subject,
+      op: "followup" as const,
+      requestId: `${task.taskId}:${cleanReqId}`,
+    };
+    const existing = await store.findIdempotencyReceipt(followupKey);
     if (existing) {
       if (existing.payloadDigest !== cleanDigest) {
         throw new EmployeeExpertsError(
@@ -771,7 +887,7 @@ export function createEmployeeExpertsService(options: EmployeeExpertsServiceOpti
         body: {
           scope: toScopeEnvelope(cred),
           taskId: existing.taskId,
-          requestId: existing.requestId,
+          requestId: cleanReqId,
           status: existing.status,
           runGeneration: existing.runGeneration,
           idempotentReplay: true,
@@ -783,25 +899,46 @@ export function createEmployeeExpertsService(options: EmployeeExpertsServiceOpti
       throw new EmployeeExpertsError("EXPERT_TASK_STATE_CONFLICT", "Cannot submit a followup to a terminal task.");
     }
 
-    task.runGeneration += 1;
-    task.status = "queued";
-    const receipt = {
-      payloadDigest: cleanDigest,
+    const atomic = await store.createFollowupAtomically({
       taskId: task.taskId,
-      requestId: cleanReqId,
-      status: task.status,
-      runGeneration: task.runGeneration,
-    };
-    followupReceipts.set(fKey, receipt);
+      receipt: {
+        ...followupKey,
+        taskId: task.taskId,
+        payloadDigest: cleanDigest,
+      },
+      taskText: input.taskText,
+      reuseRefs: Array.isArray(input.reuseRefs) ? input.reuseRefs.filter(isNonEmptyString) : [],
+    });
+    tasksById.set(atomic.task.taskId, atomic.task);
+
+    if (!atomic.created) {
+      if (atomic.receipt.payloadDigest !== cleanDigest) {
+        throw new EmployeeExpertsError(
+          "EXPERT_IDEMPOTENCY_CONFLICT",
+          "Followup requestId was already used with a different payloadDigest.",
+        );
+      }
+      return {
+        httpStatus: 200 as const,
+        body: {
+          scope: toScopeEnvelope(cred),
+          taskId: atomic.receipt.taskId,
+          requestId: cleanReqId,
+          status: atomic.receipt.status,
+          runGeneration: atomic.receipt.runGeneration,
+          idempotentReplay: true,
+        },
+      };
+    }
 
     return {
       httpStatus: 201 as const,
       body: {
         scope: toScopeEnvelope(cred),
-        taskId: receipt.taskId,
-        requestId: receipt.requestId,
-        status: receipt.status,
-        runGeneration: receipt.runGeneration,
+        taskId: atomic.receipt.taskId,
+        requestId: cleanReqId,
+        status: atomic.receipt.status,
+        runGeneration: atomic.receipt.runGeneration,
         idempotentReplay: false,
       },
     };
@@ -812,23 +949,26 @@ export function createEmployeeExpertsService(options: EmployeeExpertsServiceOpti
     if (!isNonEmptyString(input.taskId)) {
       throw new EmployeeExpertsError("EXPERT_REQUEST_INVALID", "taskId is required.");
     }
-    const task = requireVisibleTask(input.taskId, cred);
+    const task = await requireVisibleTask(input.taskId, cred);
     if (task.responsibleUserId !== cred.subject || task.issuer !== cred.issuer) {
       throw new EmployeeExpertsError("EXPERT_TASK_NOT_FOUND", "Task does not exist or is not accessible.");
     }
-    // Preserve terminal completed state if task finished in the race window (§7.2).
-    if (!TERMINAL_TASK_STATUSES.has(task.status)) {
-      task.cancelRequested = true;
-    }
+    const updated = await store.cancelTask({
+      taskId: task.taskId,
+      orgId: task.orgId,
+      expertId: task.expertId,
+    });
+    const finalTask = updated ?? task;
+    tasksById.set(finalTask.taskId, finalTask);
     return {
       scope: toScopeEnvelope(cred),
-      taskId: task.taskId,
-      cancelRequested: task.cancelRequested,
-      status: task.status,
+      taskId: finalTask.taskId,
+      cancelRequested: finalTask.cancelRequested,
+      status: finalTask.status,
     };
   }
 
-  /** Internal helper for tests/runtime updates with runGeneration fencing (§6.2). */
+  /** Synchronous helper for in-memory tests with runGeneration fencing (§6.2). */
   function publishTaskResult(input: {
     taskId: string;
     runId: string;
@@ -855,11 +995,30 @@ export function createEmployeeExpertsService(options: EmployeeExpertsServiceOpti
     task.resultVersion += 1;
     if (input.sources) task.sources = [...input.sources];
     if (input.artifacts) task.artifacts = [...input.artifacts];
+    void store.publishTaskResult(input).catch(() => undefined);
     return task;
+  }
+
+  async function publishTaskResultAsync(input: {
+    taskId: string;
+    runId: string;
+    runGeneration: number;
+    status: EmployeeExpertTaskStatus;
+    result: unknown;
+    sources?: string[];
+    artifacts?: Array<{ id: string; label?: string; url?: string }>;
+  }): Promise<EmployeeExpertTaskRecord> {
+    const updated = await store.publishTaskResult(input);
+    tasksById.set(updated.taskId, updated);
+    return updated;
   }
 
   function listAllTasksForAclAudit(): EmployeeExpertTaskRecord[] {
     return Array.from(tasksById.values());
+  }
+
+  async function listDispatchIntents(taskId?: string): Promise<DispatchIntentRecord[]> {
+    return store.listDispatchIntents(taskId);
   }
 
   return {
@@ -872,7 +1031,9 @@ export function createEmployeeExpertsService(options: EmployeeExpertsServiceOpti
     createFollowup,
     cancelTask,
     publishTaskResult,
+    publishTaskResultAsync,
     listAllTasksForAclAudit,
+    listDispatchIntents,
   };
 }
 
