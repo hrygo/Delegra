@@ -22,6 +22,7 @@ import {
   createPgEmployeeExpertsAdapters,
   createPgEmployeeExpertsStore,
 } from "./services/employee-experts-store.js";
+import { createRuntimeIsolationProbe } from "./services/employee-expert-isolation.js";
 import { connectionEventWakeRoutes } from "./routes/connection-event-wake.js";
 import { registerGitHubReviewProjectionWork } from "./services/chat-channels/github/review-projection-work.js";
 import { finishServiceShutdown } from "./shutdown.js";
@@ -622,6 +623,7 @@ export async function createApp(
       verifyCredential: employeeTokenExchange.verifyCredential,
       listOrgExperts: employeeExpertsAdapters.listOrgExperts,
       checkSessionScope: employeeExpertsAdapters.checkSessionScope,
+      isIsolationVerified: createRuntimeIsolationProbe(),
     });
   app.locals.employeeExperts = employeeExperts;
   app.use(

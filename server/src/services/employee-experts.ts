@@ -4,6 +4,12 @@ import {
   type DispatchIntentRecord,
   type EmployeeExpertsStore,
 } from "./employee-experts-store.js";
+import {
+  buildIsolatedEmployeeTaskExecutionContext,
+  resolveReadOnlyReuseRefs,
+  type ReadOnlyReuseRefSnapshot,
+  type ReuseRefAuthorizer,
+} from "./employee-expert-isolation.js";
 
 export type EmployeeExpertErrorCode =
   | "EXPERT_AUTH_INVALID"
@@ -190,6 +196,8 @@ export interface EmployeeExpertsServiceOptions {
   }) => Promise<{ scopeVerified: boolean; results: EmployeeScopeCheckItem[] }>;
   /** Returns true when cross-task context isolation is verified by the target runner. */
   isIsolationVerified?: () => boolean;
+  /** Validates employee read permissions for explicit reuseRefs and returns read-only snapshots. */
+  authorizeReuseRef?: ReuseRefAuthorizer;
   /** Optional durable persistence store (PostgreSQL in production; in-memory by default). */
   store?: EmployeeExpertsStore;
   /** Optional durable dispatch callback executed after atomic task commit. */
@@ -619,6 +627,16 @@ export function createEmployeeExpertsService(options: EmployeeExpertsServiceOpti
       throw new EmployeeExpertsError("EXPERT_NOT_ACCEPTING", "Expert is currently not accepting tasks.");
     }
 
+    const cleanReuseRefs = Array.isArray(input.reuseRefs) ? input.reuseRefs.filter(isNonEmptyString) : [];
+    let reuseRefSnapshots: ReadOnlyReuseRefSnapshot[] = [];
+    if (cleanReuseRefs.length > 0 && options.authorizeReuseRef) {
+      reuseRefSnapshots = await resolveReadOnlyReuseRefs({
+        refs: cleanReuseRefs,
+        cred,
+        authorizeRef: options.authorizeReuseRef,
+      });
+    }
+
     const task: EmployeeExpertTaskRecord = {
       taskId: `task_${randomUUID().replace(/-/g, "").slice(0, 16)}`,
       orgId: cred.orgId,
@@ -633,7 +651,7 @@ export function createEmployeeExpertsService(options: EmployeeExpertsServiceOpti
       requestId: cleanRequestId,
       payloadDigest: cleanDigest,
       taskText: input.taskText,
-      reuseRefs: Array.isArray(input.reuseRefs) ? input.reuseRefs.filter(isNonEmptyString) : [],
+      reuseRefs: cleanReuseRefs,
       status: "accepted",
       acceptedAt: new Date(now()).toISOString(),
       runId: null,
@@ -644,6 +662,8 @@ export function createEmployeeExpertsService(options: EmployeeExpertsServiceOpti
       sources: [],
       artifacts: [],
     };
+
+    const executionContext = buildIsolatedEmployeeTaskExecutionContext(task);
 
     const atomicResult = await store.acceptTaskAtomically({
       task,
@@ -669,6 +689,8 @@ export function createEmployeeExpertsService(options: EmployeeExpertsServiceOpti
           originSessionRef: task.originSessionRef,
           taskText: task.taskText,
           reuseRefs: task.reuseRefs,
+          reuseRefSnapshots,
+          executionContext,
           requestId: task.requestId,
         },
         status: "pending",
@@ -899,6 +921,15 @@ export function createEmployeeExpertsService(options: EmployeeExpertsServiceOpti
       throw new EmployeeExpertsError("EXPERT_TASK_STATE_CONFLICT", "Cannot submit a followup to a terminal task.");
     }
 
+    const cleanFollowupRefs = Array.isArray(input.reuseRefs) ? input.reuseRefs.filter(isNonEmptyString) : [];
+    if (cleanFollowupRefs.length > 0 && options.authorizeReuseRef) {
+      await resolveReadOnlyReuseRefs({
+        refs: cleanFollowupRefs,
+        cred,
+        authorizeRef: options.authorizeReuseRef,
+      });
+    }
+
     const atomic = await store.createFollowupAtomically({
       taskId: task.taskId,
       receipt: {
@@ -907,7 +938,7 @@ export function createEmployeeExpertsService(options: EmployeeExpertsServiceOpti
         payloadDigest: cleanDigest,
       },
       taskText: input.taskText,
-      reuseRefs: Array.isArray(input.reuseRefs) ? input.reuseRefs.filter(isNonEmptyString) : [],
+      reuseRefs: cleanFollowupRefs,
     });
     tasksById.set(atomic.task.taskId, atomic.task);
 
