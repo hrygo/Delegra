@@ -304,6 +304,7 @@ import {
   canActorReadWorkspaceOperation,
   redactHeartbeatRunListRow,
 } from "../services/heartbeat-run-privacy.js";
+import { filterPrivateEmployeeExpertRuns } from "../services/employee-expert-acl.js";
 import {
   PaperclipRunnerProviderProfileError,
   resolvePaperclipRunnerProviderProfile,
@@ -7110,7 +7111,8 @@ export function agentRoutes(
       : HEARTBEAT_RUN_LIST_DEFAULT_LIMIT;
     const summary = req.query.summary === "true" || req.query.summary === "1";
     const recentRuns = await heartbeat.list(companyId, agentId, limit, { summary });
-    const runs = req.query.latestFailuresOnly === "true" ? latestFailedRunsByAgent(recentRuns) : recentRuns;
+    const preFilteredRuns = await filterPrivateEmployeeExpertRuns(db, companyId, req.actor, recentRuns);
+    const runs = req.query.latestFailuresOnly === "true" ? latestFailedRunsByAgent(preFilteredRuns) : preFilteredRuns;
     const readDecisions = await getHeartbeatRunReadDecisions(db, access, req.actor, runs);
     res.json(await runRedactions.redactForRuns(companyId, runs.map((run, index) =>
       readDecisions[index] ? run : redactHeartbeatRunListRow(run)),
@@ -7249,8 +7251,9 @@ export function agentRoutes(
       rows = [...liveRuns, ...recentRuns];
     }
 
-    const projections = await executionProjectionsForRuns(db, companyId, rows.map(run => run.id));
-    res.json(await runRedactions.redactForRuns(companyId, await Promise.all(rows.map(async (run) => !(await actorCanReadRun(req, run)) ? redactHeartbeatRunListRow(run) : ({
+    const visibleRows = await filterPrivateEmployeeExpertRuns(db, companyId, req.actor, rows);
+    const projections = await executionProjectionsForRuns(db, companyId, visibleRows.map(run => run.id));
+    res.json(await runRedactions.redactForRuns(companyId, await Promise.all(visibleRows.map(async (run) => !(await actorCanReadRun(req, run)) ? redactHeartbeatRunListRow(run) : ({
       ...heartbeat.decorateActiveRunStatus(run),
       agentAppearance: resolveAgentAppearance(run.agentAppearance, run.agentId),
       avatarUrl: agentAvatarUrl(resolveAgentAppearance(run.agentAppearance, run.agentId), 512),

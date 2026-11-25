@@ -51,6 +51,7 @@ const { WebSocket, WebSocketServer } = require("ws") as {
 
 import { authorizationService, type AuthorizationActor } from "../services/authorization.js";
 import { getHeartbeatRunReadDecisions } from "../services/heartbeat-run-privacy.js";
+import { canActorReceivePrivateEmployeeExpertEvent } from "../services/employee-expert-acl.js";
 import { canActorReadCase } from "../services/case-access.js";
 
 interface UpgradeContext {
@@ -329,6 +330,7 @@ export function setupLiveEventsWebSocketServer(
         if (!run) return null;
         readBindings.push(run);
       }
+      if (!(await canActorReceivePrivateEmployeeExpertEvent(db, context!.actor, event))) return null;
       if ((await getHeartbeatRunReadDecisions(db, access, context!.actor, readBindings)).some(allowed => !allowed)) return null;
       if (["company_skill", "company_skill_source"].includes(String(payload.entityType)) && typeof payload.entityId === "string") {
         try {
