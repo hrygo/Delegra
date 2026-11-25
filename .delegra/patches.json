@@ -881,6 +881,19 @@
       "verifiedAt": "2026-11-25",
       "retireWhen": "An accepted upstream release enforces private employee expert task ACL filtering across heartbeat-runs, live-runs, WebSocket broadcasts, and share/reassign endpoints.",
       "notes": "Closes hrygo/Delegra#97. Adds server/src/services/employee-expert-acl.ts, wires pre-pagination/pre-redaction private run filtering into server/src/routes/agents.ts (/heartbeat-runs, /live-runs) and server/src/realtime/live-events-ws.ts, blocks share/reassign widening, and adds 4-role + auditor negative matrix tests."
+    },
+    {
+      "id": "delegra-employee-experts-runner-isolation",
+      "kind": "fork-only",
+      "status": "active",
+      "commits": [
+        "bc0e43d0e594a7fcbca1ca036670823e71d3879a"
+      ],
+      "owner": "hrygo",
+      "reviewBy": "2026-12-25",
+      "verifiedAt": "2026-11-25",
+      "retireWhen": "An accepted upstream release provides per-task employee expert runner context isolation, runGeneration fencing, read-only reuseRefs, and runtime isIsolationVerified() fail-closed probing.",
+      "notes": "Closes hrygo/Delegra#96. Adds server/src/services/employee-expert-isolation.ts, wires per-task isolated execution context + read-only reuseRefs validation into employee-experts.ts and createRuntimeIsolationProbe() into server/src/app.ts, and adds isolation/fencing/503 fail-closed tests."
     }
   ]
 }
