@@ -855,6 +855,19 @@
       "verifiedAt": "2026-11-25",
       "retireWhen": "An accepted upstream release provides RFC 8693 employee token exchange and production verifyCredential wiring for CORP-DSH-EXPERT-001.",
       "notes": "Closes hrygo/Delegra#99. Adds server/src/services/employee-token-exchange.ts (POST /oauth/token-exchange with RS256/ES256/EdDSA JWKS verification, <= min(300, remaining IAM TTL) cap, revocation checks, PostgreSQL active membership resolver), wires verifyCredential in server/src/app.ts, and adds unit/integration tests."
+    },
+    {
+      "id": "delegra-employee-experts-persistence",
+      "kind": "fork-only",
+      "status": "active",
+      "commits": [
+        "7d105eebc5595e1a3914d0d9c74c217b698b5e33"
+      ],
+      "owner": "hrygo",
+      "reviewBy": "2026-12-25",
+      "verifiedAt": "2026-11-25",
+      "retireWhen": "An accepted upstream release provides PostgreSQL single-transaction employee expert task persistence, authContinuityDigest tracking, and real directory/scope-check adapters.",
+      "notes": "Closes hrygo/Delegra#98. Adds packages/db/src/schema/employee_expert_tasks.ts, migration 0453_employee_expert_tasks.sql, server/src/services/employee-experts-store.ts (PostgreSQL single-transaction store + real listOrgExperts/checkSessionScope/reconcileAuthContinuityDigest adapters), wires them in server/src/app.ts, enforces pre-enqueue followup re-verification, and adds rollback/reconciliation/idempotency tests."
     }
   ]
 }
