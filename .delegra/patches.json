@@ -868,6 +868,19 @@
       "verifiedAt": "2026-11-25",
       "retireWhen": "An accepted upstream release provides PostgreSQL single-transaction employee expert task persistence, authContinuityDigest tracking, and real directory/scope-check adapters.",
       "notes": "Closes hrygo/Delegra#98. Adds packages/db/src/schema/employee_expert_tasks.ts, migration 0453_employee_expert_tasks.sql, server/src/services/employee-experts-store.ts (PostgreSQL single-transaction store + real listOrgExperts/checkSessionScope/reconcileAuthContinuityDigest adapters), wires them in server/src/app.ts, enforces pre-enqueue followup re-verification, and adds rollback/reconciliation/idempotency tests."
+    },
+    {
+      "id": "delegra-employee-experts-acl-isolation",
+      "kind": "fork-only",
+      "status": "active",
+      "commits": [
+        "317c017c23195f3336b6239f6317b4b41bb1de42"
+      ],
+      "owner": "hrygo",
+      "reviewBy": "2026-12-25",
+      "verifiedAt": "2026-11-25",
+      "retireWhen": "An accepted upstream release enforces private employee expert task ACL filtering across heartbeat-runs, live-runs, WebSocket broadcasts, and share/reassign endpoints.",
+      "notes": "Closes hrygo/Delegra#97. Adds server/src/services/employee-expert-acl.ts, wires pre-pagination/pre-redaction private run filtering into server/src/routes/agents.ts (/heartbeat-runs, /live-runs) and server/src/realtime/live-events-ws.ts, blocks share/reassign widening, and adds 4-role + auditor negative matrix tests."
     }
   ]
 }
