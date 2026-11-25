@@ -304,7 +304,10 @@ import {
   canActorReadWorkspaceOperation,
   redactHeartbeatRunListRow,
 } from "../services/heartbeat-run-privacy.js";
-import { filterPrivateEmployeeExpertRuns } from "../services/employee-expert-acl.js";
+import {
+  canActorReadPrivateEmployeeExpertRun,
+  filterPrivateEmployeeExpertRuns,
+} from "../services/employee-expert-acl.js";
 import {
   PaperclipRunnerProviderProfileError,
   resolvePaperclipRunnerProviderProfile,
@@ -347,9 +350,11 @@ const RUN_LOG_DEFAULT_LIMIT_BYTES = 256_000;
 const RUN_LOG_MAX_LIMIT_BYTES = 1024 * 1024;
 
 type RunReadBinding = {
+  id?: string | null;
   companyId: string;
   scopeKind?: "company" | "issue" | null;
   issueId?: string | null;
+  contextSnapshot?: unknown;
 };
 
 function readRunLogLimitBytes(value: unknown) {
@@ -817,6 +822,7 @@ export function agentRoutes(
   const strictSecretsMode = process.env.PAPERCLIP_SECRETS_STRICT_MODE === "true";
 
   async function actorCanReadRun(req: Request, run: RunReadBinding) {
+    if (!(await canActorReadPrivateEmployeeExpertRun(db, req.actor, run))) return false;
     return canActorReadHeartbeatRun(db, access, req.actor, run);
   }
 

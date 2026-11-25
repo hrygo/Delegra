@@ -758,11 +758,16 @@ export function createPgEmployeeExpertsAdapters(db: Db) {
     return rows[0]?.userId ?? subject;
   }
 
+  const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
   async function listOrgExperts(params: {
     orgId: string;
     issuer: string;
     subject: string;
   }): Promise<{ catalogVersion: string; completeness: CatalogCompleteness; items: EmployeeExpertRecord[] }> {
+    if (!UUID_RE.test(params.orgId)) {
+      return { catalogVersion: "cv_empty", completeness: "complete", items: [] };
+    }
     const userId = await resolveUserId(params.issuer, params.subject);
 
     const [orgAgents, memberships, grants] = await Promise.all([
@@ -870,8 +875,14 @@ export function createPgEmployeeExpertsAdapters(db: Db) {
     const projectMatch = /^project:(.+)$/i.exec(cleanScope);
     const isOrgDefaultScope = cleanScope === `org:${params.orgId}`;
 
+    if (!UUID_RE.test(params.orgId)) {
+      return { scopeVerified: false, results: [] };
+    }
     if (projectMatch) {
       const projectId = projectMatch[1]!.trim();
+      if (!UUID_RE.test(projectId)) {
+        return { scopeVerified: false, results: [] };
+      }
       const projMember = await db
         .select({ id: projectMemberships.id })
         .from(projectMemberships)

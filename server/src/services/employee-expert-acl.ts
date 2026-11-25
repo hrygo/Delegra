@@ -165,6 +165,28 @@ export async function filterPrivateEmployeeExpertRuns<
 }
 
 /**
+ * Direct-by-ID run read guard used by `actorCanReadRun` across
+ * `/heartbeat-runs/:runId`, `/events`, `/log`, `/cancel`, and
+ * `/workspace-operations` so unauthorized colleagues receive 404 (§6.1).
+ */
+export async function canActorReadPrivateEmployeeExpertRun(
+  db: Db,
+  actor: AuthorizationActor & { auditAuthorized?: boolean },
+  run: { id?: string | null; companyId: string; contextSnapshot?: unknown },
+  auditSubjects?: ReadonlySet<string>,
+): Promise<boolean> {
+  if (!run.id) return true;
+  const visible = await filterPrivateEmployeeExpertRuns(
+    db,
+    run.companyId,
+    actor,
+    [{ id: run.id, companyId: run.companyId, contextSnapshot: run.contextSnapshot }],
+    auditSubjects,
+  );
+  return visible.length === 1;
+}
+
+/**
  * Pure WebSocket broadcast filter for private employee expert task/run events (§6.1).
  */
 export function isPrivateEmployeeExpertEventVisibleToActor(

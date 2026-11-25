@@ -232,6 +232,20 @@ function resourceMatchesExpected(requestedResource: string, expectedResourceRoot
   return normalizedReq === normalizedExpected || normalizedReq.startsWith(`${normalizedExpected}/`);
 }
 
+function isSafeJwksUrl(rawUrl: string): boolean {
+  try {
+    const parsed = new URL(rawUrl);
+    if (parsed.protocol === "https:") return true;
+    if (parsed.protocol === "http:") {
+      const host = parsed.hostname.toLowerCase();
+      return host === "localhost" || host === "127.0.0.1" || host === "::1" || host === "[::1]";
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
 function createEnvJwksResolver(env: NodeJS.ProcessEnv): ((issuer: string, kid?: string) => Promise<readonly JsonWebKey[]>) | undefined {
   const staticJson = env.DELEGRA_IAM_JWKS_JSON?.trim();
   if (staticJson) {
@@ -246,7 +260,7 @@ function createEnvJwksResolver(env: NodeJS.ProcessEnv): ((issuer: string, kid?: 
   }
 
   const jwksUrl = env.DELEGRA_IAM_JWKS_URL?.trim();
-  if (!jwksUrl) return undefined;
+  if (!jwksUrl || !isSafeJwksUrl(jwksUrl)) return undefined;
 
   let cachedKeys: JsonWebKey[] = [];
   let cachedAt = 0;
