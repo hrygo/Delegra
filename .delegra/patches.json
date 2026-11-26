@@ -889,13 +889,14 @@
       "commits": [
         "bc0e43d0e594a7fcbca1ca036670823e71d3879a",
         "7c7e12b1886c04df23ea3b53967682ec3ca277a8",
-        "d416ceccf2d75615e62a2197383b90584928cfc7"
+        "d416ceccf2d75615e62a2197383b90584928cfc7",
+        "0b2af833f5943a356dd30605478d0f65ea2d8b08"
       ],
       "owner": "hrygo",
       "reviewBy": "2026-12-25",
-      "verifiedAt": "2026-11-25",
+      "verifiedAt": "2026-11-26",
       "retireWhen": "An accepted upstream release provides per-task employee expert runner context isolation, runGeneration fencing, read-only reuseRefs, and runtime isIsolationVerified() fail-closed probing.",
-      "notes": "Closes hrygo/Delegra#96. Adds server/src/services/employee-expert-isolation.ts, wires per-task isolated execution context + read-only reuseRefs validation into employee-experts.ts and createRuntimeIsolationProbe() into server/src/app.ts, and adds isolation/fencing/503 fail-closed tests. Hardening commit adds official Drizzle 0453_snapshot.json (passing migration-snapshot-drift.test.ts), HTTPS/loopback guard on DELEGRA_IAM_JWKS_URL, UUID validation guard in PG adapters, and direct-by-ID private run 404 check in actorCanReadRun."
+      "notes": "Closes hrygo/Delegra#96. Adds server/src/services/employee-expert-isolation.ts, wires per-task isolated execution context + read-only reuseRefs validation into employee-experts.ts and createRuntimeIsolationProbe() into server/src/app.ts, and adds isolation/fencing/503 fail-closed tests. Hardening commit adds official Drizzle 0453_snapshot.json (passing migration-snapshot-drift.test.ts), HTTPS/loopback guard on DELEGRA_IAM_JWKS_URL, UUID validation guard in PG adapters, direct-by-ID private run 404 check in actorCanReadRun, mock-DB guard in employee-expert-acl.ts, and prevents resultVersion double-increment in publishTaskResult for in-memory stores."
     }
   ]
 }
