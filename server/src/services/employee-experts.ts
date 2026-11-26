@@ -261,6 +261,7 @@ export function createEmployeeExpertsService(options: EmployeeExpertsServiceOpti
   const now = options.now ?? (() => Date.now());
   const cursorSecret = options.cursorSecret ?? randomUUID();
   const auditSubjects = options.auditSubjects;
+  const usesExternalStore = Boolean(options.store);
   const store = options.store ?? createInMemoryEmployeeExpertsStore();
 
   // In-memory mirror kept in sync for synchronous unit-test helpers.
@@ -1026,7 +1027,9 @@ export function createEmployeeExpertsService(options: EmployeeExpertsServiceOpti
     task.resultVersion += 1;
     if (input.sources) task.sources = [...input.sources];
     if (input.artifacts) task.artifacts = [...input.artifacts];
-    void store.publishTaskResult(input).catch(() => undefined);
+    if (usesExternalStore) {
+      void store.publishTaskResult(input).catch(() => undefined);
+    }
     return task;
   }
 
