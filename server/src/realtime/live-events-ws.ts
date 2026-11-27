@@ -321,6 +321,7 @@ export function setupLiveEventsWebSocketServer(
       if (issueId) {
         readBindings.push({ companyId: event.companyId, scopeKind: "issue", issueId });
       }
+      let resolvedRun: { companyId: string; scopeKind: string | null; issueId: string | null } | null = null;
       if (runId) {
         const [run] = await db.select({
           companyId: heartbeatRuns.companyId,
@@ -328,9 +329,17 @@ export function setupLiveEventsWebSocketServer(
           issueId: heartbeatRuns.issueId,
         }).from(heartbeatRuns).where(and(eq(heartbeatRuns.id, runId), eq(heartbeatRuns.companyId, event.companyId)));
         if (!run) return null;
+        resolvedRun = run;
         readBindings.push(run);
       }
-      if (!(await canActorReceivePrivateEmployeeExpertEvent(db, context!.actor, event))) return null;
+      const isIssueScopedRunOnly =
+        Boolean(resolvedRun && resolvedRun.scopeKind === "issue" && resolvedRun.issueId) &&
+        typeof payload.employeeExpertTaskId !== "string" &&
+        payload.entityType !== "employee_expert_task" &&
+        payload.originClient !== "dsh";
+      if (!isIssueScopedRunOnly && !(await canActorReceivePrivateEmployeeExpertEvent(db, context!.actor, event))) {
+        return null;
+      }
       if ((await getHeartbeatRunReadDecisions(db, access, context!.actor, readBindings)).some(allowed => !allowed)) return null;
       if (["company_skill", "company_skill_source"].includes(String(payload.entityType)) && typeof payload.entityId === "string") {
         try {
