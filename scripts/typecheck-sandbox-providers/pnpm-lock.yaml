@@ -102,7 +102,7 @@ importers:
   ../../packages/plugins/sandbox-providers/kubernetes:
     dependencies:
       '@kubernetes/client-node':
-        specifier: ^1.0.0
+        specifier: ^1.1.1
         version: 1.4.0
       zod:
         specifier: ^4.6.6
