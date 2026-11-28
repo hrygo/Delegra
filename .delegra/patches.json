@@ -911,6 +911,19 @@
       "verifiedAt": "2026-11-28",
       "retireWhen": "An accepted upstream release provides the Stage B3-1 employee expert outbox dispatch worker with FOR UPDATE SKIP LOCKED claiming, lease heartbeat renewal, follow-up snapshot freezing, and deterministic UUIDv5 native issue derivation.",
       "notes": "Refs hrygo/Delegra#101 (Stage B3-1). Adds deriveExpertNativeIssueUuidV5 in employee-expert-isolation.ts, extends employee-experts-store.ts with follow-up reuseRefSnapshots/executionContext freezing and transactional outbox claiming/lease-renewal/backoff/dead-letter primitives, wires frozen reuseRefSnapshots in employee-experts.ts, introduces employee-expert-dispatch-worker.ts with 30s/90s lease heartbeat renewal, cancel short-circuit, stale runGeneration fencing, and fail-closed isolation checks, and adds unit test coverage in employee-expert-dispatch-worker.test.ts."
+    },
+    {
+      "id": "delegra-employee-experts-context-assembler",
+      "kind": "fork-only",
+      "status": "active",
+      "commits": [
+        "8c8514895e105423bb09beb826aaec6cf360d0db"
+      ],
+      "owner": "hrygo",
+      "reviewBy": "2026-12-28",
+      "verifiedAt": "2026-11-28",
+      "retireWhen": "An accepted upstream release provides the Stage B3-2 prefix-cache-safe expert session context assembler with structured Layer 2 compaction and tiered just-in-time Layer 3 read-only reuseRefs.",
+      "notes": "Refs hrygo/Delegra#101 (Stage B3-2). Adds server/src/services/employee-expert-context-assembler.ts implementing byte-stable Layer 1 static prefix caching, bounded structured Layer 2 task state compaction, tiered just-in-time Layer 3 reuseRefs (<= 4 KiB inline, > 4 KiB on-demand index + read-only /run/delegra-refs/<filename> staging with path-traversal and tag-breakout protection), conservative CJK/JSON dual token+char budgeting, and cold_start/hot_resume/cold_rebuild mode selection, with unit test coverage in server/src/__tests__/employee-expert-context-assembler.test.ts."
     }
   ]
 }
