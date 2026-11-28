@@ -898,6 +898,19 @@
       "verifiedAt": "2026-11-27",
       "retireWhen": "An accepted upstream release provides per-task employee expert runner context isolation, runGeneration fencing, read-only reuseRefs, and runtime isIsolationVerified() fail-closed probing.",
       "notes": "Closes hrygo/Delegra#96. Adds server/src/services/employee-expert-isolation.ts, wires per-task isolated execution context + read-only reuseRefs validation into employee-experts.ts and createRuntimeIsolationProbe() into server/src/app.ts, and adds isolation/fencing/503 fail-closed tests. Hardening commits add official Drizzle 0453_snapshot.json (passing migration-snapshot-drift.test.ts), HTTPS/loopback guard on DELEGRA_IAM_JWKS_URL, UUID validation guard in PG adapters, direct-by-ID private run 404 check in actorCanReadRun, mock-DB guard in employee-expert-acl.ts, prevent resultVersion double-increment in publishTaskResult for in-memory stores, and skip redundant employee_expert_tasks WebSocket ACL lookups for ordinary issue-scoped runs so live-events-run-read query budgets stay unchanged."
+    },
+    {
+      "id": "delegra-employee-experts-dispatch-worker",
+      "kind": "fork-only",
+      "status": "active",
+      "commits": [
+        "b26baf8a52aa8dd90868bcef18b5a50d52876d2b"
+      ],
+      "owner": "hrygo",
+      "reviewBy": "2026-12-28",
+      "verifiedAt": "2026-11-28",
+      "retireWhen": "An accepted upstream release provides the Stage B3-1 employee expert outbox dispatch worker with FOR UPDATE SKIP LOCKED claiming, lease heartbeat renewal, follow-up snapshot freezing, and deterministic UUIDv5 native issue derivation.",
+      "notes": "Refs hrygo/Delegra#101 (Stage B3-1). Adds deriveExpertNativeIssueUuidV5 in employee-expert-isolation.ts, extends employee-experts-store.ts with follow-up reuseRefSnapshots/executionContext freezing and transactional outbox claiming/lease-renewal/backoff/dead-letter primitives, wires frozen reuseRefSnapshots in employee-experts.ts, introduces employee-expert-dispatch-worker.ts with 30s/90s lease heartbeat renewal, cancel short-circuit, stale runGeneration fencing, and fail-closed isolation checks, and adds unit test coverage in employee-expert-dispatch-worker.test.ts."
     }
   ]
 }

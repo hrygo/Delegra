@@ -923,8 +923,9 @@ export function createEmployeeExpertsService(options: EmployeeExpertsServiceOpti
     }
 
     const cleanFollowupRefs = Array.isArray(input.reuseRefs) ? input.reuseRefs.filter(isNonEmptyString) : [];
+    let followupReuseRefSnapshots: ReadOnlyReuseRefSnapshot[] = [];
     if (cleanFollowupRefs.length > 0 && options.authorizeReuseRef) {
-      await resolveReadOnlyReuseRefs({
+      followupReuseRefSnapshots = await resolveReadOnlyReuseRefs({
         refs: cleanFollowupRefs,
         cred,
         authorizeRef: options.authorizeReuseRef,
@@ -940,6 +941,7 @@ export function createEmployeeExpertsService(options: EmployeeExpertsServiceOpti
       },
       taskText: input.taskText,
       reuseRefs: cleanFollowupRefs,
+      reuseRefSnapshots: followupReuseRefSnapshots,
     });
     tasksById.set(atomic.task.taskId, atomic.task);
 
