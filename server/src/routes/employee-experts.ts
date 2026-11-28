@@ -1,13 +1,18 @@
-import { Router, type Request, type Response } from "express";
+import express, { Router, type Request, type Response } from "express";
 import {
   EmployeeExpertsError,
   type EmployeeExpertsService,
 } from "../services/employee-experts.js";
+import {
+  EMPLOYEE_TOKEN_EXCHANGE_PATH,
+  type EmployeeTokenExchangeService,
+} from "../services/employee-token-exchange.js";
 
 export const EMPLOYEE_EXPERTS_API_PREFIX = "/api/v1/employee";
 
 export interface EmployeeExpertsRoutesOptions {
   service: EmployeeExpertsService;
+  tokenExchange?: EmployeeTokenExchangeService;
 }
 
 function extractBearerToken(headerValue: string | undefined): string | null {
@@ -41,11 +46,42 @@ function queryString(req: Request, key: string): string {
 
 /**
  * Restricted employee-scoped expert directory and private task acceptance API
- * implementing CORP-DSH-EXPERT-001 (§3, §4, §6, §7, §8).
+ * implementing CORP-DSH-EXPERT-001 (§2.3, §3, §4, §6, §7, §8).
  */
 export function employeeExpertsRoutes(options: EmployeeExpertsRoutesOptions) {
   const router = Router();
-  const { service } = options;
+  const { service, tokenExchange } = options;
+
+  router.post(
+    EMPLOYEE_TOKEN_EXCHANGE_PATH,
+    express.urlencoded({ extended: false, limit: "16kb" }),
+    async (req, res) => {
+      try {
+        applyNoStoreHeaders(res);
+        if (!tokenExchange) {
+          throw new EmployeeExpertsError(
+            "EXPERT_AUTH_INVALID",
+            "Employee token exchange is not enabled on this instance.",
+          );
+        }
+        const body = (req.body ?? {}) as Record<string, unknown>;
+        const result = await tokenExchange.exchangeToken({
+          grant_type: typeof body.grant_type === "string" ? body.grant_type : undefined,
+          subject_token: typeof body.subject_token === "string" ? body.subject_token : undefined,
+          subject_token_type:
+            typeof body.subject_token_type === "string" ? body.subject_token_type : undefined,
+          audience: typeof body.audience === "string" ? body.audience : undefined,
+          resource: typeof body.resource === "string" ? body.resource : undefined,
+          scope: typeof body.scope === "string" ? body.scope : undefined,
+          org_id: typeof body.org_id === "string" ? body.org_id : undefined,
+          orgId: typeof body.orgId === "string" ? body.orgId : undefined,
+        });
+        res.status(200).json(result);
+      } catch (error) {
+        sendError(res, error);
+      }
+    },
+  );
 
   router.get(`${EMPLOYEE_EXPERTS_API_PREFIX}/experts`, async (req, res) => {
     try {

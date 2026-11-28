@@ -305,6 +305,10 @@ import {
   redactHeartbeatRunListRow,
 } from "../services/heartbeat-run-privacy.js";
 import {
+  canActorReadPrivateEmployeeExpertRun,
+  filterPrivateEmployeeExpertRuns,
+} from "../services/employee-expert-acl.js";
+import {
   PaperclipRunnerProviderProfileError,
   resolvePaperclipRunnerProviderProfile,
   validatePaperclipRunnerDotConfig,
@@ -346,9 +350,11 @@ const RUN_LOG_DEFAULT_LIMIT_BYTES = 256_000;
 const RUN_LOG_MAX_LIMIT_BYTES = 1024 * 1024;
 
 type RunReadBinding = {
+  id?: string | null;
   companyId: string;
   scopeKind?: "company" | "issue" | null;
   issueId?: string | null;
+  contextSnapshot?: unknown;
 };
 
 function readRunLogLimitBytes(value: unknown) {
@@ -816,6 +822,7 @@ export function agentRoutes(
   const strictSecretsMode = process.env.PAPERCLIP_SECRETS_STRICT_MODE === "true";
 
   async function actorCanReadRun(req: Request, run: RunReadBinding) {
+    if (!(await canActorReadPrivateEmployeeExpertRun(db, req.actor, run))) return false;
     return canActorReadHeartbeatRun(db, access, req.actor, run);
   }
 
@@ -7110,7 +7117,8 @@ export function agentRoutes(
       : HEARTBEAT_RUN_LIST_DEFAULT_LIMIT;
     const summary = req.query.summary === "true" || req.query.summary === "1";
     const recentRuns = await heartbeat.list(companyId, agentId, limit, { summary });
-    const runs = req.query.latestFailuresOnly === "true" ? latestFailedRunsByAgent(recentRuns) : recentRuns;
+    const preFilteredRuns = await filterPrivateEmployeeExpertRuns(db, companyId, req.actor, recentRuns);
+    const runs = req.query.latestFailuresOnly === "true" ? latestFailedRunsByAgent(preFilteredRuns) : preFilteredRuns;
     const readDecisions = await getHeartbeatRunReadDecisions(db, access, req.actor, runs);
     res.json(await runRedactions.redactForRuns(companyId, runs.map((run, index) =>
       readDecisions[index] ? run : redactHeartbeatRunListRow(run)),
@@ -7249,8 +7257,9 @@ export function agentRoutes(
       rows = [...liveRuns, ...recentRuns];
     }
 
-    const projections = await executionProjectionsForRuns(db, companyId, rows.map(run => run.id));
-    res.json(await runRedactions.redactForRuns(companyId, await Promise.all(rows.map(async (run) => !(await actorCanReadRun(req, run)) ? redactHeartbeatRunListRow(run) : ({
+    const visibleRows = await filterPrivateEmployeeExpertRuns(db, companyId, req.actor, rows);
+    const projections = await executionProjectionsForRuns(db, companyId, visibleRows.map(run => run.id));
+    res.json(await runRedactions.redactForRuns(companyId, await Promise.all(visibleRows.map(async (run) => !(await canActorReadHeartbeatRun(db, access, req.actor, run)) ? redactHeartbeatRunListRow(run) : ({
       ...heartbeat.decorateActiveRunStatus(run),
       agentAppearance: resolveAgentAppearance(run.agentAppearance, run.agentId),
       avatarUrl: agentAvatarUrl(resolveAgentAppearance(run.agentAppearance, run.agentId), 512),

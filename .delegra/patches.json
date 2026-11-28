@@ -842,6 +842,62 @@
       "verifiedAt": "2026-11-24",
       "retireWhen": "An accepted upstream release provides the CORP-DSH-EXPERT-001 restricted employee experts catalog, scope-check, and task lifecycle API.",
       "notes": "Implements Stage B of CORP-DSH-EXPERT-001: restricted employee experts API (/api/v1/employee/experts, /api/v1/employee/experts/scope-check, /api/v1/employee/expert-tasks, followup, cancel) mounted before actorMiddleware in server/src/app.ts with fail-closed Bearer auth when unconfigured, owner-only ACL, idempotency replay & request digest conflict detection, and Vitest route coverage."
+    },
+    {
+      "id": "delegra-employee-token-exchange",
+      "kind": "fork-only",
+      "status": "active",
+      "commits": [
+        "12594b567279cf82d9b27e7c3643e921b12e61fc"
+      ],
+      "owner": "hrygo",
+      "reviewBy": "2026-12-25",
+      "verifiedAt": "2026-11-25",
+      "retireWhen": "An accepted upstream release provides RFC 8693 employee token exchange and production verifyCredential wiring for CORP-DSH-EXPERT-001.",
+      "notes": "Closes hrygo/Delegra#99. Adds server/src/services/employee-token-exchange.ts (POST /oauth/token-exchange with RS256/ES256/EdDSA JWKS verification, <= min(300, remaining IAM TTL) cap, revocation checks, PostgreSQL active membership resolver), wires verifyCredential in server/src/app.ts, and adds unit/integration tests."
+    },
+    {
+      "id": "delegra-employee-experts-persistence",
+      "kind": "fork-only",
+      "status": "active",
+      "commits": [
+        "7d105eebc5595e1a3914d0d9c74c217b698b5e33"
+      ],
+      "owner": "hrygo",
+      "reviewBy": "2026-12-25",
+      "verifiedAt": "2026-11-25",
+      "retireWhen": "An accepted upstream release provides PostgreSQL single-transaction employee expert task persistence, authContinuityDigest tracking, and real directory/scope-check adapters.",
+      "notes": "Closes hrygo/Delegra#98. Adds packages/db/src/schema/employee_expert_tasks.ts, migration 0453_employee_expert_tasks.sql, server/src/services/employee-experts-store.ts (PostgreSQL single-transaction store + real listOrgExperts/checkSessionScope/reconcileAuthContinuityDigest adapters), wires them in server/src/app.ts, enforces pre-enqueue followup re-verification, and adds rollback/reconciliation/idempotency tests."
+    },
+    {
+      "id": "delegra-employee-experts-acl-isolation",
+      "kind": "fork-only",
+      "status": "active",
+      "commits": [
+        "317c017c23195f3336b6239f6317b4b41bb1de42"
+      ],
+      "owner": "hrygo",
+      "reviewBy": "2026-12-25",
+      "verifiedAt": "2026-11-25",
+      "retireWhen": "An accepted upstream release enforces private employee expert task ACL filtering across heartbeat-runs, live-runs, WebSocket broadcasts, and share/reassign endpoints.",
+      "notes": "Closes hrygo/Delegra#97. Adds server/src/services/employee-expert-acl.ts, wires pre-pagination/pre-redaction private run filtering into server/src/routes/agents.ts (/heartbeat-runs, /live-runs) and server/src/realtime/live-events-ws.ts, blocks share/reassign widening, and adds 4-role + auditor negative matrix tests."
+    },
+    {
+      "id": "delegra-employee-experts-runner-isolation",
+      "kind": "fork-only",
+      "status": "active",
+      "commits": [
+        "bc0e43d0e594a7fcbca1ca036670823e71d3879a",
+        "7c7e12b1886c04df23ea3b53967682ec3ca277a8",
+        "d416ceccf2d75615e62a2197383b90584928cfc7",
+        "0b2af833f5943a356dd30605478d0f65ea2d8b08",
+        "5ca91c0887651ad18c171442091932cccaca6845"
+      ],
+      "owner": "hrygo",
+      "reviewBy": "2026-12-25",
+      "verifiedAt": "2026-11-27",
+      "retireWhen": "An accepted upstream release provides per-task employee expert runner context isolation, runGeneration fencing, read-only reuseRefs, and runtime isIsolationVerified() fail-closed probing.",
+      "notes": "Closes hrygo/Delegra#96. Adds server/src/services/employee-expert-isolation.ts, wires per-task isolated execution context + read-only reuseRefs validation into employee-experts.ts and createRuntimeIsolationProbe() into server/src/app.ts, and adds isolation/fencing/503 fail-closed tests. Hardening commits add official Drizzle 0453_snapshot.json (passing migration-snapshot-drift.test.ts), HTTPS/loopback guard on DELEGRA_IAM_JWKS_URL, UUID validation guard in PG adapters, direct-by-ID private run 404 check in actorCanReadRun, mock-DB guard in employee-expert-acl.ts, prevent resultVersion double-increment in publishTaskResult for in-memory stores, and skip redundant employee_expert_tasks WebSocket ACL lookups for ordinary issue-scoped runs so live-events-run-read query budgets stay unchanged."
     }
   ]
 }

@@ -282,3 +282,9 @@ export { projectTaskExecutionPolicies, executionAdmissions, executionAdmissionPr
 export { modelReferenceRates } from "./model_reference_rates.js";
 export { budgetEvaluationWork } from "./budget_evaluation_work.js";
 export { nativeProviderArtifacts, nativeProviderArtifactReferences } from "./native_provider_artifacts.js";
+export {
+  employeeExpertTasks,
+  employeeExpertIdempotencyReceipts,
+  employeeExpertDispatchIntents,
+  employeeExpertAuthContinuity,
+} from "./employee_expert_tasks.js";

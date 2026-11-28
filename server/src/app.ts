@@ -14,6 +14,15 @@ import {
   createEmployeeExpertsService,
   type EmployeeExpertsService,
 } from "./services/employee-experts.js";
+import {
+  createProductionEmployeeTokenExchangeService,
+  type EmployeeTokenExchangeService,
+} from "./services/employee-token-exchange.js";
+import {
+  createPgEmployeeExpertsAdapters,
+  createPgEmployeeExpertsStore,
+} from "./services/employee-experts-store.js";
+import { createRuntimeIsolationProbe } from "./services/employee-expert-isolation.js";
 import { connectionEventWakeRoutes } from "./routes/connection-event-wake.js";
 import { registerGitHubReviewProjectionWork } from "./services/chat-channels/github/review-projection-work.js";
 import { finishServiceShutdown } from "./shutdown.js";
@@ -494,6 +503,8 @@ export async function createApp(
     expertGatewayAuthz?: ExpertGatewayAuthorizationService;
     /** Optional override for the restricted employee experts API service (CORP-DSH-EXPERT-001). */
     employeeExperts?: EmployeeExpertsService;
+    /** Optional override for the RFC 8693 employee token exchange service (CORP-DSH-EXPERT-001 §2.3). */
+    employeeTokenExchange?: EmployeeTokenExchangeService;
   },
 ) {
   const app = express();
@@ -597,10 +608,30 @@ export async function createApp(
   // Restricted employee experts API (CORP-DSH-EXPERT-001) authenticates via
   // RFC 8693 exchanged employee bearer tokens rather than user cookies or
   // agent API keys, so mount before actorMiddleware (fail-closed when unset).
+  const employeeTokenExchange =
+    opts.employeeTokenExchange ??
+    createProductionEmployeeTokenExchangeService(db, {
+      instanceId: opts.instanceId,
+    });
+  app.locals.employeeTokenExchange = employeeTokenExchange;
+  const employeeExpertsStore = createPgEmployeeExpertsStore(db);
+  const employeeExpertsAdapters = createPgEmployeeExpertsAdapters(db);
   const employeeExperts =
-    opts.employeeExperts ?? createEmployeeExpertsService();
+    opts.employeeExperts ??
+    createEmployeeExpertsService({
+      store: employeeExpertsStore,
+      verifyCredential: employeeTokenExchange.verifyCredential,
+      listOrgExperts: employeeExpertsAdapters.listOrgExperts,
+      checkSessionScope: employeeExpertsAdapters.checkSessionScope,
+      isIsolationVerified: createRuntimeIsolationProbe(),
+    });
   app.locals.employeeExperts = employeeExperts;
-  app.use(employeeExpertsRoutes({ service: employeeExperts }));
+  app.use(
+    employeeExpertsRoutes({
+      service: employeeExperts,
+      tokenExchange: employeeTokenExchange,
+    }),
+  );
   const hostServicesDisposers = new Map<string, () => void>();
   let lifecyclePluginsReady = false;
   const agentLifecycle = startAgentLifecycle(db, createLifecycleDriver(db, workerManager), () => lifecyclePluginsReady && !isWarmStandby() && !isIdleTaskDrainActive());
