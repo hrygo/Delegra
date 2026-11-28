@@ -924,6 +924,20 @@
       "verifiedAt": "2026-11-28",
       "retireWhen": "An accepted upstream release provides the Stage B3-2 prefix-cache-safe expert session context assembler with structured Layer 2 compaction and tiered just-in-time Layer 3 read-only reuseRefs.",
       "notes": "Refs hrygo/Delegra#101 (Stage B3-2). Adds server/src/services/employee-expert-context-assembler.ts implementing byte-stable Layer 1 static prefix caching, bounded structured Layer 2 task state compaction, tiered just-in-time Layer 3 reuseRefs (<= 4 KiB inline, > 4 KiB on-demand index + read-only /run/delegra-refs/<filename> staging with path-traversal and tag-breakout protection), conservative CJK/JSON dual token+char budgeting, and cold_start/hot_resume/cold_rebuild mode selection, with unit test coverage in server/src/__tests__/employee-expert-context-assembler.test.ts."
+    },
+    {
+      "id": "delegra-employee-experts-runner-bridge",
+      "kind": "fork-only",
+      "status": "active",
+      "commits": [
+        "e69dd99ffbfb702e37bbeeebf4bda14f94cd010b",
+        "8c1f76b0938ea1fc685307a7a0ed35ab4406ca0c"
+      ],
+      "owner": "hrygo",
+      "reviewBy": "2026-12-28",
+      "verifiedAt": "2026-11-28",
+      "retireWhen": "An accepted upstream release wires the Stage B3-3 employee expert runner bridge, private heartbeat_runs with deterministic native_issue_id UUIDv5, Layer 5 result projection, and app.ts dispatch worker lifecycle.",
+      "notes": "Closes hrygo/Delegra#101 (Stage B3-3). Adds server/src/services/employee-expert-runner-bridge.ts bridging the Stage B3-1 dispatch worker and Stage B3-2 context assembler to private heartbeat_runs (scopeKind='company', issueId=null, nativeIssueId=UUIDv5, stagedReadOnlyRefFiles for /run/delegra-refs/), agent_task_sessions hot-resume lookup, heartbeat cancelRun + zero-trust expertGatewayAuthz.revokeRun on cancel, and fail-closed Layer 5 result/source/artifact projection; wires createPgEmployeeExpertRunnerBridge and createEmployeeExpertDispatchWorker lifecycle + graceful shutdown in server/src/app.ts; adds end-to-end lifecycle and 4-role ACL tests in server/src/__tests__/employee-expert-runner-bridge.test.ts."
     }
   ]
 }
