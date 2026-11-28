@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
-import { and, eq, inArray, lte } from "drizzle-orm";
+import { and, eq, lte, sql } from "drizzle-orm";
 import {
   agentMemberships,
   agents,
@@ -23,6 +23,11 @@ import {
   type ExpertCallableReason,
   type ExpertDisclosureState,
 } from "./employee-experts.js";
+import {
+  buildIsolatedEmployeeTaskExecutionContext,
+  type IsolatedEmployeeTaskExecutionContext,
+  type ReadOnlyReuseRefSnapshot,
+} from "./employee-expert-isolation.js";
 
 export interface IdempotencyReceiptRecord {
   orgId: string;
@@ -36,7 +41,17 @@ export interface IdempotencyReceiptRecord {
   runGeneration: number;
 }
 
+export interface DispatchIntentLeaseMeta {
+  attemptCount: number;
+  maxAttempts: number;
+  leaseOwner: string | null;
+  leaseExpiresAt: string | null;
+  nextAttemptAt: string | null;
+  lastError: string | null;
+}
+
 export interface DispatchIntentRecord {
+  id?: string;
   taskId: string;
   orgId: string;
   expertId: string;
@@ -44,7 +59,31 @@ export interface DispatchIntentRecord {
   kind: "initial" | "followup" | "cancel";
   payload: Record<string, unknown>;
   status: "pending" | "claimed" | "dispatched" | "completed" | "failed";
+  claimedAt?: string | null;
+  dispatchedAt?: string | null;
 }
+
+export interface ClaimDispatchIntentsOptions {
+  workerId: string;
+  limit?: number;
+  leaseDurationMs?: number;
+  maxAttempts?: number;
+  now?: () => number;
+}
+
+export interface ClaimDispatchIntentsResult {
+  claimed: DispatchIntentRecord[];
+  deadLettered: DispatchIntentRecord[];
+}
+
+export interface DispatchIntentKey {
+  taskId: string;
+  runGeneration: number;
+  kind: "initial" | "followup" | "cancel";
+}
+
+export const DEFAULT_DISPATCH_LEASE_DURATION_MS = 90_000;
+export const DEFAULT_DISPATCH_MAX_ATTEMPTS = 3;
 
 export interface EmployeeExpertsStore {
   findIdempotencyReceipt(key: {
@@ -66,6 +105,8 @@ export interface EmployeeExpertsStore {
     receipt: Omit<IdempotencyReceiptRecord, "status" | "runGeneration">;
     taskText: string;
     reuseRefs: string[];
+    reuseRefSnapshots?: readonly ReadOnlyReuseRefSnapshot[];
+    executionContext?: IsolatedEmployeeTaskExecutionContext;
     beforeCommitHook?: () => Promise<void> | void;
   }): Promise<{ created: boolean; receipt: IdempotencyReceiptRecord; task: EmployeeExpertTaskRecord }>;
   cancelTask(input: {
@@ -82,6 +123,36 @@ export interface EmployeeExpertsStore {
     sources?: string[];
     artifacts?: Array<{ id: string; label?: string; url?: string }>;
   }): Promise<EmployeeExpertTaskRecord>;
+  claimNextDispatchIntents(options: ClaimDispatchIntentsOptions): Promise<ClaimDispatchIntentsResult>;
+  renewDispatchIntentLease(
+    input: DispatchIntentKey & {
+      workerId: string;
+      leaseDurationMs?: number;
+      now?: () => number;
+    },
+  ): Promise<boolean>;
+  markDispatchIntentDispatched(
+    input: DispatchIntentKey & {
+      workerId: string;
+      runId: string;
+      now?: () => number;
+    },
+  ): Promise<boolean>;
+  completeDispatchIntent(
+    input: DispatchIntentKey & {
+      status: "completed" | "failed";
+      lastError?: string;
+      now?: () => number;
+    },
+  ): Promise<void>;
+  requeueDispatchIntentWithBackoff(
+    input: DispatchIntentKey & {
+      workerId: string;
+      nextAttemptAt: string;
+      lastError: string;
+      now?: () => number;
+    },
+  ): Promise<void>;
   listDispatchIntents(taskId?: string): Promise<DispatchIntentRecord[]>;
   listAllTasks(): Promise<EmployeeExpertTaskRecord[]>;
 }
@@ -101,6 +172,56 @@ function idempMapKey(k: {
 function isUniqueViolation(err: unknown): boolean {
   const e = err as { code?: string; cause?: { code?: string } } | null;
   return e?.code === "23505" || e?.cause?.code === "23505";
+}
+
+function readDispatchMeta(
+  payload: Record<string, unknown> | null | undefined,
+  defaultMaxAttempts: number,
+): DispatchIntentLeaseMeta {
+  const raw =
+    payload && typeof payload._dispatchMeta === "object" && payload._dispatchMeta !== null
+      ? (payload._dispatchMeta as Record<string, unknown>)
+      : {};
+  return {
+    attemptCount:
+      typeof raw.attemptCount === "number" && Number.isInteger(raw.attemptCount) && raw.attemptCount >= 0
+        ? raw.attemptCount
+        : 0,
+    maxAttempts:
+      typeof raw.maxAttempts === "number" && Number.isInteger(raw.maxAttempts) && raw.maxAttempts >= 1
+        ? raw.maxAttempts
+        : defaultMaxAttempts,
+    leaseOwner: typeof raw.leaseOwner === "string" && raw.leaseOwner.trim() ? raw.leaseOwner : null,
+    leaseExpiresAt: typeof raw.leaseExpiresAt === "string" && raw.leaseExpiresAt.trim() ? raw.leaseExpiresAt : null,
+    nextAttemptAt: typeof raw.nextAttemptAt === "string" && raw.nextAttemptAt.trim() ? raw.nextAttemptAt : null,
+    lastError: typeof raw.lastError === "string" && raw.lastError.trim() ? raw.lastError : null,
+  };
+}
+
+function withDispatchMeta(
+  payload: Record<string, unknown> | null | undefined,
+  meta: DispatchIntentLeaseMeta,
+): Record<string, unknown> {
+  return {
+    ...(payload ?? {}),
+    _dispatchMeta: meta,
+  };
+}
+
+function matchesIntentKey(intent: DispatchIntentRecord, key: DispatchIntentKey): boolean {
+  return (
+    intent.taskId === key.taskId &&
+    intent.runGeneration === key.runGeneration &&
+    intent.kind === key.kind
+  );
+}
+
+function extractExecuteRows<T>(result: unknown): T[] {
+  if (Array.isArray(result)) return result as T[];
+  if (result && typeof result === "object" && Array.isArray((result as { rows?: unknown[] }).rows)) {
+    return (result as { rows: T[] }).rows;
+  }
+  return [];
 }
 
 function rowToTaskRecord(row: typeof employeeExpertTasks.$inferSelect): EmployeeExpertTaskRecord {
@@ -133,7 +254,7 @@ function rowToTaskRecord(row: typeof employeeExpertTasks.$inferSelect): Employee
 
 /**
  * In-memory store implementation preserving lightweight unit-test ergonomics
- * while mirroring single-transaction rollback & idempotency semantics.
+ * while mirroring single-transaction rollback, lease heartbeat, & idempotency semantics.
  */
 export function createInMemoryEmployeeExpertsStore(): EmployeeExpertsStore {
   const tasks = new Map<string, EmployeeExpertTaskRecord>();
@@ -162,7 +283,7 @@ export function createInMemoryEmployeeExpertsStore(): EmployeeExpertsStore {
       }
       tasks.set(input.task.taskId, { ...input.task });
       receipts.set(k, { ...input.receipt });
-      intents.push({ ...input.dispatchIntent });
+      intents.push({ ...input.dispatchIntent, payload: { ...(input.dispatchIntent.payload ?? {}) } });
       return { created: true, receipt: input.receipt, task: tasks.get(input.task.taskId)! };
     },
     async createFollowupAtomically(input) {
@@ -189,13 +310,25 @@ export function createInMemoryEmployeeExpertsStore(): EmployeeExpertsStore {
         runGeneration: task.runGeneration,
       };
       receipts.set(k, receipt);
+      const executionContext =
+        input.executionContext ??
+        buildIsolatedEmployeeTaskExecutionContext({
+          taskId: task.taskId,
+          runGeneration: task.runGeneration,
+        });
       intents.push({
         taskId: task.taskId,
         orgId: task.orgId,
         expertId: task.expertId,
         runGeneration: task.runGeneration,
         kind: "followup",
-        payload: { taskText: input.taskText, reuseRefs: input.reuseRefs, requestId: input.receipt.requestId },
+        payload: {
+          taskText: input.taskText,
+          reuseRefs: [...input.reuseRefs],
+          reuseRefSnapshots: input.reuseRefSnapshots ? [...input.reuseRefSnapshots] : [],
+          executionContext,
+          requestId: input.receipt.requestId,
+        },
         status: "pending",
       });
       return { created: true, receipt, task };
@@ -239,6 +372,121 @@ export function createInMemoryEmployeeExpertsStore(): EmployeeExpertsStore {
       if (input.artifacts) task.artifacts = [...input.artifacts];
       return task;
     },
+    async claimNextDispatchIntents(options) {
+      const nowMs = (options.now ?? (() => Date.now()))();
+      const limit = Math.max(1, options.limit ?? 10);
+      const leaseDurationMs = Math.max(1_000, options.leaseDurationMs ?? DEFAULT_DISPATCH_LEASE_DURATION_MS);
+      const maxAttempts = Math.max(1, options.maxAttempts ?? DEFAULT_DISPATCH_MAX_ATTEMPTS);
+      const claimed: DispatchIntentRecord[] = [];
+      const deadLettered: DispatchIntentRecord[] = [];
+
+      for (const intent of intents) {
+        if (claimed.length + deadLettered.length >= limit) break;
+        const meta = readDispatchMeta(intent.payload, maxAttempts);
+        const isPendingReady =
+          intent.status === "pending" &&
+          (!meta.nextAttemptAt || Date.parse(meta.nextAttemptAt) <= nowMs);
+        const claimedExpiryMs = meta.leaseExpiresAt
+          ? Date.parse(meta.leaseExpiresAt)
+          : intent.claimedAt
+            ? Date.parse(intent.claimedAt) + leaseDurationMs
+            : 0;
+        const isExpiredClaim = intent.status === "claimed" && claimedExpiryMs <= nowMs;
+        if (!isPendingReady && !isExpiredClaim) continue;
+
+        const nextAttempt = meta.attemptCount + 1;
+        const effectiveMax = meta.maxAttempts || maxAttempts;
+        if (nextAttempt > effectiveMax) {
+          intent.status = "failed";
+          intent.payload = withDispatchMeta(intent.payload, {
+            ...meta,
+            attemptCount: nextAttempt,
+            maxAttempts: effectiveMax,
+            leaseOwner: null,
+            leaseExpiresAt: null,
+            nextAttemptAt: null,
+            lastError: meta.lastError ?? "EXPERT_DISPATCH_MAX_ATTEMPTS_EXCEEDED",
+          });
+          deadLettered.push({ ...intent, payload: { ...intent.payload } });
+          continue;
+        }
+
+        const nowIso = new Date(nowMs).toISOString();
+        const leaseExpiresAt = new Date(nowMs + leaseDurationMs).toISOString();
+        intent.status = "claimed";
+        intent.claimedAt = nowIso;
+        intent.payload = withDispatchMeta(intent.payload, {
+          ...meta,
+          attemptCount: nextAttempt,
+          maxAttempts: effectiveMax,
+          leaseOwner: options.workerId,
+          leaseExpiresAt,
+          nextAttemptAt: null,
+        });
+        claimed.push({ ...intent, payload: { ...intent.payload } });
+      }
+      return { claimed, deadLettered };
+    },
+    async renewDispatchIntentLease(input) {
+      const nowMs = (input.now ?? (() => Date.now()))();
+      const leaseDurationMs = Math.max(1_000, input.leaseDurationMs ?? DEFAULT_DISPATCH_LEASE_DURATION_MS);
+      const intent = intents.find((i) => matchesIntentKey(i, input));
+      if (!intent || intent.status !== "claimed") return false;
+      const meta = readDispatchMeta(intent.payload, DEFAULT_DISPATCH_MAX_ATTEMPTS);
+      if (meta.leaseOwner !== input.workerId) return false;
+      intent.payload = withDispatchMeta(intent.payload, {
+        ...meta,
+        leaseExpiresAt: new Date(nowMs + leaseDurationMs).toISOString(),
+      });
+      return true;
+    },
+    async markDispatchIntentDispatched(input) {
+      const nowMs = (input.now ?? (() => Date.now()))();
+      const intent = intents.find((i) => matchesIntentKey(i, input));
+      const task = tasks.get(input.taskId);
+      if (!intent || !task || intent.status !== "claimed") return false;
+      const meta = readDispatchMeta(intent.payload, DEFAULT_DISPATCH_MAX_ATTEMPTS);
+      if (meta.leaseOwner !== input.workerId) return false;
+      if (task.runGeneration !== input.runGeneration || task.cancelRequested) return false;
+
+      intent.status = "dispatched";
+      intent.dispatchedAt = new Date(nowMs).toISOString();
+      intent.payload = withDispatchMeta(intent.payload, {
+        ...meta,
+        leaseOwner: null,
+        leaseExpiresAt: null,
+      });
+      task.runId = input.runId;
+      task.status = "running";
+      return true;
+    },
+    async completeDispatchIntent(input) {
+      const intent = intents.find((i) => matchesIntentKey(i, input));
+      if (!intent) return;
+      const meta = readDispatchMeta(intent.payload, DEFAULT_DISPATCH_MAX_ATTEMPTS);
+      intent.status = input.status;
+      intent.payload = withDispatchMeta(intent.payload, {
+        ...meta,
+        leaseOwner: null,
+        leaseExpiresAt: null,
+        nextAttemptAt: null,
+        ...(input.lastError ? { lastError: input.lastError } : {}),
+      });
+    },
+    async requeueDispatchIntentWithBackoff(input) {
+      const intent = intents.find((i) => matchesIntentKey(i, input));
+      if (!intent || intent.status !== "claimed") return;
+      const meta = readDispatchMeta(intent.payload, DEFAULT_DISPATCH_MAX_ATTEMPTS);
+      if (meta.leaseOwner !== input.workerId) return;
+      intent.status = "pending";
+      intent.payload = withDispatchMeta(intent.payload, {
+        ...meta,
+        leaseOwner: null,
+        leaseExpiresAt: null,
+        nextAttemptAt: input.nextAttemptAt,
+        lastError: input.lastError,
+      });
+    },
     async listDispatchIntents(taskId) {
       return taskId ? intents.filter((i) => i.taskId === taskId) : [...intents];
     },
@@ -249,9 +497,8 @@ export function createInMemoryEmployeeExpertsStore(): EmployeeExpertsStore {
 }
 
 /**
- * Production PostgreSQL single-transaction store for CORP-DSH-EXPERT-001 §7.1–§7.2.
- * Atomically persists private task + idempotency receipt + durable dispatch intent
- * within one database transaction so rollbacks leave zero dangling rows.
+ * Production PostgreSQL single-transaction store for CORP-DSH-EXPERT-001 §7.1–§7.2
+ * and Stage B3-1 Dispatch Intent Worker leasing (`FOR UPDATE SKIP LOCKED`).
  */
 export function createPgEmployeeExpertsStore(db: Db): EmployeeExpertsStore {
   async function findReceiptTx(
@@ -446,6 +693,13 @@ export function createPgEmployeeExpertsStore(db: Db): EmployeeExpertsStore {
             runGeneration: receipt.runGeneration,
           });
 
+          const executionContext =
+            input.executionContext ??
+            buildIsolatedEmployeeTaskExecutionContext({
+              taskId: input.taskId,
+              runGeneration: nextGeneration,
+            });
+
           await tx.insert(employeeExpertDispatchIntents).values({
             taskId: input.taskId,
             orgId: row.orgId,
@@ -454,7 +708,9 @@ export function createPgEmployeeExpertsStore(db: Db): EmployeeExpertsStore {
             kind: "followup",
             payload: {
               taskText: input.taskText,
-              reuseRefs: input.reuseRefs,
+              reuseRefs: [...input.reuseRefs],
+              reuseRefSnapshots: input.reuseRefSnapshots ? [...input.reuseRefSnapshots] : [],
+              executionContext,
               requestId: input.receipt.requestId,
             },
             status: "pending",
@@ -565,6 +821,285 @@ export function createPgEmployeeExpertsStore(db: Db): EmployeeExpertsStore {
       });
     },
 
+    async claimNextDispatchIntents(options) {
+      const nowMs = (options.now ?? (() => Date.now()))();
+      const nowDate = new Date(nowMs);
+      const nowIso = nowDate.toISOString();
+      const limit = Math.max(1, options.limit ?? 10);
+      const leaseDurationMs = Math.max(1_000, options.leaseDurationMs ?? DEFAULT_DISPATCH_LEASE_DURATION_MS);
+      const maxAttempts = Math.max(1, options.maxAttempts ?? DEFAULT_DISPATCH_MAX_ATTEMPTS);
+      const expiredClaimBeforeIso = new Date(nowMs - leaseDurationMs).toISOString();
+
+      return db.transaction(async (tx) => {
+        const raw = await tx.execute(sql`
+          SELECT id, task_id, org_id, expert_id, run_generation, kind, payload, status, claimed_at, dispatched_at
+          FROM employee_expert_dispatch_intents
+          WHERE (
+            status = 'pending'
+            AND (
+              (payload->'_dispatchMeta'->>'nextAttemptAt') IS NULL
+              OR (payload->'_dispatchMeta'->>'nextAttemptAt')::timestamptz <= ${nowIso}::timestamptz
+            )
+          ) OR (
+            status = 'claimed'
+            AND (
+              CASE
+                WHEN (payload->'_dispatchMeta'->>'leaseExpiresAt') IS NOT NULL
+                  THEN (payload->'_dispatchMeta'->>'leaseExpiresAt')::timestamptz <= ${nowIso}::timestamptz
+                ELSE claimed_at IS NULL OR claimed_at <= ${expiredClaimBeforeIso}::timestamptz
+              END
+            )
+          )
+          ORDER BY created_at ASC
+          LIMIT ${limit}
+          FOR UPDATE SKIP LOCKED
+        `);
+
+        type SelectedIntentRow = {
+          id: string;
+          task_id: string;
+          org_id: string;
+          expert_id: string;
+          run_generation: number;
+          kind: "initial" | "followup" | "cancel";
+          payload: Record<string, unknown> | null;
+          status: DispatchIntentRecord["status"];
+          claimed_at: Date | string | null;
+          dispatched_at: Date | string | null;
+        };
+
+        const rows = extractExecuteRows<SelectedIntentRow>(raw);
+        const claimed: DispatchIntentRecord[] = [];
+        const deadLettered: DispatchIntentRecord[] = [];
+
+        for (const row of rows) {
+          const basePayload = (row.payload ?? {}) as Record<string, unknown>;
+          const meta = readDispatchMeta(basePayload, maxAttempts);
+          const nextAttempt = meta.attemptCount + 1;
+          const effectiveMax = meta.maxAttempts || maxAttempts;
+
+          if (nextAttempt > effectiveMax) {
+            const updatedPayload = withDispatchMeta(basePayload, {
+              ...meta,
+              attemptCount: nextAttempt,
+              maxAttempts: effectiveMax,
+              leaseOwner: null,
+              leaseExpiresAt: null,
+              nextAttemptAt: null,
+              lastError: meta.lastError ?? "EXPERT_DISPATCH_MAX_ATTEMPTS_EXCEEDED",
+            });
+            await tx
+              .update(employeeExpertDispatchIntents)
+              .set({ status: "failed", payload: updatedPayload, updatedAt: nowDate })
+              .where(eq(employeeExpertDispatchIntents.id, row.id));
+            deadLettered.push({
+              id: row.id,
+              taskId: row.task_id,
+              orgId: row.org_id,
+              expertId: row.expert_id,
+              runGeneration: row.run_generation,
+              kind: row.kind,
+              payload: updatedPayload,
+              status: "failed",
+              claimedAt: row.claimed_at instanceof Date ? row.claimed_at.toISOString() : (row.claimed_at ?? null),
+              dispatchedAt:
+                row.dispatched_at instanceof Date ? row.dispatched_at.toISOString() : (row.dispatched_at ?? null),
+            });
+            continue;
+          }
+
+          const leaseExpiresAt = new Date(nowMs + leaseDurationMs).toISOString();
+          const updatedPayload = withDispatchMeta(basePayload, {
+            ...meta,
+            attemptCount: nextAttempt,
+            maxAttempts: effectiveMax,
+            leaseOwner: options.workerId,
+            leaseExpiresAt,
+            nextAttemptAt: null,
+          });
+          await tx
+            .update(employeeExpertDispatchIntents)
+            .set({
+              status: "claimed",
+              claimedAt: nowDate,
+              payload: updatedPayload,
+              updatedAt: nowDate,
+            })
+            .where(eq(employeeExpertDispatchIntents.id, row.id));
+          claimed.push({
+            id: row.id,
+            taskId: row.task_id,
+            orgId: row.org_id,
+            expertId: row.expert_id,
+            runGeneration: row.run_generation,
+            kind: row.kind,
+            payload: updatedPayload,
+            status: "claimed",
+            claimedAt: nowIso,
+            dispatchedAt:
+              row.dispatched_at instanceof Date ? row.dispatched_at.toISOString() : (row.dispatched_at ?? null),
+          });
+        }
+
+        return { claimed, deadLettered };
+      });
+    },
+
+    async renewDispatchIntentLease(input) {
+      const nowMs = (input.now ?? (() => Date.now()))();
+      const leaseDurationMs = Math.max(1_000, input.leaseDurationMs ?? DEFAULT_DISPATCH_LEASE_DURATION_MS);
+      const nextExpiryIso = new Date(nowMs + leaseDurationMs).toISOString();
+
+      return db.transaction(async (tx) => {
+        const rows = await tx
+          .select()
+          .from(employeeExpertDispatchIntents)
+          .where(
+            and(
+              eq(employeeExpertDispatchIntents.taskId, input.taskId),
+              eq(employeeExpertDispatchIntents.runGeneration, input.runGeneration),
+              eq(employeeExpertDispatchIntents.kind, input.kind),
+            ),
+          )
+          .limit(1);
+        const row = rows[0];
+        if (!row || row.status !== "claimed") return false;
+        const meta = readDispatchMeta(row.payload, DEFAULT_DISPATCH_MAX_ATTEMPTS);
+        if (meta.leaseOwner !== input.workerId) return false;
+        const updatedPayload = withDispatchMeta(row.payload, {
+          ...meta,
+          leaseExpiresAt: nextExpiryIso,
+        });
+        await tx
+          .update(employeeExpertDispatchIntents)
+          .set({ payload: updatedPayload, updatedAt: new Date(nowMs) })
+          .where(eq(employeeExpertDispatchIntents.id, row.id));
+        return true;
+      });
+    },
+
+    async markDispatchIntentDispatched(input) {
+      const nowMs = (input.now ?? (() => Date.now()))();
+      const nowDate = new Date(nowMs);
+      return db.transaction(async (tx) => {
+        const intentRows = await tx
+          .select()
+          .from(employeeExpertDispatchIntents)
+          .where(
+            and(
+              eq(employeeExpertDispatchIntents.taskId, input.taskId),
+              eq(employeeExpertDispatchIntents.runGeneration, input.runGeneration),
+              eq(employeeExpertDispatchIntents.kind, input.kind),
+            ),
+          )
+          .limit(1);
+        const intentRow = intentRows[0];
+        if (!intentRow || intentRow.status !== "claimed") return false;
+        const meta = readDispatchMeta(intentRow.payload, DEFAULT_DISPATCH_MAX_ATTEMPTS);
+        if (meta.leaseOwner !== input.workerId) return false;
+
+        const [updatedTask] = await tx
+          .update(employeeExpertTasks)
+          .set({ runId: input.runId, status: "running", updatedAt: nowDate })
+          .where(
+            and(
+              eq(employeeExpertTasks.taskId, input.taskId),
+              eq(employeeExpertTasks.runGeneration, input.runGeneration),
+              eq(employeeExpertTasks.cancelRequested, false),
+            ),
+          )
+          .returning();
+        if (!updatedTask) return false;
+
+        const updatedPayload = withDispatchMeta(intentRow.payload, {
+          ...meta,
+          leaseOwner: null,
+          leaseExpiresAt: null,
+        });
+        await tx
+          .update(employeeExpertDispatchIntents)
+          .set({
+            status: "dispatched",
+            dispatchedAt: nowDate,
+            payload: updatedPayload,
+            updatedAt: nowDate,
+          })
+          .where(eq(employeeExpertDispatchIntents.id, intentRow.id));
+        return true;
+      });
+    },
+
+    async completeDispatchIntent(input) {
+      const nowMs = (input.now ?? (() => Date.now()))();
+      await db.transaction(async (tx) => {
+        const rows = await tx
+          .select()
+          .from(employeeExpertDispatchIntents)
+          .where(
+            and(
+              eq(employeeExpertDispatchIntents.taskId, input.taskId),
+              eq(employeeExpertDispatchIntents.runGeneration, input.runGeneration),
+              eq(employeeExpertDispatchIntents.kind, input.kind),
+            ),
+          )
+          .limit(1);
+        const row = rows[0];
+        if (!row) return;
+        const meta = readDispatchMeta(row.payload, DEFAULT_DISPATCH_MAX_ATTEMPTS);
+        const updatedPayload = withDispatchMeta(row.payload, {
+          ...meta,
+          leaseOwner: null,
+          leaseExpiresAt: null,
+          nextAttemptAt: null,
+          ...(input.lastError ? { lastError: input.lastError } : {}),
+        });
+        await tx
+          .update(employeeExpertDispatchIntents)
+          .set({
+            status: input.status,
+            payload: updatedPayload,
+            updatedAt: new Date(nowMs),
+          })
+          .where(eq(employeeExpertDispatchIntents.id, row.id));
+      });
+    },
+
+    async requeueDispatchIntentWithBackoff(input) {
+      const nowMs = (input.now ?? (() => Date.now()))();
+      await db.transaction(async (tx) => {
+        const rows = await tx
+          .select()
+          .from(employeeExpertDispatchIntents)
+          .where(
+            and(
+              eq(employeeExpertDispatchIntents.taskId, input.taskId),
+              eq(employeeExpertDispatchIntents.runGeneration, input.runGeneration),
+              eq(employeeExpertDispatchIntents.kind, input.kind),
+            ),
+          )
+          .limit(1);
+        const row = rows[0];
+        if (!row || row.status !== "claimed") return;
+        const meta = readDispatchMeta(row.payload, DEFAULT_DISPATCH_MAX_ATTEMPTS);
+        if (meta.leaseOwner !== input.workerId) return;
+        const updatedPayload = withDispatchMeta(row.payload, {
+          ...meta,
+          leaseOwner: null,
+          leaseExpiresAt: null,
+          nextAttemptAt: input.nextAttemptAt,
+          lastError: input.lastError,
+        });
+        await tx
+          .update(employeeExpertDispatchIntents)
+          .set({
+            status: "pending",
+            payload: updatedPayload,
+            updatedAt: new Date(nowMs),
+          })
+          .where(eq(employeeExpertDispatchIntents.id, row.id));
+      });
+    },
+
     async listDispatchIntents(taskId) {
       const rows = taskId
         ? await db
@@ -573,6 +1108,7 @@ export function createPgEmployeeExpertsStore(db: Db): EmployeeExpertsStore {
             .where(eq(employeeExpertDispatchIntents.taskId, taskId))
         : await db.select().from(employeeExpertDispatchIntents);
       return rows.map((row) => ({
+        id: row.id,
         taskId: row.taskId,
         orgId: row.orgId,
         expertId: row.expertId,
@@ -580,6 +1116,8 @@ export function createPgEmployeeExpertsStore(db: Db): EmployeeExpertsStore {
         kind: row.kind as "initial" | "followup" | "cancel",
         payload: (row.payload ?? {}) as Record<string, unknown>,
         status: row.status as DispatchIntentRecord["status"],
+        claimedAt: row.claimedAt instanceof Date ? row.claimedAt.toISOString() : null,
+        dispatchedAt: row.dispatchedAt instanceof Date ? row.dispatchedAt.toISOString() : null,
       }));
     },
 

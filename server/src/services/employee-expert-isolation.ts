@@ -1,8 +1,32 @@
+import { createHash } from "node:crypto";
 import {
   EmployeeExpertsError,
   type EmployeeCredentialContext,
   type EmployeeExpertTaskRecord,
 } from "./employee-experts.js";
+
+/** Fixed RFC 4122 UUIDv5 namespace for Delegra employee expert tasks. */
+const EMPLOYEE_EXPERT_UUIDV5_NAMESPACE = "6ba7b810-9dad-11d1-80b4-00c04fd430c8";
+
+/**
+ * Derives a deterministic RFC 4122 UUIDv5 from `(orgId, taskId)` for
+ * `heartbeat_runs.native_issue_id` and `native_runner_checkpoints.issue_id`.
+ *
+ * This lets private employee expert runs remain `scope_kind = 'company'` with
+ * `issue_id = null` (zero synthetic rows in `issues`, zero extra WS queries on
+ * issue-scoped runs) while still satisfying `native_runner_checkpoints`'s
+ * `NOT NULL` composite FK to `heartbeat_runs(company_id, native_issue_id, id)`.
+ */
+export function deriveExpertNativeIssueUuidV5(orgId: string, taskId: string): string {
+  const nsBytes = Buffer.from(EMPLOYEE_EXPERT_UUIDV5_NAMESPACE.replace(/-/g, ""), "hex");
+  const nameBytes = Buffer.from(`delegra:employee-expert-task:${orgId.trim()}:${taskId.trim()}`, "utf8");
+  const hash = createHash("sha1").update(nsBytes).update(nameBytes).digest();
+  const bytes = Buffer.from(hash.subarray(0, 16));
+  bytes[6] = (bytes[6]! & 0x0f) | 0x50; // version 5
+  bytes[8] = (bytes[8]! & 0x3f) | 0x80; // RFC 4122 variant
+  const hex = bytes.toString("hex");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
+}
 
 /**
  * Isolated per-task execution context binding for an employee expert task
