@@ -23,6 +23,8 @@ import {
   createPgEmployeeExpertsStore,
 } from "./services/employee-experts-store.js";
 import { createRuntimeIsolationProbe } from "./services/employee-expert-isolation.js";
+import { createEmployeeExpertDispatchWorker } from "./services/employee-expert-dispatch-worker.js";
+import { createPgEmployeeExpertRunnerBridge } from "./services/employee-expert-runner-bridge.js";
 import { connectionEventWakeRoutes } from "./routes/connection-event-wake.js";
 import { registerGitHubReviewProjectionWork } from "./services/chat-channels/github/review-projection-work.js";
 import { finishServiceShutdown } from "./shutdown.js";
@@ -505,6 +507,8 @@ export async function createApp(
     employeeExperts?: EmployeeExpertsService;
     /** Optional override for the RFC 8693 employee token exchange service (CORP-DSH-EXPERT-001 §2.3). */
     employeeTokenExchange?: EmployeeTokenExchangeService;
+    /** Explicitly starts the Stage B3 employee expert outbox dispatch worker loop. */
+    startEmployeeExpertDispatchWorker?: boolean;
   },
 ) {
   const app = express();
@@ -638,6 +642,27 @@ export async function createApp(
   const connectionIntentHeartbeat = heartbeatService(db, {
     pluginWorkerManager: workerManager,
   });
+  const employeeExpertRunnerBridge = createPgEmployeeExpertRunnerBridge({
+    db,
+    store: employeeExpertsStore,
+    heartbeat: connectionIntentHeartbeat,
+    expertGatewayAuthz,
+  });
+  const employeeExpertDispatchWorker = createEmployeeExpertDispatchWorker({
+    store: employeeExpertsStore,
+    isIsolationVerified: createRuntimeIsolationProbe(),
+    dispatchRun: employeeExpertRunnerBridge.dispatchRun,
+    onCancelRun: employeeExpertRunnerBridge.onCancelRun,
+  });
+  app.locals.employeeExpertRunnerBridge = employeeExpertRunnerBridge;
+  app.locals.employeeExpertDispatchWorker = employeeExpertDispatchWorker;
+  if (
+    (opts.startEmployeeExpertDispatchWorker === true ||
+      process.env.DELEGRA_EXPERT_DISPATCH_WORKER_ENABLED === "true") &&
+    !isWarmStandby()
+  ) {
+    employeeExpertDispatchWorker.start();
+  }
   const chatChannels = chatChannelService(db, {
     allowLocalVoiceBoard: opts.deploymentMode === "local_trusted",
     deferWebhookProcessing: true,
@@ -1442,6 +1467,7 @@ export async function createApp(
   const shutdownAppServices = (): Promise<void> => {
     if (appServicesShutdown) return appServicesShutdown;
     appServicesShutdown = finishServiceShutdown(() => scheduler.stop(), async () => {
+      employeeExpertDispatchWorker.stop();
       await agentLifecycle.stop();
       unregisterMcpOwners();
       await publicMcpEvents?.stop();
