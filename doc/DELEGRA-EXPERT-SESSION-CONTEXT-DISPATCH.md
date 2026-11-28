@@ -3,7 +3,7 @@
 - **Tracking Issue**: `hrygo/Delegra#101`
 - **Prerequisite Foundation**: `hrygo/Delegra#100` (Stage B2: `#96`, `#97`, `#98`, `#99`), `hrygo/heluo-forge#484` (DSH Stage C4)
 - **Contract Reference**: `CORP-DSH-EXPERT-001` (§5–§8), `CORP-DSH-DESIGN-023` (§3.6, §5.1)
-- **Status**: Revised Design (RFC v2 — Audit-Hardened)
+- **Status**: Finalized Design (RFC v3 — Audit + 2026 Industry Best-Practice Hardened)
 
 ---
 
@@ -16,8 +16,8 @@ Stage B2 (`#100`) established the control-plane foundations for restricted emplo
 - Per-task isolation descriptors (`buildIsolatedEmployeeTaskExecutionContext`), monotonic `runGeneration` fencing (`assertRunGenerationFence`), and fail-closed `reuseRefs` authorization (`resolveReadOnlyReuseRefs`) in `server/src/services/employee-expert-isolation.ts`.
 
 Stage B3 closes the end-to-end runtime loop with three core components:
-1. A durable **Dispatch Intent Worker** that claims and executes `employee_expert_dispatch_intents` (`initial`, `followup`, `cancel`) against Paperclip Runner with retry bounds, dead-letter convergence, and `cancel` short-circuiting.
-2. A **Prefix-Cache-Friendly, Five-Layer Session Context Assembler** that bridges persisted task state, native runner sessions (`agent_task_sessions` / `native_runner_checkpoints`), and frozen authorized `reuseRefs` under dual token+character budgets.
+1. A durable **Dispatch Intent Worker** that claims and executes `employee_expert_dispatch_intents` (`initial`, `followup`, `cancel`) against Paperclip Runner with **30s/90s lease heartbeat renewal**, retry bounds (`maxAttempts = 3`), dead-letter convergence, and `cancel` short-circuiting.
+2. A **Prefix-Cache-Friendly, Five-Layer Session Context Assembler** that bridges persisted task state, native runner sessions (`agent_task_sessions` / `native_runner_checkpoints`), and **tiered just-in-time `reuseRefs`** (`<= 4 KiB` inline, `> 4 KiB` read-only index + `/run/delegra-refs/<refId>`) under dual token+character budgets.
 3. Exact **hot-resume vs. deterministic cold-rebuild** semantics that preserve cross-session isolation (`shareAgentChatThread: false`) and satisfy PostgreSQL foreign-key invariants (`native_runner_checkpoints` via deterministic `native_issue_id` UUIDv5).
 
 ---
@@ -66,9 +66,9 @@ Kubernetes SandboxClaim:
 
 | Scenario | Trigger | Isolation & Auth Pre-checks | Context Strategy |
 | :--- | :--- | :--- | :--- |
-| **1. Initial Dispatch** | `employee_expert_dispatch_intents.kind = 'initial'` (`runGeneration = 1`) | `isIsolationVerified() === true`; frozen `reuseRefSnapshots` + `executionContext` persisted in intent `payload` at `createTask` | **Cold Start Build**: Assemble L1 (static prefix) -> L2 (initial goal) -> L3 (frozen `reuseRefs`) -> L4 (initial turn). Create fresh `agent_task_sessions` row on `task_key = emp_thread_<taskId>`. |
+| **1. Initial Dispatch** | `employee_expert_dispatch_intents.kind = 'initial'` (`runGeneration = 1`) | `isIsolationVerified() === true`; frozen `reuseRefSnapshots` + `executionContext` persisted in intent `payload` at `createTask` | **Cold Start Build**: Assemble L1 (static prefix) -> L2 (initial goal) -> L3 (tiered `reuseRefs`) -> L4 (initial turn). Create fresh `agent_task_sessions` row on `task_key = emp_thread_<taskId>`. |
 | **2. Same-Task Follow-up** | `kind = 'followup'` (`runGeneration = N > 1`) | Re-verify employee callable permission + `acceptingTasks === 'accepting'` + `delegationScope` + `reuseRefs` read ACL in `createFollowup`; **persist frozen `reuseRefSnapshots` + rotated `executionContext` in `createFollowupAtomically`** while the employee bearer token is live | **Hot Resume Preferred**: If `agent_task_sessions` has a live `session_params_json` for `emp_thread_<taskId>` and the harness supports resume, resume natively and **skip L1/L2**, appending only new L3 (`reuseRefSnapshots`) + L4 (follow-up turn). Otherwise fall back to **Deterministic Cold Rebuild**. |
-| **3. Explicit Cross-Task Reuse** | Caller passes `reuseRefs: string[]` on `createTask` or `createFollowup` | `resolveReadOnlyReuseRefs` validates every ref against the employee's current read ACL; any unauthorized ref fails closed with `403 EXPERT_CALL_FORBIDDEN` | Persist frozen `ReadOnlyReuseRefSnapshot[]` (`readOnly: true`, `sourceAttribution`) inside the intent `payload` and inject into Layer 3 as untrusted read-only reference data. Never implicitly inherit unreferenced chats. |
+| **3. Explicit Cross-Task Reuse** | Caller passes `reuseRefs: string[]` on `createTask` or `createFollowup` | `resolveReadOnlyReuseRefs` validates every ref against the employee's current read ACL; any unauthorized ref fails closed with `403 EXPERT_CALL_FORBIDDEN` | Persist frozen `ReadOnlyReuseRefSnapshot[]` (`readOnly: true`, `sourceAttribution`) inside the intent `payload` and inject into Layer 3 using tiered just-in-time retrieval (`<= 4 KiB` inline, `> 4 KiB` lightweight index + `/run/delegra-refs/<refId>`). |
 | **4. Crash Recovery / Cold Rebuild** | Runner crash, sandbox expiry, controller restart, model/harness switch, or missing/expired `agent_task_sessions` | Verify `runGeneration` matches latest `employee_expert_tasks.run_generation` and `!cancelRequested` | First attempt native re-adoption via `native_runner_checkpoints` (keyed by deterministic `native_issue_id`) + workspace snapshot. If harness session is unrecoverable, execute **Deterministic Cold Rebuild** (L1 -> Structured L2 Compaction -> L3 -> L4). |
 | **5. Cancellation / Retry Exhausted** | `kind = 'cancel'` (`cancelRequested = true`) or `attemptCount >= maxAttempts` | Owner-only ACL verified on `/cancel`; terminal error classifier separates transient vs. permanent errors | **Short-Circuit**: Bypass session resume completely; stop active `heartbeat_runs`, revoke zero-trust gateway proxy lease, and converge `employee_expert_tasks` to terminal `cancelled` or `failed` via `publishTaskResultAsync`. |
 
@@ -76,7 +76,7 @@ Kubernetes SandboxClaim:
 
 ## 4. Five-Layer Session Context Construction Pipeline
 
-Context is assembled in strict trust and cache-stability order — keeping the immutable Prefix Cache at the top, structured state compaction in the middle, untrusted read-only data isolated in Layer 3, active turn instructions at the bottom, and reverse-projected results isolated from the DSH main assistant.
+Context is assembled in strict trust and cache-stability order — keeping the immutable Prefix Cache at the top, structured state compaction in the middle, tiered just-in-time read-only references in Layer 3, active turn instructions at the bottom, and reverse-projected results isolated from the DSH main assistant.
 
 ```text
 ┌──────────────────────────────────────────────────────────────────────┐
@@ -93,15 +93,15 @@ Context is assembled in strict trust and cache-stability order — keeping the i
 │   [Cold Start: objective only; Cold Rebuild: full schema;            │
 │    SKIPPED on Hot Resume]                                            │
 ├──────────────────────────────────────────────────────────────────────┤
-│ Layer 3 · Authorized Read-Only Reference Block (Untrusted Data)      │
-│   - Frozen ReadOnlyReuseRefSnapshot[] from intent.payload            │
-│   - Dual token + char budget; explicit sourceAttribution +           │
-│     non-instruction quoted-data framing                              │
+│ Layer 3 · Tiered Just-in-Time Read-Only References (Untrusted Data)  │
+│   - <= 4 KiB: inline quoted snapshot with sourceAttribution          │
+│   - >  4 KiB: lightweight index + preview + /run/delegra-refs/<id>   │
+│     (read-only mount for on-demand read; prevents Context Rot)       │
 ├──────────────────────────────────────────────────────────────────────┤
 │ Layer 4 · Current Turn Incremental Input (Active Turn · Never Cut)   │
 │   - Latest employee_expert_dispatch_intents.payload.taskText         │
 │   - Turn-specific reuseRefs index & output schema contract           │
-│   - Reserved outputReserveTokens + toolCallHeadroom                  │
+│   - Reserved outputReserveTokens + toolCallHeadroomTokens            │
 └──────────────────────────────────────────────────────────────────────┘
                                   │
                                   ▼  (Runner Execution + runGeneration Fence)
@@ -136,18 +136,17 @@ export interface CompactedExpertTaskState {
 }
 ```
 
-### 4.3 Dual Token + Character Budget & Truncation Order
+### 4.3 Tiered Just-in-Time `reuseRefs` (Layer 3) & Dual Budget Policy
 
-Because CJK text and JSON/code have higher token-per-character density than English prose, the assembler enforces **both** a conservative token estimator (`estimateTokens`) and hard character caps while always reserving `outputReserveTokens` (e.g. 4,096) and `toolCallHeadroom` (e.g. 4,096) inside the model's context window:
+To prevent **Context Rot** and lost-in-the-middle degradation from stuffing large blobs upfront:
+- **Inline Tier (`byteLength <= 4_096`, default `inlineThresholdBytes = 4096`)**: inline the frozen snapshot directly inside the Layer 3 quoted-data block (subject to total L3 budget).
+- **On-Demand Index Tier (`byteLength > 4_096`)**: emit only a compact metadata index entry (`refId`, `sourceAttribution`, `byteLength`, short 256-char preview, and `readOnlyPath = "/run/delegra-refs/<sanitizedRefId>"`) in Layer 3, and materialize the full frozen snapshot into the sandbox's read-only `/run/delegra-refs/` directory so the expert reads it on demand only when relevant.
+
+Because CJK text and JSON/code have higher token-per-character density than English prose, the assembler enforces **both** a conservative token estimator (`estimateTokens`) and hard character caps while always reserving `outputReserveTokens` (4,096) and `toolCallHeadroomTokens` (4,096):
 
 1. **Never truncate**: Layer 1 (Static Prefix) and Layer 4 (Current Turn Input, already capped at `MAX_TASK_TEXT_CHARS = 32_000` at ingress).
-2. **Compact first (Layer 2)**:
-   - Keep `objective` (capped at 4,000 chars), `artifactManifest`, and `openQuestions`.
-   - Trim older `recentTurnSummaries` (keep latest 5) and `failedAttempts` (keep latest 3) if over budget.
-   - Never inline raw tool stdout/stderr logs; expose workspace file paths instead.
-3. **Bound second (Layer 3)**:
-   - Enforce per-ref and total caps across `reuseRefSnapshots` (default `maxReuseRefTokensEach = 4_000` / `16 KiB`, `maxReuseRefsTotalTokens = 16_000` / `64 KiB`).
-   - Truncate deterministically with an explicit `[truncated: N chars omitted]` marker while preserving `refId` and `sourceAttribution`.
+2. **Compact first (Layer 2)**: keep `objective` (capped at 4,000 chars), `artifactManifest`, and `openQuestions`; trim older `recentTurnSummaries` (latest 5) and `failedAttempts` (latest 3). Never inline raw stdout/stderr logs.
+3. **Bound second (Layer 3)**: enforce per-inline-ref (`<= 4 KiB`) and total L3 caps (`maxReuseRefsTotalTokens = 16_000` / `64 KiB`); demote overflow inline refs to the On-Demand Index Tier rather than silently dropping their existence.
 
 ### 4.4 Untrusted-Data Framing for `reuseRefs`
 
@@ -160,48 +159,43 @@ Every Layer 3 item is rendered inside a clearly delimited quoted-data block (`re
 ### 5.1 Proposed Module Layout
 
 - `server/src/services/employee-expert-context-assembler.ts`
-  - Pure context assembly (`assembleExpertSessionContext`), prefix-cache-safe L1/L2 separation, structured compaction formatter, dual token+char budget enforcer, and `cold_start` / `hot_resume` / `cold_rebuild` mode selector.
+  - Pure context assembly (`assembleExpertSessionContext`), prefix-cache-safe L1/L2 separation, structured compaction formatter, tiered just-in-time L3 builder, dual token+char budget enforcer, and `cold_start` / `hot_resume` / `cold_rebuild` mode selector.
 - `server/src/services/employee-expert-dispatch-worker.ts`
-  - Background worker loop integrated into `server/src/app.ts` host service lifecycle and `shutdown.ts` graceful drain.
+  - Background worker loop integrated into `server/src/app.ts` host service lifecycle and `shutdown.ts` graceful drain, with **30s/90s lease heartbeat renewal**.
 - `server/src/services/employee-experts-store.ts` & `server/src/services/employee-experts.ts` (extensions)
-  - Persist frozen `reuseRefSnapshots` + rotated `executionContext` in `createFollowupAtomically` (closing the follow-up snapshot gap).
-  - Atomic intent leasing (`claimNextDispatchIntents`), bounded retry with exponential backoff (`maxAttempts = 3`), dead-letter terminal failure convergence, and `markTaskRunning`.
+  - Persist frozen `reuseRefSnapshots` + rotated `executionContext` in `createFollowupAtomically`.
+  - Atomic intent leasing (`claimNextDispatchIntents`), lease heartbeat renewal (`renewDispatchIntentLease`), bounded retry with exponential backoff (`maxAttempts = 3`), dead-letter terminal failure convergence, and `markTaskRunning`.
 
-### 5.2 Intent Claiming, Retry Backoff & Short-Circuit State Machine
+### 5.2 Intent Claiming, Lease Heartbeat & Short-Circuit State Machine
 
 ```text
 employee_expert_dispatch_intents.status:
-  pending ──(claim: FOR UPDATE SKIP LOCKED)──▶ claimed (attemptCount += 1)
+  pending ──(claim: FOR UPDATE SKIP LOCKED)──▶ claimed (attemptCount += 1, leaseExpiresAt = now + 90s)
+  claimed ──(every 30s while alive)──────────▶ claimed (renew leaseExpiresAt = now + 90s)
   claimed ──(cancel intent)──────────────────▶ short-circuit stop + revoke lease ─▶ completed
   claimed ──(heartbeat_run created)──────────▶ dispatched
   dispatched ──(publishTaskResultAsync ok)───▶ completed
-  claimed/dispatched ──(transient err & attempt < 3)──▶ pending (backoff nextAttemptAt)
+  claimed/dispatched ──(lease expired & attempt < 3)──▶ pending (backoff nextAttemptAt)
   claimed/dispatched ──(permanent err OR attempt >= 3)─▶ failed + task.status = 'failed'
 ```
 
-1. **Atomic Claim with Backoff & Poison-Pill Guard**:
+1. **Atomic Claim with Lease Heartbeat & Poison-Pill Guard**:
    - Query `employee_expert_dispatch_intents` where:
      - `status = 'pending'` AND `(payload->'_dispatchMeta'->>'nextAttemptAt' IS NULL OR (payload->'_dispatchMeta'->>'nextAttemptAt')::timestamptz <= now())`, OR
-     - `status = 'claimed'` AND `claimed_at < now() - leaseTimeout`
+     - `status = 'claimed'` AND `(COALESCE((payload->'_dispatchMeta'->>'leaseExpiresAt')::timestamptz, claimed_at + interval '90 seconds') < now())`
    - Order by `created_at ASC` with `FOR UPDATE SKIP LOCKED` and bounded batch size (`limit = 10`).
-   - Atomically increment `_dispatchMeta.attemptCount`, set `status = 'claimed'`, `claimed_at = now()`, `updated_at = now()`.
-   - If `attemptCount > maxAttempts` (default `3`), immediately transition the intent to `failed` and call `publishTaskResultAsync(..., status: 'failed')` so the client is never stuck polling forever.
+   - Atomically increment `_dispatchMeta.attemptCount`, set `status = 'claimed'`, `claimed_at = now()`, `_dispatchMeta.leaseOwner = workerId`, `_dispatchMeta.leaseExpiresAt = now() + 90s`, `updated_at = now()`.
+   - While processing a claimed intent, the worker renews `_dispatchMeta.leaseExpiresAt = now() + 90s` every **30 seconds** (guarded by `leaseOwner = workerId`), preventing false reclamation during 10–20 minute builds while recovering real crashes within 90 seconds.
+   - If `attemptCount > maxAttempts` (default `3`), immediately transition the intent to `failed` and call `publishTaskResultAsync(..., status: 'failed')`.
 2. **Pre-Execution Short-Circuit (`cancel`, stale generation, isolation)**:
-   - Load parent `employee_expert_tasks` row.
    - **`kind === 'cancel'`**: short-circuit before any session/context check — stop active `heartbeat_runs`, revoke zero-trust gateway proxy lease for `task.runId`, and publish terminal `cancelled` via `publishTaskResultAsync`.
    - **Stale generation** (`intent.runGeneration < task.runGeneration` or `task.cancelRequested === true`): mark intent `failed` (superseded) without starting a run.
    - **Isolation probe** (`!isIsolationVerified()`): fail closed (`EXPERT_ISOLATION_UNVERIFIED`) without launching an unisolated run.
 3. **Private `heartbeat_runs` Creation Contract**:
-   - Create `heartbeat_runs` row with:
-     - `companyId = task.orgId`
-     - `agentId = task.expertId`
-     - `scopeKind = 'company'`, `issueId = null`
-     - `nativeIssueId = deriveExpertNativeIssueUuidV5(task.orgId, task.taskId)` (satisfies `native_runner_checkpoints` FK without touching `issues`)
-     - `contextSnapshot` containing `originClient: 'dsh'`, `visibility: 'private'`, `responsibleUserId: task.responsibleUserId`, `employeeExpertTaskId: task.taskId`, `runGeneration: intent.runGeneration`, `executionContext`, and assembled context metadata
+   - Create `heartbeat_runs` row with `companyId = task.orgId`, `agentId = task.expertId`, `scopeKind = 'company'`, `issueId = null`, `nativeIssueId = deriveExpertNativeIssueUuidV5(task.orgId, task.taskId)`, and private `contextSnapshot`.
    - Update `employee_expert_tasks.run_id = run.id`, `status = 'running'` (guarded by `WHERE run_generation = intent.runGeneration`) and mark intent `dispatched`.
 4. **Result Publication & Generation Fencing**:
-   - On run completion, `waiting_user`, or failure, invoke `publishTaskResultAsync({ taskId, runId, runGeneration, status, result, sources, artifacts })`.
-   - Stale generations (`runGeneration < current`) throw `409 EXPERT_TASK_STATE_CONFLICT` and are discarded safely.
+   - Invoke `publishTaskResultAsync({ taskId, runId, runGeneration, status, result, sources, artifacts })`; stale generations throw `409 EXPERT_TASK_STATE_CONFLICT` and are discarded safely.
 
 ### 5.3 TypeScript Interface Sketch
 
@@ -213,10 +207,16 @@ export interface ContextBudgetPolicy {
   outputReserveTokens: number;
   toolCallHeadroomTokens: number;
   maxTaskAnchorTokens: number;
-  maxReuseRefTokensEach: number;
+  inlineReuseRefMaxBytes: number; // default 4096 (<= 4 KiB inline; > 4 KiB on-demand index)
   maxReuseRefsTotalTokens: number;
-  maxReuseRefCharsEach: number;
   maxReuseRefsTotalChars: number;
+}
+
+export interface StagedReadOnlyRefFile {
+  refId: string;
+  readOnlyPath: string; // /run/delegra-refs/<sanitizedRefId>
+  sourceAttribution: string;
+  contentSnapshot: string;
 }
 
 export interface AssembledExpertSessionContext {
@@ -230,9 +230,10 @@ export interface AssembledExpertSessionContext {
   staticPrefixBlock: string | null; // null on hot_resume (Prefix Cache preserved)
   compactedState: CompactedExpertTaskState | null; // null on hot_resume
   reuseRefsBlock: string | null;
+  stagedReadOnlyRefFiles: StagedReadOnlyRefFile[]; // > 4 KiB refs mounted read-only
   currentTurnPrompt: string;
   estimatedInputTokens: number;
-  truncatedRefs: string[];
+  demotedToIndexRefs: string[];
 }
 ```
 
@@ -252,6 +253,6 @@ export interface AssembledExpertSessionContext {
 
 | Phase | Deliverables | Verification |
 | :--- | :--- | :--- |
-| **Stage B3-1: Store Leasing, Follow-up Snapshot Freeze & Dispatch Worker** | Persist frozen `reuseRefSnapshots` + `executionContext` in `createFollowupAtomically`; add `claimNextDispatchIntents` (`FOR UPDATE SKIP LOCKED`, `maxAttempts = 3`, backoff, DLQ), deterministic `native_issue_id` UUIDv5, `cancel` short-circuit, and `employee-expert-dispatch-worker.ts` lifecycle wiring in `app.ts` | Unit + PG integration tests: concurrent worker claims (no double dispatch), poison-pill retry cap -> terminal `failed`, `followup` snapshot persistence, stale `runGeneration` rejection, and `cancel` lease revocation |
-| **Stage B3-2: Prefix-Cache-Safe Context Assembler & Hot/Cold Resume** | Implement `employee-expert-context-assembler.ts` (static L1 prefix, structured L2 compaction, dual token+char budget, `reuseRefs` framing, `cold_start` / `hot_resume` / `cold_rebuild`) | Unit tests covering L1 byte stability (prefix cache), `hot_resume` skipping L1/L2, CJK/JSON token budget truncation markers, and prompt-injection isolation |
-| **Stage B3-3: End-to-End Runner & DSH Integration** | Wire private `heartbeat_runs` (with `native_issue_id` UUIDv5) -> Paperclip Runner + `native_runner_checkpoints` -> `publishTaskResultAsync` -> DSH `forge_experts.get_result` | Cross-package E2E test: initial task -> `waiting_user` -> follow-up hot resume -> simulated session loss cold rebuild -> final attributed result envelope + 4-role ACL negative check |
+| **Stage B3-1: Store Leasing, Heartbeat Renewal, Follow-up Snapshot Freeze & Dispatch Worker** | Persist frozen `reuseRefSnapshots` + `executionContext` in `createFollowupAtomically`; add `claimNextDispatchIntents` (`FOR UPDATE SKIP LOCKED`, `maxAttempts = 3`, backoff, DLQ), **30s/90s `renewDispatchIntentLease`**, deterministic `native_issue_id` UUIDv5, `cancel` short-circuit, and `employee-expert-dispatch-worker.ts` lifecycle wiring in `app.ts` | Unit + PG integration tests: concurrent worker claims (no double dispatch), lease heartbeat preventing premature reclaim, crash reclaim after 90s, poison-pill retry cap -> terminal `failed`, `followup` snapshot persistence, stale `runGeneration` rejection, and `cancel` lease revocation |
+| **Stage B3-2: Prefix-Cache-Safe Context Assembler & Tiered Just-in-Time L3** | Implement `employee-expert-context-assembler.ts` (static L1 prefix, structured L2 compaction, **tiered L3 `<= 4 KiB` inline / `> 4 KiB` `/run/delegra-refs/<refId>` index**, dual token+char budget, `cold_start` / `hot_resume` / `cold_rebuild`) | Unit tests covering L1 byte stability (prefix cache), `hot_resume` skipping L1/L2, `<= 4 KiB` inline vs `> 4 KiB` on-demand ref staging, CJK/JSON token budget enforcement, and prompt-injection isolation |
+| **Stage B3-3: End-to-End Runner & DSH Integration** | Wire private `heartbeat_runs` (with `native_issue_id` UUIDv5) -> Paperclip Runner + `native_runner_checkpoints` + `/run/delegra-refs/` mount -> `publishTaskResultAsync` -> DSH `forge_experts.get_result` | Cross-package E2E test: initial task -> `waiting_user` -> follow-up hot resume -> simulated session loss cold rebuild -> final attributed result envelope + 4-role ACL negative check |
